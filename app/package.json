@@ -14,9 +14,6 @@
     "electron-builder": "^26.15.3",
     "jimp": "^1.6.1"
   },
-  "dependencies": {
-    "playwright": "^1.63.0"
-  },
   "build": {
     "appId": "com.dayu.mascot",
     "productName": "大肥鱼桌宠",
@@ -34,7 +31,8 @@
       "build/icon.png",
       "!**/*.md",
       "!**/shots/**",
-      "!**/*.log"
+      "!**/*.log",
+      "build/icon.ico"
     ],
     "asarUnpack": [
       "node_modules/playwright/**",
@@ -55,7 +53,7 @@
           ]
         }
       ],
-      "icon": "build/icon.png"
+      "icon": "build/icon.ico"
     },
     "nsis": {
       "oneClick": false,
@@ -64,7 +62,13 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "大肥鱼桌宠",
-      "artifactName": "大肥鱼桌宠-${version}-Setup.${ext}"
-    }
+      "artifactName": "大肥鱼桌宠-${version}-Setup.${ext}",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico"
+    },
+    "npmRebuild": false
+  },
+  "dependencies": {
+    "playwright": "^1.63.0"
   }
 }
