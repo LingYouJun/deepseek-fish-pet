@@ -26,6 +26,7 @@ let wanderTarget = null;
 let wanderCooldownUntil = 0;
 let dragPausedUntil = 0;
 let lastDirectionSent = '';
+let petMoving = false;
 
 const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
 const posFile = () => path.join(app.getPath('userData'), 'position.json');
@@ -243,6 +244,14 @@ function resetPetPosition() {
 function stopMovement() {
   if (moveTimer) { clearInterval(moveTimer); moveTimer = null; }
   wanderTarget = null;
+  setPetMoving(false);
+}
+
+function setPetMoving(v) {
+  v = !!v;
+  if (v === petMoving) return;
+  petMoving = v;
+  if (petWin && !petWin.isDestroyed()) petWin.webContents.send('pet:moving', v);
 }
 
 function maybeStartMovement() {
@@ -258,6 +267,7 @@ function setPetMode(mode) {
   wanderCooldownUntil = Date.now() + 350;
   config.save({ petMode: mode });
   if (petWin && !petWin.isDestroyed()) petWin.webContents.send('pet:mode', mode);
+  setPetMoving(false);
   if (tray) { try { tray.setContextMenu(Menu.buildFromTemplate(buildPetMenu(true))); } catch {} }
   maybeStartMovement();
 }
@@ -279,8 +289,8 @@ function setPetSkin(skin) {
 }
 
 function moveTick() {
-  if (!petWin || petWin.isDestroyed() || !petWin.isVisible()) return;
-  if (Date.now() < dragPausedUntil) return;
+  if (!petWin || petWin.isDestroyed() || !petWin.isVisible()) { setPetMoving(false); return; }
+  if (Date.now() < dragPausedUntil || petMode === 'idle') { setPetMoving(false); return; }
   if (petMode === 'follow') moveFollow();
   else if (petMode === 'wander') moveWander();
 }
@@ -292,7 +302,8 @@ function moveFollow() {
   const targetX = clamp(cursor.x - Math.round(b.width * 0.72), wa.x - 80, wa.x + wa.width - b.width + 80);
   const targetY = clamp(cursor.y + 28, wa.y - 60, wa.y + wa.height - b.height + 60);
   const dx = targetX - b.x, dy = targetY - b.y;
-  if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return;
+  if (Math.abs(dx) < 1 && Math.abs(dy) < 1) { setPetMoving(false); return; }
+  setPetMoving(true);
   const ease = 0.16;
   petWin.setPosition(Math.round(b.x + dx * ease), Math.round(b.y + dy * ease), false);
   sendDirection(dx, dy);
@@ -311,16 +322,18 @@ function chooseWanderTarget() {
 }
 
 function moveWander() {
-  if (Date.now() < wanderCooldownUntil) return;
+  if (Date.now() < wanderCooldownUntil) { setPetMoving(false); return; }
   const b = petWin.getBounds();
-  if (!wanderTarget) { chooseWanderTarget(); return; }
+  if (!wanderTarget) { setPetMoving(false); chooseWanderTarget(); return; }
   const dx = wanderTarget.x - b.x, dy = wanderTarget.y - b.y;
   const dist = Math.hypot(dx, dy);
   if (dist < 6) {
     wanderTarget = null;
+    setPetMoving(false);
     wanderCooldownUntil = Date.now() + 1200 + Math.random() * 1800;
     return;
   }
+  setPetMoving(true);
   const ease = Math.min(0.075, 3.2 / Math.max(dist, 1));
   petWin.setPosition(Math.round(b.x + dx * ease), Math.round(b.y + dy * ease), false);
   sendDirection(dx, dy);

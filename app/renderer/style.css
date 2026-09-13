@@ -45,6 +45,8 @@ body { display: flex; justify-content: center; align-items: flex-start; }
 #pet.shake { animation: shake .42s ease-in-out !important; }
 #pet.eat { animation: eat .55s ease-in-out 2 !important; }
 #pet.jump { animation: jump .58s cubic-bezier(.2, .8, .3, 1) !important; }
+#pet.sway { animation: idleSway .9s ease-in-out !important; }
+#pet.stretch { animation: idleStretch 1.1s ease-in-out !important; }
 
 #stage.mood-low #pet { filter: saturate(.75) brightness(.93); }
 #stage.mood-high #pet { filter: saturate(1.08) brightness(1.03); }
@@ -84,6 +86,16 @@ body { display: flex; justify-content: center; align-items: flex-start; }
   35% { transform: translateY(-18px) scale(.98, 1.04); }
   62% { transform: translateY(-4px) scale(1.03, .97); }
 }
+@keyframes idleSway {
+  0%, 100% { transform: rotate(0deg); }
+  25% { transform: rotate(-5deg); }
+  75% { transform: rotate(5deg); }
+}
+@keyframes idleStretch {
+  0%, 100% { transform: scale(1, 1); }
+  40% { transform: scale(.97, 1.06) translateY(-3px); }
+  70% { transform: scale(1.02, .98) translateY(0); }
+}
 
 /* ---------------- 粒子 ---------------- */
 #fx { position: absolute; inset: 0; pointer-events: none; overflow: visible; z-index: 5; }
@@ -114,6 +126,7 @@ body { display: flex; justify-content: center; align-items: flex-start; }
 }
 @keyframes bubbleIn { from { opacity: 0; transform: translateY(-6px) scale(.97); } to { opacity: 1; transform: none; } }
 #bubble .en { font-size: 14px; font-weight: 700; line-height: 1.55; }
+#bubble.inner .en { font-style: italic; font-weight: 400; color: #7d7d8a; }
 #bubble .en .w { border-bottom: 1px dotted #9aa6c8; cursor: help; }
 #bubble .zh { font-size: 11.5px; color: var(--ink2); margin-top: 4px; line-height: 1.6; }
 #bubble .ipa-hint { font-size: 10.5px; color: #3aa06a; font-family: Consolas, "Courier New", monospace; margin-top: 5px; line-height: 1.55; }

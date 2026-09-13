@@ -60,6 +60,18 @@ const FOODS = [
   { emoji: '💎', en: 'A diamond?! C-can I really eat this...?', zh: '钻石？！这、这个真的能吃吗……？', words: [{ w: 'diamond', ipa: '/ˈdaɪmənd/', zh: '钻石' }], mood: 8, affection: 2 }
 ];
 
+const IDLE_LINES = [
+  '（好的，现在我是你爹了）',
+  '（要不直接骂他一句？！）',
+  '（这用户发的啥啊……）',
+  '（我操，我不思考了）',
+  '（这也太虐了吧？！我心里堵得慌！！）',
+  '（呜呜我再也不敢了QAQ）',
+  '（我去！用户彻底怒了！）'
+];
+
+const PET_ANIMS = ['bounce', 'shake', 'jump', 'eat', 'sway', 'stretch'];
+
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 
 let dragging = false, offX = 0, offY = 0, moved = 0, suppressClick = false, hideTimer = null;
@@ -71,6 +83,7 @@ let currentView = 'down';
 let moodState = { affection: 30, mood: 70 };
 let ttsCfg = { ttsStyle: 'tsundere', ttsVoice: '', ttsRate: 1.02, ttsPitch: 1.18 };
 let expressionTimer = null;
+let idleTimer = null;
 
 /* ---------------- 悬停音标提示 ---------------- */
 let tip = null;
@@ -188,11 +201,14 @@ function showReply(reply, hold, opts = {}) {
   bubble.innerHTML = html;
   bubble.classList.add('show');
   fitWindow();
-  ['bounce', 'shake', 'jump', 'eat'].forEach((c) => pet.classList.remove(c));
-  void pet.offsetWidth;
-  const anim = opts.animation || 'bounce';
-  pet.classList.add(['bounce', 'shake', 'jump', 'eat'].includes(anim) ? anim : 'bounce');
-  setTimeout(() => ['bounce', 'shake', 'jump', 'eat'].forEach((c) => pet.classList.remove(c)), 750);
+  PET_ANIMS.forEach((c) => pet.classList.remove(c));
+  const anim = opts.animation === 'none' ? null : (opts.animation || 'bounce');
+  if (anim) {
+    void pet.offsetWidth;
+    pet.classList.add(PET_ANIMS.includes(anim) ? anim : 'bounce');
+    setTimeout(() => PET_ANIMS.forEach((c) => pet.classList.remove(c)), 750);
+  }
+  bubble.classList.toggle('inner', !!opts.inner);
   if (opts.mood) setExpression(opts.mood, opts.moodMs || 1600);
   clearTimeout(hideTimer);
   hideTimer = setTimeout(() => {
@@ -332,6 +348,35 @@ function showFunctionPanel(show) {
   }
 }
 
+/* ---------------- 同款待机动画 ---------------- */
+function playPetAnim(cls, ms = 900) {
+  if (!cls) return;
+  PET_ANIMS.forEach((c) => pet.classList.remove(c));
+  void pet.offsetWidth;
+  pet.classList.add(cls);
+  setTimeout(() => pet.classList.remove(cls), ms);
+}
+
+function idleTick() {
+  if (dragging || chatOpen || busy) return;
+  const walking = petArea.classList.contains('walking');
+  const r = Math.random();
+
+  // 走路时只有小概率蹦一下，和参考工程一致
+  if (walking) {
+    if (r < 0.06) playPetAnim('jump', 620);
+    return;
+  }
+
+  if (r < 0.28) playPetAnim('sway', 900);
+  else if (r < 0.52) playPetAnim('stretch', 1100);
+  else if (r < 0.72) playPetAnim('jump', 650);
+  else if (r < 0.84 && !bubble.classList.contains('show')) {
+    const line = IDLE_LINES[Math.floor(Math.random() * IDLE_LINES.length)];
+    showReply({ en: line, zh: '' }, 3000, { speak: false, inner: true, animation: 'none' });
+  }
+}
+
 /* ---------------- 点击 / 拖拽互动 ---------------- */
 function regionOf(e) {
   const rect = pet.getBoundingClientRect();
@@ -454,6 +499,7 @@ if (window.petAPI.onAction) window.petAPI.onAction((a) => {
 if (window.petAPI.onMode) window.petAPI.onMode((mode) => setModeUi(mode));
 if (window.petAPI.onScale) window.petAPI.onScale((scale) => applyScale(scale));
 if (window.petAPI.onDirection) window.petAPI.onDirection((dir) => setView(dir));
+if (window.petAPI.onMoving) window.petAPI.onMoving((moving) => setWalking(!!moving));
 if (window.petAPI.onSkin) window.petAPI.onSkin((skin) => applySkin(skin));
 if (window.petAPI.onTtsConfig) window.petAPI.onTtsConfig((cfg) => { ttsCfg = { ...ttsCfg, ...(cfg || {}) }; });
 if (window.petAPI.onChatState) window.petAPI.onChatState((open) => {
@@ -528,6 +574,8 @@ function fitWindow() {
   await refreshMood();
   buildFeedPanel();
   updateMicButton();
+  clearInterval(idleTimer);
+  idleTimer = setInterval(idleTick, 2600);
   pet.addEventListener('load', fitWindow);
   if (pet.complete) fitWindow();
   if (cfg.apiKey) {
