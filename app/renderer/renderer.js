@@ -687,6 +687,7 @@ if (window.petAPI.onMoving) window.petAPI.onMoving((moving) => {
   if (!moving) setView('down');
 });
 if (window.petAPI.onSkin) window.petAPI.onSkin((skin) => applySkin(skin));
+if (window.petAPI.onTtsStop) window.petAPI.onTtsStop(() => { try { window.DayuTTS?.stop(); } catch {} });
 if (window.petAPI.onTtsConfig) window.petAPI.onTtsConfig((next) => {
   ttsCfg = { ...ttsCfg, ...(next || {}) };
   voiceCfg = { ...voiceCfg, ...(next || {}) };

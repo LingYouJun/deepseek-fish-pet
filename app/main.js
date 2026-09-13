@@ -449,6 +449,11 @@ ipcMain.on('pet:action', (_e, action) => {
 ipcMain.on('pet:set-scale', (_e, scale) => setPetScale(scale));
 ipcMain.on('voice:start', (_e, payload) => startVoiceWake(payload && payload.initialMode === 'command' ? 'command' : 'wake'));
 ipcMain.on('voice:stop', () => winAsr.stop());
+ipcMain.on('tts:stop', () => {
+  for (const win of [petWin, chatWin]) {
+    if (win && !win.isDestroyed()) win.webContents.send('tts:stop');
+  }
+});
 ipcMain.on('pet:resize', (_e, p) => {
   if (!petWin) return;
   const h = Math.round(Number(p?.h ?? p) || 0);

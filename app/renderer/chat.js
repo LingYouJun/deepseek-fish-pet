@@ -135,7 +135,6 @@ async function saveTtsConfig() {
   setTimeout(() => { $('ttsMsg').textContent = ''; }, 2200);
 }
 function speakPreview(text) {
-  const oldCfg = cfg;
   const previewCfg = {
     ...cfg,
     ttsStyle: $('ttsStyle').value,
@@ -143,8 +142,10 @@ function speakPreview(text) {
     ttsRate: Number($('ttsRate').value),
     ttsPitch: Number($('ttsPitch').value)
   };
-  if (window.DayuTTS) window.DayuTTS.speak(text, previewCfg, () => {});
-  else { cfg = previewCfg; speak(text); cfg = oldCfg; }
+  try { window.petAPI.ttsStop?.(); } catch {}
+  setTimeout(() => {
+    if (window.DayuTTS) window.DayuTTS.speak(text, previewCfg, () => {});
+  }, 80);
 }
 
 async function refreshMood() {
@@ -187,6 +188,7 @@ function showMain() {
   $('input').focus();
 }
 
+if (window.petAPI.onTtsStop) window.petAPI.onTtsStop(() => { try { window.DayuTTS?.stop(); } catch {} });
 if (window.petAPI.onTtsConfig) window.petAPI.onTtsConfig((next) => {
   cfg = { ...cfg, ...(next || {}) };
   ttsOn = cfg.ttsEnabled !== false;
@@ -453,17 +455,8 @@ $('input').addEventListener('keydown', (e) => {
 });
 
 /* ---------------- TTS ---------------- */
-function speak(text) {
-  if (!ttsOn || !text) return;
-  if (window.DayuTTS) window.DayuTTS.speak(text, cfg, () => {});
-  else if (window.speechSynthesis) {
-    try {
-      window.speechSynthesis.cancel();
-      const u = new SpeechSynthesisUtterance(text);
-      u.lang = 'en-US'; u.rate = 0.95; u.pitch = 1.1;
-      window.speechSynthesis.speak(u);
-    } catch {}
-  }
+function speak(_text) {
+  // AI 回复统一由桌宠窗口播放，聊天窗口不再本地播放，避免双声重叠。
 }
 $('ttsBtn').addEventListener('click', async () => {
   ttsOn = !ttsOn;

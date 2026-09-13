@@ -16,6 +16,7 @@
   ];
   const DEFAULT_VOICE = 'zh-CN-XiaoxiaoNeural';
   let currentAudio = null;
+  let speakSeq = 0;
 
   function getVoices() { return EDGE_VOICES.slice(); }
   function listVoices() { return EDGE_VOICES.slice(); }
@@ -25,6 +26,7 @@
   }
 
   function stop() {
+    speakSeq++;
     if (currentAudio) {
       try { currentAudio.pause(); currentAudio.src = ''; } catch {}
       currentAudio = null;
@@ -36,6 +38,7 @@
     if (!text) { done?.(); return; }
     cfg = cfg || {};
     stop();
+    const seq = ++speakSeq;
     let finished = false;
     const finish = () => { if (finished) return; finished = true; done?.(); };
     const style = STYLES[cfg.ttsStyle] || STYLES.tsundere;
@@ -49,8 +52,10 @@
         pitch: Number(cfg.ttsPitch) || style.pitch,
         style: cfg.ttsStyle || 'tsundere'
       }).then((res) => {
+        if (seq !== speakSeq) return;
         if (!res || !res.ok || (!res.dataUrl && !res.url)) throw new Error((res && res.error) || 'Edge TTS 合成失败');
         const audio = new Audio(res.dataUrl || res.url);
+        if (seq !== speakSeq) return;
         currentAudio = audio;
         const audioDone = () => {
           if (currentAudio === audio) currentAudio = null;
