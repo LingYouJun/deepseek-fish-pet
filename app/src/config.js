@@ -15,8 +15,9 @@ const DEFAULTS = {
   ttsPitch: 1.18,
   vocabLevel: 'high_school',
   assistant: 'off',
-  petMode: 'idle',
-  petScale: 1
+  petMode: 'wander',
+  petScale: 1,
+  petSkin: 'dafeiyu'
 };
 
 function load() {

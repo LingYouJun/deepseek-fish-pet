@@ -18,8 +18,9 @@ let sessionStart = Date.now();
 let didSummarize = false;
 
 /* ---------------- 桌宠状态 ---------------- */
-let petMode = 'idle';
+let petMode = 'wander';
 let petScale = 1;
+let petSkin = 'dafeiyu';
 let moveTimer = null;
 let wanderTarget = null;
 let wanderCooldownUntil = 0;
@@ -116,8 +117,9 @@ async function genReply(cfg, messages) {
 function createPet() {
   const saved = loadPosition();
   const cfg = config.load();
-  petMode = ['idle', 'follow', 'wander'].includes(cfg.petMode) ? cfg.petMode : 'idle';
+  petMode = ['idle', 'follow', 'wander'].includes(cfg.petMode) ? cfg.petMode : 'wander';
   petScale = Number(cfg.petScale) || 1;
+  petSkin = cfg.petSkin || 'dafeiyu';
   const work = screen.getPrimaryDisplay().workArea;
   const opts = {
     width: 420, height: 540,
@@ -141,6 +143,7 @@ function createPet() {
     petWin.showInactive();
     petWin.webContents.send('pet:mode', petMode);
     petWin.webContents.send('pet:scale', petScale);
+    petWin.webContents.send('pet:skin', petSkin);
     maybeStartMovement();
   });
   petWin.webContents.on('context-menu', () => {
@@ -201,6 +204,13 @@ function buildPetMenu(trayMode) {
     [1.25, '大'],
     [1.5, '特大']
   ].map(([v, label]) => ({ label, type: 'radio', checked: Math.abs(petScale - v) < 0.01, click: () => setPetScale(v) }));
+  const skinItems = [
+    ['dafeiyu', '大肥鱼三视图（默认）'],
+    ['deepseek', 'DeepSeek 立绘'],
+    ['cute', '可爱占位立绘'],
+    ['melon', '忧郁占位立绘'],
+    ['default', '默认占位立绘']
+  ].map(([v, label]) => ({ label, type: 'radio', checked: petSkin === v, click: () => setPetSkin(v) }));
   const template = [
     { label: visible ? '隐藏桌宠' : '显示桌宠', click: togglePetVisible },
     { label: '打开对话', click: createChat },
@@ -209,6 +219,7 @@ function buildPetMenu(trayMode) {
     { label: '投喂小鱼干', click: () => sendPetAction('feed', { food: '🐟' }) },
     { type: 'separator' },
     { label: '桌宠模式', submenu: modeItems },
+    { label: '立绘风格', submenu: skinItems },
     { label: '桌宠大小', submenu: scaleItems },
     { label: '回到屏幕中央', click: resetPetPosition },
     { type: 'separator' },
@@ -259,6 +270,14 @@ function setPetScale(scale) {
   if (tray) { try { tray.setContextMenu(Menu.buildFromTemplate(buildPetMenu(true))); } catch {} }
 }
 
+function setPetSkin(skin) {
+  if (!['dafeiyu', 'deepseek', 'cute', 'melon', 'default'].includes(skin)) skin = 'dafeiyu';
+  petSkin = skin;
+  config.save({ petSkin: skin });
+  if (petWin && !petWin.isDestroyed()) petWin.webContents.send('pet:skin', skin);
+  if (tray) { try { tray.setContextMenu(Menu.buildFromTemplate(buildPetMenu(true))); } catch {} }
+}
+
 function moveTick() {
   if (!petWin || petWin.isDestroyed() || !petWin.isVisible()) return;
   if (Date.now() < dragPausedUntil) return;
@@ -276,7 +295,7 @@ function moveFollow() {
   if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return;
   const ease = 0.16;
   petWin.setPosition(Math.round(b.x + dx * ease), Math.round(b.y + dy * ease), false);
-  sendDirection(dx);
+  sendDirection(dx, dy);
 }
 
 function chooseWanderTarget() {
@@ -288,7 +307,7 @@ function chooseWanderTarget() {
   const minY = wa.y + padY;
   const maxY = Math.max(minY, wa.y + wa.height - b.height - padY);
   wanderTarget = { x: minX + Math.random() * (maxX - minX), y: minY + Math.random() * (maxY - minY) };
-  sendDirection(wanderTarget.x - b.x);
+  sendDirection(wanderTarget.x - b.x, wanderTarget.y - b.y);
 }
 
 function moveWander() {
@@ -304,12 +323,16 @@ function moveWander() {
   }
   const ease = Math.min(0.075, 3.2 / Math.max(dist, 1));
   petWin.setPosition(Math.round(b.x + dx * ease), Math.round(b.y + dy * ease), false);
-  sendDirection(dx);
+  sendDirection(dx, dy);
 }
 
-function sendDirection(dx) {
-  if (!petWin || petWin.isDestroyed() || Math.abs(dx) < 2) return;
-  const dir = dx < 0 ? 'left' : 'right';
+function sendDirection(dx, dy) {
+  if (!petWin || petWin.isDestroyed()) return;
+  dy = Number(dy) || 0;
+  if (Math.abs(dx) < 2 && Math.abs(dy) < 2) return;
+  let dir;
+  if (Math.abs(dx) >= Math.abs(dy)) dir = dx < 0 ? 'left' : 'right';
+  else dir = dy < 0 ? 'up' : 'down';
   if (dir === lastDirectionSent) return;
   lastDirectionSent = dir;
   petWin.webContents.send('pet:direction', dir);

@@ -3,9 +3,27 @@ const petArea = document.getElementById('pet-area');
 const stage = document.getElementById('stage');
 const bubble = document.getElementById('bubble');
 const fx = document.getElementById('fx');
-const dock = document.getElementById('dock');
+const functionPanel = document.getElementById('function-panel');
+const fnChat = document.getElementById('fn-chat');
 const feedPanel = document.getElementById('feed-panel');
 const feedRow = feedPanel.querySelector('.feed-row');
+
+const SKINS = {
+  dafeiyu: {
+    label: '大肥鱼三视图',
+    baseWidth: 200,
+    views: {
+      down: '../assets/sprites/dafeiyu/front.png',
+      up: '../assets/sprites/dafeiyu/back.png',
+      left: '../assets/sprites/dafeiyu/side.png',
+      right: '../assets/sprites/dafeiyu/side.png'
+    }
+  },
+  deepseek: { label: 'DeepSeek 立绘', baseWidth: 350, single: '../assets/pet-character.png' },
+  cute: { label: '可爱占位立绘', baseWidth: 240, single: '../assets/pet-cute.svg' },
+  melon: { label: '忧郁占位立绘', baseWidth: 240, single: '../assets/pet-melon.svg' },
+  default: { label: '默认占位立绘', baseWidth: 240, single: '../assets/pet-default.svg' }
+};
 
 const esc = (s) => String(s == null ? '' : s)
   .replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -47,7 +65,9 @@ const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 let dragging = false, offX = 0, offY = 0, moved = 0, suppressClick = false, hideTimer = null;
 let listening = true, micEnabled = true, chatOpen = false, rec = null, busy = false, curUtter = null;
 let clickCount = 0, clickTimer = null, lastMicErr = 0;
-let petSize = 350, petScale = 1;
+let petSize = 200, petScale = 1;
+let currentSkin = 'dafeiyu';
+let currentView = 'down';
 let moodState = { affection: 30, mood: 70 };
 let ttsCfg = { ttsStyle: 'tsundere', ttsVoice: '', ttsRate: 1.02, ttsPitch: 1.18 };
 let expressionTimer = null;
@@ -168,10 +188,11 @@ function showReply(reply, hold, opts = {}) {
   bubble.innerHTML = html;
   bubble.classList.add('show');
   fitWindow();
-  pet.classList.remove('bounce', 'shake');
+  ['bounce', 'shake', 'jump', 'eat'].forEach((c) => pet.classList.remove(c));
   void pet.offsetWidth;
-  pet.classList.add(opts.animation === 'shake' ? 'shake' : 'bounce');
-  setTimeout(() => pet.classList.remove('bounce', 'shake'), 700);
+  const anim = opts.animation || 'bounce';
+  pet.classList.add(['bounce', 'shake', 'jump', 'eat'].includes(anim) ? anim : 'bounce');
+  setTimeout(() => ['bounce', 'shake', 'jump', 'eat'].forEach((c) => pet.classList.remove(c)), 750);
   if (opts.mood) setExpression(opts.mood, opts.moodMs || 1600);
   clearTimeout(hideTimer);
   hideTimer = setTimeout(() => {
@@ -256,15 +277,59 @@ function startListening() {
 }
 function pauseListening() { listening = false; try { rec?.stop(); } catch {} rec = null; }
 function resumeListening() { if (chatOpen || busy || !micEnabled) return; listening = true; startListening(); }
-function updateMicButton() {
-  const btn = dock.querySelector('[data-act="listen"]');
-  if (btn) { btn.classList.toggle('on', micEnabled); btn.classList.toggle('listening', micEnabled); }
-}
+function updateMicButton() {}
 function setMic(enabled) {
   micEnabled = enabled;
   updateMicButton();
   if (!micEnabled) pauseListening();
   else { listening = true; resumeListening(); }
+}
+
+function baseWidthForSkin(skin) {
+  return (SKINS[skin] && SKINS[skin].baseWidth) || 260;
+}
+
+function applySkin(skin) {
+  if (!SKINS[skin]) skin = 'dafeiyu';
+  currentSkin = skin;
+  currentView = 'down';
+  const cfg = SKINS[skin];
+  petArea.classList.remove('flip');
+  if (cfg.views) {
+    pet.src = cfg.views.down;
+  } else {
+    pet.src = cfg.single;
+  }
+  petSize = Math.round(baseWidthForSkin(skin) * petScale);
+  document.documentElement.style.setProperty('--pet-w', petSize + 'px');
+  fitWindow();
+}
+
+function setView(dir) {
+  const cfg = SKINS[currentSkin];
+  if (!cfg) return;
+  if (!cfg.views) {
+    if (dir === 'left') petArea.classList.add('flip');
+    else if (dir === 'right') petArea.classList.remove('flip');
+    return;
+  }
+  if (!cfg.views[dir]) return;
+  currentView = dir;
+  if (pet.src !== cfg.views[dir]) pet.src = cfg.views[dir];
+  petArea.classList.toggle('flip', dir === 'left');
+}
+
+function setWalking(on) {
+  petArea.classList.toggle('walking', !!on);
+}
+
+function showFunctionPanel(show) {
+  const willShow = show == null ? functionPanel.classList.contains('hidden') : !!show;
+  functionPanel.classList.toggle('hidden', !willShow);
+  if (willShow) {
+    clearTimeout(showFunctionPanel._timer);
+    showFunctionPanel._timer = setTimeout(() => functionPanel.classList.add('hidden'), 4500);
+  }
 }
 
 /* ---------------- 点击 / 拖拽互动 ---------------- */
@@ -285,10 +350,11 @@ function reactAt(region) {
   else adjustMood({ mood: 1 });
   showReply(r, 6000, {
     speak: true,
-    animation: region === 'tail' ? 'shake' : 'bounce',
+    animation: region === 'tail' ? 'shake' : 'jump',
     mood: region === 'head' ? 'shy' : 'happy'
   });
   setExpression(region === 'head' ? 'shy' : 'happy', 1200);
+  showFunctionPanel(true);
 }
 
 pet.addEventListener('mousedown', (e) => {
@@ -305,6 +371,9 @@ window.addEventListener('mousemove', (e) => {
   if (!dragging) return;
   moved += Math.abs(e.movementX || 0) + Math.abs(e.movementY || 0);
   petArea.classList.add('dragging');
+  const mx = e.movementX || 0, my = e.movementY || 0;
+  if (Math.abs(mx) >= Math.abs(my)) { if (Math.abs(mx) > 2) setView(mx < 0 ? 'left' : 'right'); }
+  else if (Math.abs(my) > 2) setView(my < 0 ? 'up' : 'down');
   window.petAPI.move(e.screenX - offX, e.screenY - offY);
 });
 window.addEventListener('mouseup', (e) => {
@@ -337,12 +406,17 @@ pet.addEventListener('dblclick', () => {
   openFeed();
 });
 
-/* ---------------- 快捷 Dock / 投喂 ---------------- */
+/* ---------------- 功能面板 / 投喂 ---------------- */
 function openChat() { window.petAPI.openChat(); }
 function openFeed(show) {
   const willShow = show == null ? feedPanel.classList.contains('hidden') : !!show;
   feedPanel.classList.toggle('hidden', !willShow);
-  if (willShow) feedPanel.querySelector('.feed-btn')?.focus();
+  if (willShow) {
+    bubble.classList.remove('show');
+    showFunctionPanel(false);
+    fitWindow();
+    feedPanel.querySelector('.feed-btn')?.focus();
+  }
 }
 function buildFeedPanel() {
   feedRow.innerHTML = FOODS.map((f, i) => `<button class="feed-btn" data-i="${i}" title="${esc(f.en)}">${f.emoji}</button>`).join('');
@@ -357,20 +431,15 @@ async function feed(food) {
   await adjustMood({ mood: food.mood, affection: food.affection });
   showReply({ en: food.en, zh: food.zh, words: food.words }, 5200, {
     speak: true,
-    animation: 'bounce',
+    animation: 'eat',
     mood: 'happy'
   });
 }
 document.getElementById('feed-close').addEventListener('click', () => openFeed(false));
-dock.querySelectorAll('.dock-btn').forEach((btn) => {
-  btn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    const act = btn.dataset.act;
-    if (act === 'chat') openChat();
-    else if (act === 'pat') reactAt('head');
-    else if (act === 'feed') openFeed();
-    else if (act === 'listen') setMic(!micEnabled);
-  });
+fnChat.addEventListener('click', (e) => {
+  e.stopPropagation();
+  showFunctionPanel(false);
+  openChat();
 });
 
 /* ---------------- 快捷菜单（主进程）& 跨窗口 ---------------- */
@@ -384,9 +453,8 @@ if (window.petAPI.onAction) window.petAPI.onAction((a) => {
 });
 if (window.petAPI.onMode) window.petAPI.onMode((mode) => setModeUi(mode));
 if (window.petAPI.onScale) window.petAPI.onScale((scale) => applyScale(scale));
-if (window.petAPI.onDirection) window.petAPI.onDirection((dir) => {
-  petArea.classList.toggle('dir-left', dir === 'left');
-});
+if (window.petAPI.onDirection) window.petAPI.onDirection((dir) => setView(dir));
+if (window.petAPI.onSkin) window.petAPI.onSkin((skin) => applySkin(skin));
 if (window.petAPI.onTtsConfig) window.petAPI.onTtsConfig((cfg) => { ttsCfg = { ...ttsCfg, ...(cfg || {}) }; });
 if (window.petAPI.onChatState) window.petAPI.onChatState((open) => {
   chatOpen = open;
@@ -395,7 +463,8 @@ if (window.petAPI.onChatState) window.petAPI.onChatState((open) => {
 
 function setModeUi(mode) {
   stage.dataset.mode = mode || 'idle';
-  petArea.classList.toggle('walking', mode === 'follow' || mode === 'wander');
+  setWalking(mode === 'follow' || mode === 'wander');
+  if (mode === 'idle') { currentView = 'down'; setView('down'); }
 }
 
 /* ---------------- DSH 会话联动 ---------------- */
@@ -433,7 +502,7 @@ function hardGreet() {
 
 function applyScale(scale) {
   petScale = Math.min(1.5, Math.max(0.75, Number(scale) || 1));
-  petSize = Math.round(350 * petScale);
+  petSize = Math.round(baseWidthForSkin(currentSkin) * petScale);
   document.documentElement.style.setProperty('--pet-w', petSize + 'px');
   document.documentElement.style.setProperty('--bubble-w', Math.round(370 * Math.max(.88, petScale)) + 'px');
   fitWindow();
@@ -451,8 +520,9 @@ function fitWindow() {
   let cfg = {};
   try { cfg = await window.petAPI.configGet(); } catch {}
   ttsCfg = { ...ttsCfg, ...(cfg || {}) };
+  applySkin(cfg.petSkin || 'dafeiyu');
   applyScale(cfg.petScale || 1);
-  setModeUi(cfg.petMode || 'idle');
+  setModeUi(cfg.petMode || 'wander');
   await refreshMood();
   buildFeedPanel();
   updateMicButton();

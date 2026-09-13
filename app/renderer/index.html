@@ -7,27 +7,23 @@
 </head>
 <body>
   <div id="stage">
+    <div id="bubble" role="dialog" aria-live="polite"></div>
+
     <div id="pet-area">
-      <img id="pet" src="../assets/pet-character.png" draggable="false" alt="">
+      <img id="pet" src="../assets/sprites/dafeiyu/正面.png" draggable="false" alt="">
       <div id="fx" aria-hidden="true"></div>
     </div>
 
-    <div id="bubble" role="dialog" aria-live="polite"></div>
-
-    <div id="dock" aria-label="桌宠快捷操作">
-      <button class="dock-btn" data-act="chat" title="打开对话">💬<small>聊天</small></button>
-      <button class="dock-btn" data-act="pat" title="摸摸头">✋<small>摸摸</small></button>
-      <button class="dock-btn" data-act="feed" title="投喂">🍰<small>投喂</small></button>
-      <button class="dock-btn" data-act="listen" title="切换收音">🎤<small>收音</small></button>
+    <div id="function-panel" class="hidden" aria-label="桌宠功能">
+      <button id="fn-chat" title="打开对话">🗨️</button>
     </div>
 
     <div id="feed-panel" class="hidden">
-      <div class="feed-title">今天想喂大肥鱼什么？</div>
       <div class="feed-row"></div>
       <button id="feed-close" title="关闭">✕</button>
     </div>
   </div>
   <script src="tts.js"></script>
-<script src="renderer.js"></script>
+  <script src="renderer.js"></script>
 </body>
 </html>

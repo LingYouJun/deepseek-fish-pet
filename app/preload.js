@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('petAPI', {
   onAction: (cb) => on('pet:action', cb),
   onMode: (cb) => on('pet:mode', cb),
   onScale: (cb) => on('pet:scale', cb),
+  onSkin: (cb) => on('pet:skin', cb),
   onDirection: (cb) => on('pet:direction', cb),
   onTtsConfig: (cb) => on('tts:config', cb),
   setScale: (scale) => ipcRenderer.send('pet:set-scale', scale),
