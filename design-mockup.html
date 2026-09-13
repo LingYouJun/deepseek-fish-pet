@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>吃白饭的大肥鱼女仆 · 桌宠设计稿</title>
+<style>
+  :root{
+    --bg:#f3f6fb;
+    --card:#ffffff;
+    --ink:#2b3450;
+    --ink2:#6b7490;
+    --line:#e3e8f2;
+    --accent:#4d6bfe;
+    --pink:#ff9ec2;
+    --shadow:0 10px 30px rgba(45,60,120,.10);
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;font-family:"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    background:linear-gradient(160deg,#eef2fb 0%,#f7f0f8 100%);
+    color:var(--ink);min-height:100vh;
+  }
+  header{
+    padding:20px 28px 12px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+  }
+  header .logo{font-size:22px;font-weight:800;letter-spacing:.5px}
+  header .tag{font-size:12px;color:var(--ink2);background:#fff;border:1px solid var(--line);
+    padding:4px 10px;border-radius:99px}
+  .tabs{display:flex;gap:8px;padding:0 28px 16px;flex-wrap:wrap}
+  .tab{cursor:pointer;padding:9px 16px;border-radius:12px;background:#fff;border:1px solid var(--line);
+    font-size:14px;color:var(--ink2);transition:.15s}
+  .tab:hover{border-color:var(--accent);color:var(--accent)}
+  .tab.on{background:var(--accent);color:#fff;border-color:var(--accent);font-weight:600}
+  main{padding:6px 28px 40px}
+  .panel{display:none;animation:fade .25s}
+  .panel.on{display:block}
+  @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  .grid{display:grid;gap:18px;grid-template-columns:repeat(auto-fit,minmax(340px,1fr))}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:18px 20px;box-shadow:var(--shadow)}
+  .card h3{margin:0 0 4px;font-size:16px}
+  .card .sub{font-size:12px;color:var(--ink2);margin-bottom:12px}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .pill{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:99px;
+    padding:6px 12px;font-size:12px;background:#fafbfe;cursor:pointer}
+  .pill.on{border-color:var(--accent);background:#eef1ff;color:var(--accent);font-weight:600}
+  .btn{border:none;border-radius:12px;padding:10px 16px;font-size:14px;cursor:pointer;font-weight:600}
+  .btn.primary{background:var(--accent);color:#fff}
+  .btn.ghost{background:#fff;border:1px solid var(--line);color:var(--ink)}
+  .note{font-size:12px;color:var(--ink2);line-height:1.6}
+
+  /* ===== 悬浮窗舞台 ===== */
+  .stage{position:relative;border-radius:22px;overflow:hidden;height:600px;
+    background:
+      radial-gradient(1200px 500px at 70% -10%,#dbe6ff 0%,transparent 60%),
+      radial-gradient(900px 500px at 10% 110%,#ffe0ee 0%,transparent 55%),
+      linear-gradient(180deg,#c9d8f2,#e8d9f0);
+    border:1px solid var(--line)}
+  .stage-inner{position:absolute;left:0;right:0;top:0;bottom:44px;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:10px;padding:16px 16px 6px}
+  .stage-inner .bubble{order:1;position:relative;left:auto;top:auto;transform:none;width:min(440px,94%)}
+  .stage-inner .pet-wrap{order:2;position:relative;left:auto;top:auto;transform:none}
+  .stage .taskbar{position:absolute;left:0;right:0;bottom:0;height:44px;
+    background:rgba(30,40,80,.35);backdrop-filter:blur(6px);display:flex;align-items:center;padding:0 14px;gap:8px}
+  .stage .taskbar span{width:26px;height:26px;border-radius:8px;background:rgba(255,255,255,.85)}
+  .pet-wrap{position:relative}
+
+  /* 气泡 */
+  .bubble{position:absolute;left:50%;top:8px;transform:translateX(-50%);width:min(420px,86%);
+    background:#fff;border-radius:18px;padding:14px 16px;box-shadow:var(--shadow);text-align:left}
+  .bubble::after{content:"";position:absolute;left:50%;bottom:-9px;transform:translateX(-50%);
+    border:10px solid transparent;border-top-color:#fff}
+  .bubble .en{font-size:15px;font-weight:600}
+  .bubble .ipa{font-size:12px;color:#3aa06a;font-family:Consolas,monospace;margin:4px 0}
+  .bubble .zh{font-size:12px;color:var(--ink2)}
+  .bubble .choices{margin-top:10px;display:grid;gap:8px}
+
+  /* 预制回复按钮 */
+  .choice{border:1px solid var(--line);border-radius:12px;padding:8px 12px;text-align:left;cursor:pointer;background:#fafbfe}
+  .choice:hover{border-color:var(--accent);background:#eef1ff}
+  .choice .en{font-size:13px;font-weight:600}
+  .choice .meta{font-size:11px;color:var(--ink2);margin-top:2px}
+  .choice .ipa{color:#3aa06a;font-family:Consolas,monospace}
+
+  /* 状态条 */
+  .meters{position:absolute;right:14px;top:14px;width:150px;display:grid;gap:8px}
+  .meter{background:rgba(255,255,255,.8);border-radius:10px;padding:7px 10px;font-size:11px}
+  .meter b{display:block;font-size:11px;margin-bottom:4px}
+  .meter .bar{height:6px;background:#e5e9f4;border-radius:6px;overflow:hidden}
+  .meter .bar i{display:block;height:100%;border-radius:6px}
+
+  /* 聊天窗 */
+  .chat{height:420px;display:flex;flex-direction:column;border:1px solid var(--line);border-radius:18px;overflow:hidden;background:#fff}
+  .chat .msgs{flex:1;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:12px}
+  .msg{max-width:76%;padding:10px 14px;border-radius:14px;font-size:14px;line-height:1.5}
+  .msg .ipa{font-size:11px;color:#3aa06a;font-family:Consolas,monospace;margin-top:3px}
+  .msg .zh{font-size:11px;color:var(--ink2);margin-top:3px}
+  .msg.pet{background:#f0f3ff;align-self:flex-start;border-bottom-left-radius:4px}
+  .msg.user{background:var(--accent);color:#fff;align-self:flex-end;border-bottom-right-radius:4px}
+  .msg.user .ipa,.msg.user .zh{color:rgba(255,255,255,.85)}
+  .chat .composer{border-top:1px solid var(--line);padding:12px;display:flex;gap:10px;align-items:center}
+  .chat .input{flex:1;border:1px solid var(--line);border-radius:12px;padding:11px 14px;font-size:14px;outline:none}
+  .chat .input:focus{border-color:var(--accent)}
+  .mic{width:42px;height:42px;border-radius:50%;border:1px solid var(--line);background:#fff;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;font-size:18px}
+  .mic.on{background:#ff5f7a;color:#fff;border-color:#ff5f7a}
+
+  .modal{position:fixed;inset:0;background:rgba(30,40,80,.4);display:flex;align-items:center;justify-content:center;z-index:50;padding:20px}
+  .modal .box{background:#fff;border-radius:20px;padding:26px;width:min(460px,100%);box-shadow:var(--shadow)}
+  .modal h2{margin:0 0 4px;font-size:19px}
+  .field{margin-top:14px}
+  .field label{display:block;font-size:12px;color:var(--ink2);margin-bottom:6px}
+  .field input,.field select{width:100%;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:14px;outline:none}
+  .field input:focus{border-color:var(--accent)}
+
+  .hint{margin-top:18px;padding:12px 14px;border-radius:12px;background:#fff7f0;border:1px solid #ffe1c6;font-size:12px;color:#a05c2a}
+  .credit{margin-top:14px;padding:12px 14px;border-radius:12px;background:#eef1ff;border:1px solid #d5dcff;font-size:12px;color:#3d4a86;line-height:1.7}
+  .credit a{color:#4d6bfe}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">🐳 吃白饭的大肥鱼女仆 · 桌宠设计稿</div>
+  <span class="tag">v0.2 概念稿</span>
+  <span class="tag">Electron · React · 二次元</span>
+  <span class="tag">二创「蓝发鲸鱼女仆」</span>
+</header>
+
+<div class="tabs" id="tabs">
+  <div class="tab on" data-t="float">🖥 桌宠悬浮窗</div>
+  <div class="tab" data-t="chat">💬 对话窗</div>
+  <div class="tab" data-t="bubble">💭 快捷气泡</div>
+  <div class="tab" data-t="settings">⚙️ 设置</div>
+  <div class="tab" data-t="firstrun">🚀 首次启动</div>
+</div>
+
+<main>
+
+  <!-- ============ 悬浮窗 ============ -->
+  <section class="panel on" id="p-float">
+    <div class="stage">
+      <div class="meters">
+        <div class="meter"><b>心情 Mood</b><div class="bar"><i style="width:78%;background:linear-gradient(90deg,#ff9ec2,#ff6a9c)"></i></div></div>
+        <div class="meter"><b>好感度 Affection</b><div class="bar"><i style="width:54%;background:linear-gradient(90deg,#4d6bfe,#8aa0ff)"></i></div></div>
+      </div>
+
+      <div class="stage-inner">
+      <div class="bubble">
+        <div class="en">H-Hmph! I am NOT a freeloader fat fish! …Good morning anyway, Master.</div>
+        <div class="ipa">/h-hʌmf! aɪ æm nɑːt ə ˈfriːloʊdər fæt fɪʃ! …ɡʊd ˈmɔːrnɪŋ ˈeniweɪ, ˈmæstər/</div>
+        <div class="zh">哼、哼！我才不是吃白饭的大肥鱼！……总之早上好，主人。</div>
+        <div class="choices">
+          <div class="choice">
+            <div class="en">Good morning! I slept great.</div>
+            <div class="meta"><span class="ipa">/ɡʊd ˈmɔːrnɪŋ! aɪ slept ɡreɪt/</span> · 早上好！我睡得很好。</div>
+          </div>
+          <div class="choice">
+            <div class="en">Morning! A bit sleepy though.</div>
+            <div class="meta"><span class="ipa">/ˈmɔːrnɪŋ! ə bɪt ˈsliːpi ðoʊ/</span> · 早！不过还有点困。</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="pet-wrap" id="petFloat"></div>
+      </div>
+
+      <div class="taskbar">
+        <span></span><span></span><span></span>
+        <div style="margin-left:auto;color:#fff;font-size:11px;opacity:.9">桌宠 · 可拖拽 · 点击有互动</div>
+      </div>
+    </div>
+    <div class="grid" style="margin-top:16px">
+      <div class="card">
+        <h3>立绘随人设风格变</h3>
+        <div class="sub">同一只蓝发鲸鱼女仆，随人设切换表情 / 配饰色调</div>
+        <div class="row" id="personaSwitch"></div>
+      </div>
+      <div class="card">
+        <h3>点击互动</h3>
+        <div class="sub">点身体 / 头顶 / 尾巴触发不同反应</div>
+        <div class="row">
+          <span class="pill on">🖐 摸摸头 → 傲娇</span>
+          <span class="pill">🐳 戳鲸鱼尾 → 惊慌</span>
+          <span class="pill">🥣 扣碗 / 提白饭 → 炸毛</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 对话窗 ============ -->
+  <section class="panel" id="p-chat">
+    <div class="grid">
+      <div class="card" style="grid-column:1/-1">
+        <div class="row" style="margin-bottom:12px">
+          <h3 style="margin:0">独立聊天大窗口</h3>
+          <span class="note" style="margin-left:auto">英文对话 · 每条带音标 + 翻译 · 2 个预制回复</span>
+        </div>
+        <div class="chat">
+          <div class="msgs">
+            <div class="msg pet">
+              H-Hmph! I am NOT a freeloader fat fish! …Good morning anyway, Master.
+              <div class="ipa">/h-hʌmf! aɪ æm nɑːt ə ˈfriːloʊdər fæt fɪʃ! …ɡʊd ˈmɔːrnɪŋ ˈeniweɪ, ˈmæstər/</div>
+              <div class="zh">哼、哼！我才不是吃白饭的大肥鱼！……总之早上好，主人。</div>
+            </div>
+            <div class="msg user">
+              Good morning! I slept great.
+              <div class="ipa">/ɡʊd ˈmɔːrnɪŋ! aɪ slept ɡreɪt/</div>
+              <div class="zh">早上好！我睡得很好。</div>
+            </div>
+            <div class="msg pet">
+              That's wonderful! Shall we practice some English today? 🎀
+              <div class="ipa">/ðæts ˈwʌndərfəl! ʃəl wiː ˈpræktɪs sʌm ˈɪŋɡlɪʃ təˈdeɪ?/</div>
+              <div class="zh">太好了！我们今天练练英语怎么样？🎀</div>
+            </div>
+          </div>
+          <div class="composer">
+            <div class="mic on" title="麦克风对话">🎤</div>
+            <input class="input" placeholder="Type in English… 或点🎤直接说" value="Sure, let's practice!" />
+            <button class="btn primary">发送</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="grid" style="margin-top:16px">
+      <div class="card">
+        <h3>预制回复题库 · 词汇分级</h3>
+        <div class="sub">每次桌宠说完自动给 2 个回复，按词汇档位出题</div>
+        <div class="row" id="vocabSwitch"></div>
+        <div class="choice" style="margin-top:12px">
+          <div class="en">It sounds fun! Where shall we start?</div>
+          <div class="meta"><span class="ipa">/ɪt saʊndz fʌn! wer ʃəl wiː stɑːrt?/</span> · 听起来很有趣！我们从哪开始？</div>
+        </div>
+        <div class="choice" style="margin-top:8px">
+          <div class="en">Great! Could you tell me a story?</div>
+          <div class="meta"><span class="ipa">/ɡreɪt! kʊd juː tel miː ə ˈstɔːri?/</span> · 好呀！能给我讲个故事吗？</div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>三种对话入口</h3>
+        <div class="sub">对应你的三类需求</div>
+        <div class="row" style="margin-bottom:8px"><span class="pill">🎤 麦克风直接对话</span><span class="note">语音输入 → 转写 → LLM → TTS 朗读</span></div>
+        <div class="row" style="margin-bottom:8px"><span class="pill">💬 独立聊天大窗口</span><span class="note">完整历史 + 音标翻译</span></div>
+        <div class="row"><span class="pill">💭 头顶快捷气泡</span><span class="note">轻量，不打断手头事</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 快捷气泡 ============ -->
+  <section class="panel" id="p-bubble">
+    <div class="stage" style="height:600px">
+      <div class="stage-inner">
+      <div class="pet-wrap"></div>
+      <div class="bubble">
+        <div class="en">Master, you've been working 2 hours. Take a break! ☕ …D-don't misunderstand, I just don't want you to collapse!</div>
+        <div class="ipa">/ˈmæstər, juːv bɪn ˈwɜːrkɪŋ tuː ˈaʊərz. teɪk ə breɪk! …d-doʊnt ˌmɪsʌndərˈstænd, aɪ dʒʌst doʊnt wɑːnt juː tə kəˈlæps!/</div>
+        <div class="zh">主人，你已经工作两小时啦，休息一下！☕ ……别、别误会，我只是不想你累垮而已！</div>
+        <div class="choices">
+          <div class="choice">
+            <div class="en">Good idea! Let me stretch.</div>
+            <div class="meta"><span class="ipa">/ɡʊd aɪˈdiːə! let miː stretʃ/</span> · 好主意！我伸个懒腰。</div>
+          </div>
+          <div class="choice">
+            <div class="en">Thanks, but I'll finish this first.</div>
+            <div class="meta"><span class="ipa">/θæŋks, bʌt aɪl ˈfɪnɪʃ ðɪs fɜːrst/</span> · 谢谢，不过我先做完这个。</div>
+          </div>
+        </div>
+      </div>
+      </div>
+      <div class="taskbar"><span></span><span></span><span></span><div style="margin-left:auto;color:#fff;font-size:11px;opacity:.9">气泡式快捷对话 · 主动搭话提醒</div></div>
+    </div>
+  </section>
+
+  <!-- ============ 设置 ============ -->
+  <section class="panel" id="p-settings">
+    <div class="grid">
+      <div class="card">
+        <h3>人设 Persona</h3>
+        <div class="sub">默认傲娇鲸鱼女仆，可改风格 / 语气 / 称呼 / 口头禅</div>
+        <div class="field"><label>人设风格</label>
+          <select><option>默认 · 傲娇女仆</option><option>元气 · 小可爱</option><option>忧郁 · 安静陪伴</option><option>自定义…</option></select>
+        </div>
+        <div class="field"><label>对用户的称呼</label><input value="Master"></div>
+        <div class="field"><label>口头禅</label><input value="“我才不是吃白饭的大肥鱼呢！”"></div>
+        <div class="field"><label>人设描述（自然语言）</label><input value="蓝发鲸鱼女仆，傲娇但温柔，喜欢陪伴和鼓励主人练英语，最讨厌被叫吃白饭的大肥鱼。"></div>
+      </div>
+
+      <div class="card">
+        <h3>记忆系统</h3>
+        <div class="sub">短期 / 中期 / 长期，可查看、删除、导出</div>
+        <div class="row" style="margin-bottom:10px">
+          <span class="pill on">短期 · 聊天轮次</span>
+          <span class="pill">中期 · 会话次数</span>
+          <span class="pill">长期 · 按天</span>
+        </div>
+        <div class="note">短期：当前对话最近 20 轮<br>中期：每次会话结束摘要归档<br>长期：按天沉淀事实 / 偏好 / 事件</div>
+        <div class="row" style="margin-top:12px">
+          <button class="btn ghost">查看记忆</button>
+          <button class="btn ghost">清空短期</button>
+          <button class="btn ghost">导出</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>AI 助手 · 操控电脑</h3>
+        <div class="sub">默认关闭，按权限分层，敏感操作二次确认</div>
+        <div class="row">
+          <span class="pill">🔒 只读</span>
+          <span class="pill">📁 常规操作</span>
+          <span class="pill on">🌐 网页操控</span>
+        </div>
+        <div class="note" style="margin-top:10px">网页操控：打开页面 → 定位元素 → 点击 / 输入 / 抓取，每步可确认。</div>
+        <div class="row" style="margin-top:12px"><button class="btn primary">开启 AI 助手</button><span class="note">需要时再授权</span></div>
+      </div>
+
+      <div class="card">
+        <h3>API 绑定</h3>
+        <div class="sub">模型 / TTS 由用户自选，首次启动弹窗引导</div>
+        <div class="field"><label>模型 Provider</label>
+          <select><option>DeepSeek</option><option>OpenAI 兼容接口</option><option>其它…</option></select>
+        </div>
+        <div class="field"><label>API Key</label><input type="password" value="sk-••••••••••••"></div>
+        <div class="field"><label>TTS 引擎</label>
+          <select><option>云端（Edge / Azure）</option><option>本地（系统语音）</option></select>
+        </div>
+      </div>
+    </div>
+
+    <div class="credit">
+      <b>形象来源</b>：二创「吃白饭的蓝色大肥鱼」——<b>Q版蓝发鲸鱼女仆</b>。标志性要素：蓝色渐变长卷发 / 鲸鱼鳍状耳饰 / 白色荷叶边女仆头饰 / 深蓝女仆裙 + 白围裙（鲸鱼图案）+ 金色裙摆 / 领口黑蝴蝶结 / 鲸鱼尾巴 / 大蓝眼。
+      性格：自信逞强、傲娇、一被戳穿就炸毛慌张（参考四格漫画「用户真的是天才??」）。
+      参考项目 <a href="https://github.com/YunYueSama/codex-deepseek-pet" target="_blank">YunYueSama/codex-deepseek-pet</a>、<a href="https://github.com/GarfieldZhung/DeepSeek-Whale-Girl" target="_blank">GarfieldZhung/DeepSeek-Whale-Girl</a>（角色图非 MIT，正式版需另确认素材授权）。
+    </div>
+  </section>
+
+  <!-- ============ 首次启动 ============ -->
+  <section class="panel" id="p-firstrun">
+    <div class="card" style="max-width:560px;margin:20px auto">
+      <h3>欢迎，主人！🐳</h3>
+      <div class="sub">首次启动，先绑定你的 API，我才能开口说话</div>
+      <div class="field"><label>模型 Provider</label>
+        <select><option>DeepSeek</option><option>OpenAI 兼容接口</option></select>
+      </div>
+      <div class="field"><label>API Key</label><input placeholder="sk-..."></div>
+      <div class="field"><label>接口地址（可选）</label><input placeholder="https://api.deepseek.com/v1"></div>
+      <div class="field"><label>TTS 引擎</label>
+        <select><option>云端 TTS</option><option>本地系统语音</option></select>
+      </div>
+      <div class="row" style="margin-top:18px">
+        <button class="btn primary">绑定并开始</button>
+        <button class="btn ghost">稍后再说</button>
+      </div>
+      <div class="hint">💡 Key 只存在本地，不上传；首次对话会做一次连通性测试。</div>
+    </div>
+  </section>
+
+</main>
+
+<!-- 首次启动模态（示意） -->
+<div class="modal" id="firstModal" style="display:none">
+  <div class="box">
+    <h2>🚀 绑定 API</h2>
+    <div class="sub" style="color:#6b7490">选择模型与 TTS，桌宠才能对话和发声</div>
+    <div class="field"><label>模型 Provider</label>
+      <select><option>DeepSeek</option><option>OpenAI 兼容接口</option><option>其它…</option></select>
+    </div>
+    <div class="field"><label>API Key</label><input type="password" placeholder="sk-..."></div>
+    <div class="field"><label>TTS 引擎</label>
+      <select><option>云端 TTS</option><option>本地系统语音</option></select>
+    </div>
+    <div class="row" style="margin-top:18px">
+      <button class="btn primary">绑定并开始</button>
+      <button class="btn ghost">稍后再说</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ===== 吃白饭的大肥鱼女仆 · 占位立绘（SVG，可参数化换表情/换配饰色调） =====
+  const STYLES = {
+    default:{ bow:"#4a72d8", trim:"#d4af6a", eyes:"normal", mouth:"pout",  blush:"#ffb3c6" },
+    cute:   { bow:"#ff7aa8", trim:"#ffd6a8", eyes:"sparkle",mouth:"smile", blush:"#ff9ec2" },
+    melon:  { bow:"#7b8fb8", trim:"#c9cadb", eyes:"droop",  mouth:"flat",  blush:"#c3b2cf" },
+  };
+  // 二次元动漫眼：眼白 + 渐变虹膜 + 瞳孔 + 双高光 + 厚上睫毛 + 下眼线 + 眼尾
+  function eyePair(kind, p){
+    const iris = `url(#${p}-iris)`;
+    const droop = `<path d="M86 128 Q100 119 114 128 Q100 133 86 128 Z" fill="#101c40"/>
+      <path d="M126 128 Q140 119 154 128 Q140 133 126 128 Z" fill="#101c40"/>
+      <path d="M86 120 Q100 113 114 120" stroke="#1a2647" stroke-width="3.2" fill="none" stroke-linecap="round"/>
+      <path d="M126 120 Q140 113 154 120" stroke="#1a2647" stroke-width="3.2" fill="none" stroke-linecap="round"/>
+      <path d="M83 118 Q79 112 75 109" stroke="#1a2647" stroke-width="2.6" fill="none" stroke-linecap="round"/>
+      <path d="M157 118 Q161 112 165 109" stroke="#1a2647" stroke-width="2.6" fill="none" stroke-linecap="round"/>`;
+    if(kind === 'droop') return droop;
+    const b = kind === 'sparkle' ? 1.12 : 1;
+    const spark = kind === 'sparkle'
+      ? `<path d="M106 117 l1.6 3.2 3.2 1.6 -3.2 1.6 -1.6 3.2 -1.6 -3.2 -3.2 -1.6 3.2 -1.6 z" fill="#fff"/>
+         <path d="M146 117 l1.6 3.2 3.2 1.6 -3.2 1.6 -1.6 3.2 -1.6 -3.2 -3.2 -1.6 3.2 -1.6 z" fill="#fff"/>` : '';
+    return `
+      <ellipse cx="100" cy="126" rx="${13*b}" ry="${16*b}" fill="#fdfdff" stroke="#c8d3e8" stroke-width="1"/>
+      <ellipse cx="100" cy="128" rx="${10.4*b}" ry="${13*b}" fill="${iris}"/>
+      <ellipse cx="100" cy="128" rx="${4.6*b}" ry="${6.4*b}" fill="#101c40"/>
+      <circle cx="104" cy="121" r="${4.4*b}" fill="#fff"/>
+      <circle cx="95.5" cy="133" r="${2.2*b}" fill="#fff" opacity=".9"/>
+      <path d="M92 136 Q100 142 108 136" stroke="#cfe8ff" stroke-width="2" fill="none" opacity=".85"/>
+      <path d="M86 124 Q93 107 106 107 Q114 107 115 115" stroke="#1a2647" stroke-width="4.6" fill="none" stroke-linecap="round"/>
+      <path d="M83 118 Q79 112 75 109" stroke="#1a2647" stroke-width="3.2" fill="none" stroke-linecap="round"/>
+      <path d="M90 139 Q100 143 111 138" stroke="#46567e" stroke-width="1.8" fill="none" stroke-linecap="round"/>
+      <ellipse cx="140" cy="126" rx="${13*b}" ry="${16*b}" fill="#fdfdff" stroke="#c8d3e8" stroke-width="1"/>
+      <ellipse cx="140" cy="128" rx="${10.4*b}" ry="${13*b}" fill="${iris}"/>
+      <ellipse cx="140" cy="128" rx="${4.6*b}" ry="${6.4*b}" fill="#101c40"/>
+      <circle cx="144" cy="121" r="${4.4*b}" fill="#fff"/>
+      <circle cx="135.5" cy="133" r="${2.2*b}" fill="#fff" opacity=".9"/>
+      <path d="M132 136 Q140 142 148 136" stroke="#cfe8ff" stroke-width="2" fill="none" opacity=".85"/>
+      <path d="M125 115 Q126 107 134 107 Q147 107 154 124" stroke="#1a2647" stroke-width="4.6" fill="none" stroke-linecap="round"/>
+      <path d="M157 118 Q161 112 165 109" stroke="#1a2647" stroke-width="3.2" fill="none" stroke-linecap="round"/>
+      <path d="M129 138 Q140 143 150 139" stroke="#46567e" stroke-width="1.8" fill="none" stroke-linecap="round"/>
+      ${spark}`;
+  }
+
+  const MOUTHS = {
+    pout:'<path d="M113 150 Q116.5 147.5 120 151 Q123.5 147.5 127 150" stroke="#8a5560" stroke-width="2.6" fill="none" stroke-linecap="round"/>',
+    smile:'<path d="M111 149 Q120 159 129 149 Q120 153 111 149 Z" fill="#a2555f"/><path d="M114 150 Q120 153 126 150" stroke="#fff" stroke-width="1.4" fill="none" opacity=".65"/>',
+    flat:'<path d="M113 151 L127 151" stroke="#8a5560" stroke-width="2.6" stroke-linecap="round"/>',
+  };
+
+  let uid = 0;
+  function petSVG(style){
+    const s = STYLES[style] || STYLES.default;
+    const p = "p" + (uid++);
+    const eyes = eyePair(s.eyes, p);
+    const mouth = MOUTHS[s.mouth] || MOUTHS.pout;
+    return `<svg viewBox="0 0 240 310" width="240" height="310" xmlns="http://www.w3.org/2000/svg" style="filter:drop-shadow(0 10px 16px rgba(30,40,80,.25))">
+      <defs>
+        <linearGradient id="${p}-hair" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#6b93ea"/><stop offset="0.35" stop-color="#3f63cc"/><stop offset="1" stop-color="#8fbaff"/>
+        </linearGradient>
+        <linearGradient id="${p}-back" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#33509f"/><stop offset="1" stop-color="#5d86dd"/>
+        </linearGradient>
+        <linearGradient id="${p}-iris" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#17306e"/><stop offset="0.55" stop-color="#3f7fd8"/><stop offset="1" stop-color="#a6d4ff"/>
+        </linearGradient>
+        <linearGradient id="${p}-skin" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#fff1e6"/><stop offset="1" stop-color="#ffdcc4"/>
+        </linearGradient>
+        <linearGradient id="${p}-dress" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#2b3a64"/><stop offset="1" stop-color="#141c36"/>
+        </linearGradient>
+        <linearGradient id="${p}-apron" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#e4ebff"/>
+        </linearGradient>
+        <linearGradient id="${p}-fin" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#a9ccff"/><stop offset="1" stop-color="#3f63cc"/>
+        </linearGradient>
+        <radialGradient id="${p}-blush">
+          <stop offset="0" stop-color="${s.blush}" stop-opacity=".9"/><stop offset="1" stop-color="${s.blush}" stop-opacity="0"/>
+        </radialGradient>
+      </defs>
+
+      <!-- 鲸鱼尾巴 -->
+      <path d="M20 254 Q52 216 90 248 Q82 266 60 278 Q42 274 30 286 Q14 270 20 254 Z" fill="url(#${p}-fin)" stroke="#1b3070" stroke-width="2.4" stroke-linejoin="round"/>
+      <path d="M38 264 Q56 244 74 258" stroke="#d6e8ff" stroke-width="2.4" fill="none" stroke-linecap="round" opacity=".85"/>
+
+      <!-- 后发 -->
+      <ellipse cx="120" cy="116" rx="70" ry="68" fill="url(#${p}-back)" stroke="#22397e" stroke-width="2.4"/>
+      <path d="M54 142 Q42 228 60 292 L98 292 Q78 226 86 142 Z" fill="url(#${p}-back)" stroke="#22397e" stroke-width="2.4" stroke-linejoin="round"/>
+      <path d="M186 142 Q198 228 180 292 L142 292 Q162 226 154 142 Z" fill="url(#${p}-back)" stroke="#22397e" stroke-width="2.4" stroke-linejoin="round"/>
+
+      <!-- 脖子 -->
+      <path d="M110 156 L130 156 L130 182 L110 182 Z" fill="#f0c1a6"/>
+
+      <!-- 女仆裙 -->
+      <path d="M82 176 Q120 162 158 176 L172 280 Q120 300 68 280 Z" fill="url(#${p}-dress)" stroke="#0e1730" stroke-width="2.4" stroke-linejoin="round"/>
+      <path d="M82 176 Q120 162 158 176 L160 194 Q120 182 80 194 Z" fill="#0b1226" opacity=".45"/>
+      <path d="M68 280 Q77 293 86 281 Q95 293 104 281 Q113 293 122 281 Q131 293 140 281 Q149 293 158 281 Q166 293 172 280 L172 286 Q120 306 68 286 Z" fill="#f7faff" stroke="#c6d2ee" stroke-width="1.6" stroke-linejoin="round"/>
+
+      <!-- 白围裙 + 鲸鱼徽记 -->
+      <path d="M100 174 L140 174 L148 274 Q120 284 92 274 Z" fill="url(#${p}-apron)" stroke="#c6d2ee" stroke-width="2" stroke-linejoin="round"/>
+      <path d="M100 174 L140 174 L141 190 L99 190 Z" fill="#dde5f8" opacity=".8"/>
+      <path d="M92 274 Q120 284 148 274" stroke="${s.trim}" stroke-width="3" fill="none"/>
+      <ellipse cx="120" cy="236" rx="14" ry="10" fill="#4370d6" stroke="#1b3070" stroke-width="1.2"/>
+      <path d="M131 236 l11 -5 -3 10 z" fill="#4370d6" stroke="#1b3070" stroke-width="1.2" stroke-linejoin="round"/>
+      <circle cx="113" cy="233" r="2" fill="#fff"/>
+      <path d="M120 224 q4 -7 1 -12" stroke="#9cc2ff" stroke-width="2" fill="none" stroke-linecap="round"/>
+
+      <!-- 手臂（画在鬓发之后，让手露出来） -->
+      <path d="M84 186 Q70 210 76 236 Q88 242 96 234 Q88 210 96 190 Z" fill="url(#${p}-dress)" stroke="#0e1730" stroke-width="2" stroke-linejoin="round"/>
+      <ellipse cx="78" cy="238" rx="9.5" ry="8" fill="url(#${p}-skin)" stroke="#e0b49a" stroke-width="1.6"/>
+      <path d="M156 186 Q170 210 164 236 Q152 242 144 234 Q152 210 144 190 Z" fill="url(#${p}-dress)" stroke="#0e1730" stroke-width="2" stroke-linejoin="round"/>
+      <ellipse cx="162" cy="238" rx="9.5" ry="8" fill="url(#${p}-skin)" stroke="#e0b49a" stroke-width="1.6"/>
+
+      <!-- 脸 -->
+      <ellipse cx="120" cy="118" rx="46" ry="44" fill="url(#${p}-skin)" stroke="#e0b49a" stroke-width="1.6"/>
+      <path d="M76 106 Q120 126 164 106 Q158 84 120 78 Q82 84 76 106 Z" fill="#eab99e" opacity=".42"/>
+
+      <!-- 刘海 + 发丝高光 -->
+      <path d="M72 122 Q64 56 120 50 Q176 56 168 122 Q166 104 156 112 Q154 90 142 106 Q136 84 126 104 Q120 86 114 104 Q104 84 98 106 Q86 90 84 112 Q74 104 72 122 Z" fill="url(#${p}-hair)" stroke="#22397e" stroke-width="2.4" stroke-linejoin="round"/>
+      <path d="M88 80 Q104 68 122 68 Q142 68 156 80 Q140 76 120 76 Q100 76 88 80 Z" fill="#c6dcff" opacity=".75"/>
+      <path d="M104 96 Q112 88 120 96" stroke="#22397e" stroke-width="1.6" fill="none" opacity=".5"/>
+
+      <!-- 鬓发 -->
+      <path d="M70 114 Q58 178 74 246 L90 246 Q78 178 86 114 Q78 120 70 114 Z" fill="url(#${p}-hair)" stroke="#22397e" stroke-width="2.4" stroke-linejoin="round"/>
+      <path d="M170 114 Q182 178 166 246 L150 246 Q162 178 154 114 Q162 120 170 114 Z" fill="url(#${p}-hair)" stroke="#22397e" stroke-width="2.4" stroke-linejoin="round"/>
+
+      <!-- 发丝细节 -->
+      <path d="M80 152 Q74 208 84 254" stroke="#22397e" stroke-width="1.5" fill="none" opacity=".4"/>
+      <path d="M160 152 Q166 208 156 254" stroke="#22397e" stroke-width="1.5" fill="none" opacity=".4"/>
+      <path d="M98 106 Q102 88 108 76" stroke="#22397e" stroke-width="1.4" fill="none" opacity=".38"/>
+      <path d="M142 106 Q138 88 132 76" stroke="#22397e" stroke-width="1.4" fill="none" opacity=".38"/>
+
+      <!-- 手臂（画在鬓发之后，让手露出来） -->
+      <path d="M84 186 Q70 210 76 236 Q88 242 96 234 Q88 210 96 190 Z" fill="url(#${p}-dress)" stroke="#0e1730" stroke-width="2" stroke-linejoin="round"/>
+      <ellipse cx="78" cy="238" rx="9.5" ry="8" fill="url(#${p}-skin)" stroke="#e0b49a" stroke-width="1.6"/>
+      <path d="M156 186 Q170 210 164 236 Q152 242 144 234 Q152 210 144 190 Z" fill="url(#${p}-dress)" stroke="#0e1730" stroke-width="2" stroke-linejoin="round"/>
+      <ellipse cx="162" cy="238" rx="9.5" ry="8" fill="url(#${p}-skin)" stroke="#e0b49a" stroke-width="1.6"/>
+
+      <!-- 鲸鱼鳍耳饰 -->
+      <path d="M70 116 Q40 100 31 118 Q41 133 62 137 Q68 127 70 116 Z" fill="url(#${p}-fin)" stroke="#1b3070" stroke-width="2.4" stroke-linejoin="round"/>
+      <path d="M170 116 Q200 100 209 118 Q199 133 178 137 Q172 127 170 116 Z" fill="url(#${p}-fin)" stroke="#1b3070" stroke-width="2.4" stroke-linejoin="round"/>
+      <path d="M64 120 Q48 115 40 120" stroke="#dbe9ff" stroke-width="2" fill="none" stroke-linecap="round"/>
+      <path d="M176 120 Q192 115 200 120" stroke="#dbe9ff" stroke-width="2" fill="none" stroke-linecap="round"/>
+
+      <!-- 眉毛 -->
+      <path d="M89 103 Q100 98 110 102" stroke="#3f63cc" stroke-width="2.6" fill="none" stroke-linecap="round"/>
+      <path d="M130 102 Q140 98 151 103" stroke="#3f63cc" stroke-width="2.6" fill="none" stroke-linecap="round"/>
+
+      <!-- 眼睛 -->
+      ${eyes}
+
+      <!-- 腮红 -->
+      <ellipse cx="79" cy="141" rx="13" ry="8.5" fill="url(#${p}-blush)"/>
+      <ellipse cx="161" cy="141" rx="13" ry="8.5" fill="url(#${p}-blush)"/>
+      ${mouth}
+
+      <!-- 领口黑蝴蝶结 -->
+      <path d="M107 184 L92 172 L107 192 Z" fill="#15192c" stroke="#050813" stroke-width="1.2" stroke-linejoin="round"/>
+      <path d="M133 184 L148 172 L133 192 Z" fill="#15192c" stroke="#050813" stroke-width="1.2" stroke-linejoin="round"/>
+      <circle cx="120" cy="184" r="5.5" fill="#20263f" stroke="#050813" stroke-width="1.2"/>
+
+      <!-- 女仆头饰（白色荷叶边） + 蝴蝶结 -->
+      <path d="M62 80 Q120 40 178 80 L178 86 Q170 98 160 88 Q150 100 140 90 Q130 102 120 92 Q110 102 100 90 Q90 100 80 88 Q70 98 62 86 Z" fill="#ffffff" stroke="#c6d2ee" stroke-width="1.6" stroke-linejoin="round"/>
+      <path d="M116 50 L97 36 Q89 50 97 64 Z" fill="${s.bow}" stroke="#1b3070" stroke-width="1.4" stroke-linejoin="round"/>
+      <path d="M124 50 L143 36 Q151 50 143 64 Z" fill="${s.bow}" stroke="#1b3070" stroke-width="1.4" stroke-linejoin="round"/>
+      <circle cx="120" cy="50" r="7" fill="${s.bow}" stroke="#1b3070" stroke-width="1.4"/>
+    </svg>`;
+  }
+
+  // ===== Tab 切换 =====
+  const tabs = document.querySelectorAll('.tab');
+  const panels = { float:'p-float', chat:'p-chat', bubble:'p-bubble', settings:'p-settings', firstrun:'p-firstrun' };
+  tabs.forEach(t=>t.addEventListener('click',()=>{
+    tabs.forEach(x=>x.classList.remove('on')); t.classList.add('on');
+    Object.values(panels).forEach(id=>document.getElementById(id).classList.remove('on'));
+    document.getElementById(panels[t.dataset.t]).classList.add('on');
+  }));
+  // 支持用 URL hash 直达某个面板（便于截图/分享）
+  (function(){
+    const h = location.hash.replace('#','');
+    if(!panels[h]) return;
+    tabs.forEach(x=>x.classList.toggle('on', x.dataset.t===h));
+    Object.values(panels).forEach(id=>document.getElementById(id).classList.remove('on'));
+    document.getElementById(panels[h]).classList.add('on');
+  })();
+
+  // ===== 人设切换 =====
+  const personas = { default:'默认 · 傲娇女仆', cute:'元气 · 小可爱', melon:'忧郁 · 安静陪伴' };
+  const ps = document.getElementById('personaSwitch');
+  ps.innerHTML = Object.keys(personas).map(k=>`<span class="pill ${k==='default'?'on':''}" data-k="${k}">${personas[k]}</span>`).join('');
+  function renderPets(k){
+    document.getElementById('petFloat').innerHTML = petSVG(k);
+    document.querySelector('#p-bubble .pet-wrap').innerHTML = petSVG(k);
+  }
+  renderPets('default');
+  ps.addEventListener('click',e=>{
+    const k = e.target.dataset.k; if(!k) return;
+    ps.querySelectorAll('.pill').forEach(x=>x.classList.remove('on'));
+    e.target.classList.add('on');
+    renderPets(k);
+  });
+
+  // ===== 词汇等级切换 =====
+  const vocab = document.getElementById('vocabSwitch');
+  vocab.innerHTML = ['高中词汇','四级词汇','六级词汇'].map((v,i)=>`<span class="pill ${i===0?'on':''}">${v}</span>`).join('');
+  vocab.addEventListener('click',e=>{
+    if(!e.target.classList.contains('pill')) return;
+    vocab.querySelectorAll('.pill').forEach(x=>x.classList.remove('on'));
+    e.target.classList.add('on');
+  });
+
+  // ===== 麦克风 toggle =====
+  const mic = document.querySelector('.mic');
+  mic.addEventListener('click',()=>mic.classList.toggle('on'));
+
+  // ===== 首次启动模态 =====
+  document.querySelector('[data-t="firstrun"]').addEventListener('click',()=>{
+    document.getElementById('firstModal').style.display='flex';
+  });
+  document.getElementById('firstModal').addEventListener('click',e=>{
+    if(e.target.id==='firstModal') e.target.style.display='none';
+  });
+</script>
+</body>
+</html>

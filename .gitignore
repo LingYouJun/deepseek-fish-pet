@@ -1,0 +1,21 @@
+# dependencies
+node_modules/
+.pw-browsers/*
+!.pw-browsers/README.txt
+
+# build output
+app/dist/
+release/
+dist/
+*.exe
+*.blockmap
+*.yml
+
+# local runtime data
+app/shots/
+*.log
+
+# test artifacts
+_portable_test*
+_test*/
+

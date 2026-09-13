@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="chat.css">
+</head>
+<body>
+
+<div id="setup" class="overlay hidden">
+  <div class="panel">
+    <h1>🐳 绑定 API</h1>
+    <p class="sub">先绑定模型接口，我才能开口说话</p>
+    <label>模型 Provider</label>
+    <select id="provider">
+      <option value="https://api.deepseek.com/v1|deepseek-chat">DeepSeek</option>
+      <option value="https://api.openai.com/v1|gpt-4o-mini">OpenAI</option>
+      <option value="custom">自定义…</option>
+    </select>
+    <label>接口地址</label>
+    <input id="apiBase" placeholder="https://api.deepseek.com/v1">
+    <label>API Key</label>
+    <input id="apiKey" type="password" placeholder="sk-...">
+    <label>模型名</label>
+    <input id="model" placeholder="deepseek-chat">
+    <label>预制回复词汇等级</label>
+    <select id="vocabLevel">
+      <option value="high_school">高中词汇（最低档）</option>
+      <option value="cet4">四级词汇</option>
+      <option value="cet6">六级词汇</option>
+    </select>
+    <label>AI 助手权限（操控电脑，每次需你确认）</label>
+    <select id="assistant">
+      <option value="off">关闭</option>
+      <option value="read">只读 · 可查看文件/列目录</option>
+      <option value="normal">常规 · 可打开网页/应用/文件</option>
+      <option value="web">网页操控 · 自动打开页面/点击/输入/抓取</option>
+    </select>
+    <div class="row">
+      <button id="save" class="primary">绑定并开始</button>
+      <button id="skip" class="ghost">稍后再说</button>
+    </div>
+    <div id="setupMsg" class="msg"></div>
+  </div>
+</div>
+
+<div id="persona" class="overlay hidden">
+  <div class="panel">
+    <h1>👤 人设</h1>
+    <p class="sub">写你自己的设定，保存后立即生效</p>
+    <label>名字</label>
+    <input id="pName" placeholder="大肥鱼">
+    <label>世界观设定</label>
+    <textarea id="pWorld" rows="3" placeholder="现代都市，主人是普通人，你是住在主人电脑里的桌宠……"></textarea>
+    <label>人物设定</label>
+    <textarea id="pChar" rows="4" placeholder="蓝发鲸鱼女仆，傲娇、温柔、嘴硬……"></textarea>
+    <label>口头禅</label>
+    <input id="pCatch" placeholder="I am NOT a freeloader fat fish!">
+    <label>隐藏设定（保密，非必要不提及）</label>
+    <textarea id="pHidden" rows="3" placeholder="只有用户主动聊到才说……"></textarea>
+    <div class="row">
+      <button id="pSave" class="primary">保存</button>
+      <button id="pCancel" class="ghost">取消</button>
+    </div>
+    <div id="pMsg" class="msg"></div>
+  </div>
+</div>
+
+<div id="diary" class="overlay hidden">
+  <div class="panel">
+    <h1>📖 记忆日记</h1>
+    <p class="sub">长期记忆按天归档；中期记忆是今天的会话</p>
+    <div id="diaryBody"></div>
+    <div class="row"><button id="diaryClose" class="ghost">关闭</button></div>
+  </div>
+</div>
+
+<div id="vocab" class="overlay hidden">
+  <div class="panel">
+    <h1>📒 生词本</h1>
+    <p class="sub">点对话里带虚线的单词即可收藏；跟读读错的词也能点一下加入</p>
+    <div id="vocabBody"></div>
+    <div class="row">
+      <button id="vocabReview" class="primary">开始复习</button>
+      <button id="vocabClose" class="ghost">关闭</button>
+    </div>
+  </div>
+</div>
+
+<div id="main" class="hidden">
+  <header>
+    <img class="avatar" src="../assets/pet-character.png" alt="大肥鱼">
+    <div class="head-meta">
+      <div class="title">🐳 大肥鱼</div>
+      <div class="subtitle">傲娇鲸鱼女仆 · 英语陪练</div>
+    </div>
+    <div id="moodBar" class="moodbar">
+      <span class="heart">❤️ <b id="affVal">--</b></span>
+      <span class="mood">😊 <b id="moodVal">--</b></span>
+    </div>
+    <div id="dshBar" class="dshbar"></div>
+    <div class="tools">
+      <span id="vocabBtn" class="tool" title="生词本">📒</span>
+      <span id="diaryBtn" class="tool" title="记忆日记">📖</span>
+      <span id="personaBtn" class="tool" title="人设">👤</span>
+      <span id="ttsBtn" class="tool on" title="朗读开关">🔊</span>
+      <span id="settingsBtn" class="tool" title="设置">⚙️</span>
+    </div>
+  </header>
+
+  <div id="quickActions">
+    <button class="quick" data-act="pat">✋ 摸摸头</button>
+    <button class="quick" data-act="feed">🍰 投喂</button>
+    <button class="quick" data-act="listen">🎤 跟读</button>
+    <button class="quick" data-act="review">📒 复习单词</button>
+  </div>
+
+  <div id="msgs"></div>
+  <div id="choices"></div>
+
+  <div id="composer">
+    <button id="mic" title="点击录音">🎤</button>
+    <div id="recStatus" class="hidden">
+      <div class="waves"><span></span><span></span><span></span><span></span><span></span></div>
+      <span id="recHint">再点一次发送 · 上滑取消</span>
+    </div>
+    <input id="input" placeholder="Type in English…">
+    <button id="send" class="primary">发送</button>
+  </div>
+</div>
+
+<script src="chat.js"></script>
+</body>
+</html>

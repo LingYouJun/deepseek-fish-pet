@@ -1,0 +1,70 @@
+{
+  "name": "dayu-pet",
+  "version": "0.2.0",
+  "description": "吃白饭的大肥鱼女仆 · Electron 桌宠",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder --win nsis",
+    "dist:release": "electron-builder --win nsis --config.directories.output=../../release"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^26.15.3",
+    "jimp": "^1.6.1"
+  },
+  "dependencies": {
+    "playwright": "^1.63.0"
+  },
+  "build": {
+    "appId": "com.dayu.mascot",
+    "productName": "大肥鱼桌宠",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "persona.json",
+      "src/**/*",
+      "renderer/**/*",
+      "assets/**/*",
+      "build/icon.png",
+      "!**/*.md",
+      "!**/shots/**",
+      "!**/*.log"
+    ],
+    "asarUnpack": [
+      "node_modules/playwright/**",
+      "node_modules/playwright-core/**"
+    ],
+    "extraResources": [
+      {
+        "from": ".pw-browsers",
+        "to": ".pw-browsers"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "大肥鱼桌宠",
+      "artifactName": "大肥鱼桌宠-${version}-Setup.${ext}"
+    }
+  }
+}
