@@ -127,7 +127,7 @@ function createPet() {
     transparent: true, frame: false, alwaysOnTop: true, resizable: false,
     hasShadow: false, skipTaskbar: true, show: false,
     backgroundColor: '#00000000',
-    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false }
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, backgroundThrottling: false }
   };
   if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) {
     opts.x = clamp(saved.x, work.x - 220, work.x + work.width - 100);
@@ -158,7 +158,7 @@ function createChat() {
   chatWin = new BrowserWindow({
     width: 560, height: 780, minWidth: 420, minHeight: 560, title: '大肥鱼 · 对话',
     autoHideMenuBar: true, backgroundColor: '#f3f6fb', show: false,
-    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true }
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, backgroundThrottling: false }
   });
   chatWin.loadFile(path.join(__dirname, 'renderer', 'chat.html'));
   chatWin.once('ready-to-show', () => chatWin.show());
@@ -212,9 +212,11 @@ function buildPetMenu(trayMode) {
     ['melon', '忧郁占位立绘'],
     ['default', '默认占位立绘']
   ].map(([v, label]) => ({ label, type: 'radio', checked: petSkin === v, click: () => setPetSkin(v) }));
+  const voiceWakeOn = config.load().voiceWakeEnabled !== false;
   const template = [
     { label: visible ? '隐藏桌宠' : '显示桌宠', click: togglePetVisible },
     { label: '打开对话', click: createChat },
+    { label: '语音唤醒', type: 'checkbox', checked: voiceWakeOn, click: (item) => setVoiceWake(item.checked) },
     { type: 'separator' },
     { label: '摸摸头', click: () => sendPetAction('pat') },
     { label: '投喂小鱼干', click: () => sendPetAction('feed', { food: '🐟' }) },
@@ -285,6 +287,14 @@ function setPetSkin(skin) {
   petSkin = skin;
   config.save({ petSkin: skin });
   if (petWin && !petWin.isDestroyed()) petWin.webContents.send('pet:skin', skin);
+  if (tray) { try { tray.setContextMenu(Menu.buildFromTemplate(buildPetMenu(true))); } catch {} }
+}
+
+function setVoiceWake(enabled) {
+  const next = config.save({ voiceWakeEnabled: !!enabled });
+  for (const win of [petWin, chatWin]) {
+    if (win && !win.isDestroyed()) win.webContents.send('tts:config', next);
+  }
   if (tray) { try { tray.setContextMenu(Menu.buildFromTemplate(buildPetMenu(true))); } catch {} }
 }
 
@@ -466,7 +476,7 @@ ipcMain.on('chat:shot', () => {
 ipcMain.handle('config:get', () => config.load());
 ipcMain.handle('config:set', (_e, patch) => {
   const next = config.save(patch || {});
-  const keys = ['ttsEnabled', 'ttsStyle', 'ttsVoice', 'ttsRate', 'ttsPitch'];
+  const keys = ['ttsEnabled', 'ttsStyle', 'ttsVoice', 'ttsRate', 'ttsPitch', 'voiceWakeEnabled', 'wakeWords', 'wakeSensitivity', 'wakeLang', 'voiceCommandLang'];
   if (patch && keys.some((k) => Object.prototype.hasOwnProperty.call(patch, k))) {
     for (const win of [petWin, chatWin]) {
       if (win && !win.isDestroyed()) win.webContents.send('tts:config', next);

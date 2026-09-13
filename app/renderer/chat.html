@@ -53,9 +53,20 @@
     <input id="ttsRate" type="range" min="0.60" max="1.40" step="0.02" value="1.02">
     <label>音调 <span id="ttsPitchVal" class="val">1.18</span></label>
     <input id="ttsPitch" type="range" min="0.70" max="1.60" step="0.02" value="1.18">
+    <hr class="sep">
+    <label class="check-row"><input id="voiceWakeEnabled" type="checkbox" checked> 后台语音唤醒（默认：你好大肥鱼）</label>
+    <label>唤醒词（逗号分隔，可多个）</label>
+    <input id="wakeWords" placeholder="你好大肥鱼, 大肥鱼, 你好大飞鱼">
+    <label>唤醒灵敏度 <span id="wakeSensitivityVal" class="val">0.68</span></label>
+    <input id="wakeSensitivity" type="range" min="0.50" max="0.95" step="0.01" value="0.68">
+    <label>唤醒后识别语言</label>
+    <select id="voiceCommandLang">
+      <option value="en-US">English · 英语指令</option>
+      <option value="zh-CN">中文 · 中文指令</option>
+    </select>
     <div class="row">
       <button id="ttsPreview" class="ghost">试听音色</button>
-      <button id="ttsSave" class="ghost">保存语音设置</button>
+      <button id="ttsSave" class="ghost">保存语音/唤醒设置</button>
     </div>
     <div id="ttsMsg" class="msg"></div>
     <div class="row">

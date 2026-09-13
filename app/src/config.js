@@ -17,7 +17,12 @@ const DEFAULTS = {
   assistant: 'off',
   petMode: 'wander',
   petScale: 1,
-  petSkin: 'dafeiyu'
+  petSkin: 'dafeiyu',
+  voiceWakeEnabled: true,
+  wakeWords: ['你好大肥鱼', '大肥鱼', '你好大飞鱼'],
+  wakeSensitivity: 0.68,
+  wakeLang: 'zh-CN',
+  voiceCommandLang: 'en-US'
 };
 
 function load() {

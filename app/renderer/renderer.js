@@ -76,6 +76,16 @@ const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 
 let dragging = false, offX = 0, offY = 0, moved = 0, suppressClick = false, hideTimer = null;
 let listening = true, micEnabled = true, chatOpen = false, rec = null, busy = false, curUtter = null;
+let voiceCfg = {
+  voiceWakeEnabled: true,
+  wakeWords: ['你好大肥鱼', '大肥鱼', '你好大飞鱼'],
+  wakeSensitivity: 0.68,
+  wakeLang: 'zh-CN',
+  voiceCommandLang: 'en-US'
+};
+let voiceState = 'off';
+let wakeListenTimer = null;
+let commandFinal = '';
 let clickCount = 0, clickTimer = null, lastMicErr = 0;
 let petSize = 240, petScale = 1;
 let currentSkin = 'dafeiyu';
@@ -224,7 +234,8 @@ function showReply(reply, hold, opts = {}) {
   });
 
   const done = opts.onDone || (() => {
-    if (busy) { busy = false; resumeListening(); }
+    busy = false;
+    resumeListening();
   });
   if (opts.speak === false) done();
   else speak(reply.en, done);
@@ -234,6 +245,7 @@ function showReply(reply, hold, opts = {}) {
 function speak(text, done) {
   if (!text) { done?.(); return; }
   if (ttsCfg.ttsEnabled === false) { done?.(); return; }
+  pauseListening();
   if (window.DayuTTS) {
     window.DayuTTS.speak(text, ttsCfg, done);
   } else {
@@ -268,31 +280,184 @@ async function sendText(text) {
   }
 }
 
-/* ---------------- 持续收音 ---------------- */
-function startListening() {
-  if (!SR || !micEnabled || !listening || chatOpen || rec || busy) return;
+/* ---------------- 麦克风：后台唤醒 / 指令识别 ---------------- */
+function normalizeVoiceText(t) {
+  return String(t || '').toLowerCase()
+    .replace(/[\s，。！？、,.!?;；:：'"”‘’（）()\[\]【】]/g, '');
+}
+
+function levenshtein(a, b) {
+  a = String(a || ''); b = String(b || '');
+  const m = a.length, n = b.length;
+  if (!m) return n;
+  if (!n) return m;
+  const dp = new Array(n + 1);
+  for (let j = 0; j <= n; j++) dp[j] = j;
+  for (let i = 1; i <= m; i++) {
+    let prev = dp[0];
+    dp[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const tmp = dp[j];
+      dp[j] = Math.min(dp[j] + 1, dp[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = tmp;
+    }
+  }
+  return dp[n];
+}
+
+function matchWakeWord(text) {
+  const norm = normalizeVoiceText(text);
+  if (!norm) return false;
+  const words = (voiceCfg.wakeWords && voiceCfg.wakeWords.length)
+    ? voiceCfg.wakeWords
+    : ['你好大肥鱼'];
+  const threshold = Math.max(0.5, Math.min(0.95, Number(voiceCfg.wakeSensitivity) || 0.68));
+  for (const word of words) {
+    const w = normalizeVoiceText(word);
+    if (!w) continue;
+    if (norm.includes(w)) return true;
+    const minLen = Math.max(2, w.length - 2);
+    const maxLen = Math.min(norm.length, w.length + 2);
+    for (let i = 0; i <= norm.length - minLen; i++) {
+      const chunk = norm.slice(i, i + maxLen);
+      const sim = 1 - levenshtein(w, chunk) / Math.max(w.length, chunk.length || 1);
+      if (sim >= threshold) return true;
+    }
+  }
+  return false;
+}
+
+function stopRec() {
+  if (!rec) return;
+  try { rec.onend = null; rec.onerror = null; rec.stop(); } catch {}
+  rec = null;
+}
+
+function canListen() {
+  return !!SR && micEnabled && !chatOpen && !busy && !dragging;
+}
+
+function scheduleWake(delay = 350) {
+  clearTimeout(wakeListenTimer);
+  wakeListenTimer = setTimeout(() => {
+    if (canListen()) startWakeListening();
+  }, delay);
+}
+
+function handleMicError(err) {
+  const now = Date.now();
+  const code = err && err.error;
+  if (now - lastMicErr > 30000 && code !== 'no-speech') {
+    lastMicErr = now;
+    const msg = {
+      'not-allowed': '麦克风未授权',
+      'audio-capture': '没有检测到麦克风设备',
+      'no-speech': '没听到声音'
+    }[code] || code;
+    if (msg) showReply({ en: 'Mic: ' + msg, zh: '麦克风：' + msg }, 4200, { speak: false, animation: 'none' });
+  }
+}
+
+function startWakeListening() {
+  if (!voiceCfg.voiceWakeEnabled) { voiceState = 'off'; return; }
+  if (!canListen()) { scheduleWake(700); return; }
+  stopRec();
+  voiceState = 'wake';
+  listening = true;
   try {
     rec = new SR();
-    rec.lang = 'en-US';
-    rec.continuous = false;
-    rec.interimResults = false;
-    rec.onresult = (e) => { const t = (e.results?.[0]?.[0]?.transcript || '').trim(); if (t) sendText(t); };
-    rec.onend = () => { rec = null; if (micEnabled && listening && !chatOpen && !busy) setTimeout(startListening, 300); };
+    rec.lang = voiceCfg.wakeLang || 'zh-CN';
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.onresult = (e) => {
+      let text = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) text += e.results[i][0].transcript || '';
+      if (text && matchWakeWord(text)) onWakeDetected();
+    };
+    rec.onend = () => {
+      rec = null;
+      if (voiceState === 'wake' && canListen()) scheduleWake(220);
+    };
     rec.onerror = (e) => {
       rec = null;
-      const now = Date.now();
-      if (now - lastMicErr > 30000) {
-        lastMicErr = now;
-        const msg = { 'not-allowed': '麦克风未授权', 'audio-capture': '没有检测到麦克风设备', 'no-speech': '没听到声音' }[e.error];
-        if (msg) showReply({ en: 'Mic: ' + msg, zh: '麦克风：' + msg }, 5000, { speak: false });
-      }
-      if (micEnabled && listening && !chatOpen && !busy && e.error !== 'not-allowed') setTimeout(startListening, 1500);
+      handleMicError(e);
+      if (voiceState === 'wake' && canListen() && e.error !== 'not-allowed') scheduleWake(1200);
     };
     rec.start();
-  } catch {}
+  } catch {
+    rec = null;
+    scheduleWake(1500);
+  }
 }
-function pauseListening() { listening = false; try { rec?.stop(); } catch {} rec = null; }
-function resumeListening() { if (chatOpen || busy || !micEnabled) return; listening = true; startListening(); }
+
+function onWakeDetected() {
+  if (voiceState !== 'wake') return;
+  voiceState = 'awake';
+  listening = false;
+  clearTimeout(wakeListenTimer);
+  stopRec();
+  burst(['💗', '✨', '🐟'], 7);
+  showReply({
+    en: "Y-yes? I am here... n-not that I was waiting for you!",
+    zh: '在、在啦！……才、才没有一直等你呢！',
+    words: [{ w: 'waiting', ipa: '/ˈweɪtɪŋ/', zh: '等待' }]
+  }, 3600, {
+    speak: true,
+    animation: 'jump',
+    mood: 'shy',
+    onDone: () => startCommandListening()
+  });
+}
+
+function startCommandListening() {
+  if (!voiceCfg.voiceWakeEnabled) { voiceState = 'off'; return; }
+  if (!canListen()) { scheduleWake(600); return; }
+  stopRec();
+  voiceState = 'command';
+  commandFinal = '';
+  try {
+    rec = new SR();
+    rec.lang = voiceCfg.voiceCommandLang || 'en-US';
+    rec.continuous = false;
+    rec.interimResults = false;
+    rec.maxAlternatives = 1;
+    rec.onresult = (e) => {
+      const t = (e.results?.[0]?.[0]?.transcript || '').trim();
+      if (t) commandFinal = t;
+    };
+    rec.onend = () => {
+      rec = null;
+      const t = commandFinal.trim();
+      commandFinal = '';
+      if (t) sendText(t);
+      else scheduleWake(350);
+    };
+    rec.onerror = (e) => {
+      rec = null;
+      handleMicError(e);
+      scheduleWake(900);
+    };
+    rec.start();
+  } catch {
+    rec = null;
+    scheduleWake(1200);
+  }
+}
+
+function pauseListening() {
+  listening = false;
+  voiceState = 'off';
+  clearTimeout(wakeListenTimer);
+  stopRec();
+}
+
+function resumeListening() {
+  if (chatOpen || busy || !micEnabled || !voiceCfg.voiceWakeEnabled) return;
+  if (voiceState === 'command' || voiceState === 'awake') return;
+  if (voiceState === 'wake' && rec) { listening = true; return; }
+  startWakeListening();
+}
+
 function updateMicButton() {}
 function setMic(enabled) {
   micEnabled = enabled;
@@ -300,6 +465,7 @@ function setMic(enabled) {
   if (!micEnabled) pauseListening();
   else { listening = true; resumeListening(); }
 }
+function startListening() { startWakeListening(); }
 
 function baseHeightForSkin(skin) {
   return (SKINS[skin] && SKINS[skin].baseHeight) || 240;
@@ -501,7 +667,20 @@ if (window.petAPI.onScale) window.petAPI.onScale((scale) => applyScale(scale));
 if (window.petAPI.onDirection) window.petAPI.onDirection((dir) => setView(dir));
 if (window.petAPI.onMoving) window.petAPI.onMoving((moving) => setWalking(!!moving));
 if (window.petAPI.onSkin) window.petAPI.onSkin((skin) => applySkin(skin));
-if (window.petAPI.onTtsConfig) window.petAPI.onTtsConfig((cfg) => { ttsCfg = { ...ttsCfg, ...(cfg || {}) }; });
+if (window.petAPI.onTtsConfig) window.petAPI.onTtsConfig((next) => {
+  ttsCfg = { ...ttsCfg, ...(next || {}) };
+  voiceCfg = { ...voiceCfg, ...(next || {}) };
+  if (typeof voiceCfg.wakeWords === 'string') {
+    voiceCfg.wakeWords = voiceCfg.wakeWords.split(/[,，;；\s]+/).filter(Boolean);
+  }
+  if (!Array.isArray(voiceCfg.wakeWords) || !voiceCfg.wakeWords.length) {
+    voiceCfg.wakeWords = ['你好大肥鱼', '大肥鱼', '你好大飞鱼'];
+  }
+  if (!busy) {
+    pauseListening();
+    if (voiceCfg.voiceWakeEnabled !== false) scheduleWake(250);
+  }
+});
 if (window.petAPI.onChatState) window.petAPI.onChatState((open) => {
   chatOpen = open;
   if (open) pauseListening(); else resumeListening();
@@ -568,6 +747,13 @@ function fitWindow() {
   let cfg = {};
   try { cfg = await window.petAPI.configGet(); } catch {}
   ttsCfg = { ...ttsCfg, ...(cfg || {}) };
+  voiceCfg = { ...voiceCfg, ...(cfg || {}) };
+  if (typeof voiceCfg.wakeWords === 'string') {
+    voiceCfg.wakeWords = voiceCfg.wakeWords.split(/[,，;；\s]+/).filter(Boolean);
+  }
+  if (!Array.isArray(voiceCfg.wakeWords) || !voiceCfg.wakeWords.length) {
+    voiceCfg.wakeWords = ['你好大肥鱼', '大肥鱼', '你好大飞鱼'];
+  }
   applySkin(cfg.petSkin || 'dafeiyu');
   applyScale(cfg.petScale || 1);
   setModeUi(cfg.petMode || 'wander');

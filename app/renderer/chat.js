@@ -51,6 +51,11 @@ function applyTtsToForm() {
   $('ttsPitch').value = cfg.ttsPitch != null ? cfg.ttsPitch : st.pitch;
   $('ttsRateVal').textContent = Number($('ttsRate').value).toFixed(2);
   $('ttsPitchVal').textContent = Number($('ttsPitch').value).toFixed(2);
+  $('voiceWakeEnabled').checked = cfg.voiceWakeEnabled !== false;
+  $('wakeWords').value = Array.isArray(cfg.wakeWords) ? cfg.wakeWords.join(', ') : (cfg.wakeWords || '你好大肥鱼, 大肥鱼, 你好大飞鱼');
+  $('wakeSensitivity').value = cfg.wakeSensitivity != null ? cfg.wakeSensitivity : 0.68;
+  $('wakeSensitivityVal').textContent = Number($('wakeSensitivity').value).toFixed(2);
+  $('voiceCommandLang').value = cfg.voiceCommandLang || 'en-US';
   populateTtsVoices();
 }
 function populateTtsVoices() {
@@ -93,8 +98,11 @@ function initTtsControls() {
     $(id).addEventListener('input', () => {
       $('ttsRateVal').textContent = Number($('ttsRate').value).toFixed(2);
       $('ttsPitchVal').textContent = Number($('ttsPitch').value).toFixed(2);
-      if (id === 'ttsRate' || id === 'ttsPitch') $('ttsStyle').value = 'custom';
+      $('ttsStyle').value = 'custom';
     });
+  });
+  $('wakeSensitivity').addEventListener('input', () => {
+    $('wakeSensitivityVal').textContent = Number($('wakeSensitivity').value).toFixed(2);
   });
   $('ttsSave').addEventListener('click', saveTtsConfig);
   $('ttsPreview').addEventListener('click', () => {
@@ -102,13 +110,25 @@ function initTtsControls() {
     speakPreview(text);
   });
 }
+function parseWakeWords() {
+  return String($('wakeWords').value || '')
+    .split(/[,，;；\s]+/)
+    .map((x) => x.trim())
+    .filter(Boolean)
+    .slice(0, 8);
+}
 async function saveTtsConfig() {
   const patch = {
     ttsStyle: $('ttsStyle').value,
     ttsVoice: $('ttsVoice').value,
     ttsRate: Number($('ttsRate').value),
     ttsPitch: Number($('ttsPitch').value),
-    ttsEnabled: ttsOn
+    ttsEnabled: ttsOn,
+    voiceWakeEnabled: $('voiceWakeEnabled').checked,
+    wakeWords: parseWakeWords(),
+    wakeSensitivity: Number($('wakeSensitivity').value),
+    wakeLang: 'zh-CN',
+    voiceCommandLang: $('voiceCommandLang').value
   };
   cfg = await window.petAPI.configSet(patch);
   $('ttsMsg').textContent = '语音设置已保存 ✅';
