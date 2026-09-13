@@ -334,7 +334,8 @@ function stopRec() {
 }
 
 function canListen() {
-  return !!SR && micEnabled && !chatOpen && !busy && !dragging;
+  const hasEngine = !!SR || !!(window.petAPI && window.petAPI.voiceStart);
+  return hasEngine && micEnabled && !chatOpen && !busy && !dragging;
 }
 
 function scheduleWake(delay = 350) {
@@ -361,6 +362,13 @@ function handleMicError(err) {
 function startWakeListening() {
   if (!voiceCfg.voiceWakeEnabled) { voiceState = 'off'; return; }
   if (!canListen()) { scheduleWake(700); return; }
+  if (window.petAPI && window.petAPI.voiceStart) {
+    stopRec();
+    voiceState = 'wake';
+    listening = true;
+    window.petAPI.voiceStart({ ...voiceCfg, initialMode: 'wake' });
+    return;
+  }
   stopRec();
   voiceState = 'wake';
   listening = true;
@@ -395,7 +403,8 @@ function onWakeDetected() {
   voiceState = 'awake';
   listening = false;
   clearTimeout(wakeListenTimer);
-  stopRec();
+  pauseListening();
+  voiceState = 'awake';
   burst(['💗', '✨', '🐟'], 7);
   showReply({
     en: "Y-yes? I am here... n-not that I was waiting for you!",
@@ -412,6 +421,12 @@ function onWakeDetected() {
 function startCommandListening() {
   if (!voiceCfg.voiceWakeEnabled) { voiceState = 'off'; return; }
   if (!canListen()) { scheduleWake(600); return; }
+  if (window.petAPI && window.petAPI.voiceStart) {
+    stopRec();
+    voiceState = 'command';
+    window.petAPI.voiceStart({ ...voiceCfg, initialMode: 'command' });
+    return;
+  }
   stopRec();
   voiceState = 'command';
   commandFinal = '';
@@ -449,6 +464,7 @@ function pauseListening() {
   voiceState = 'off';
   clearTimeout(wakeListenTimer);
   stopRec();
+  if (window.petAPI && window.petAPI.voiceStop) window.petAPI.voiceStop();
 }
 
 function resumeListening() {
@@ -684,6 +700,15 @@ if (window.petAPI.onTtsConfig) window.petAPI.onTtsConfig((next) => {
     pauseListening();
     if (voiceCfg.voiceWakeEnabled !== false) scheduleWake(250);
   }
+});
+if (window.petAPI.onVoiceWake) window.petAPI.onVoiceWake(() => onWakeDetected());
+if (window.petAPI.onVoiceCommand) window.petAPI.onVoiceCommand((msg) => {
+  const text = msg && msg.text ? String(msg.text).trim() : '';
+  if (text) sendText(text);
+});
+if (window.petAPI.onVoiceError) window.petAPI.onVoiceError((msg) => {
+  const text = (msg && msg.message) || '语音识别失败';
+  showReply({ en: 'Voice: ' + text, zh: '语音：' + text }, 7000, { speak: false, animation: 'none' });
 });
 if (window.petAPI.onChatState) window.petAPI.onChatState((open) => {
   chatOpen = open;

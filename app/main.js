@@ -10,6 +10,7 @@ const web = require('./src/web');
 const dsh = require('./src/dsh');
 const vocab = require('./src/vocab');
 const edgeTts = require('./src/edgeTts');
+const winAsr = require('./src/winAsr');
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
 let petWin = null;
@@ -298,7 +299,20 @@ function setVoiceWake(enabled) {
     if (win && !win.isDestroyed()) win.webContents.send('tts:config', next);
   }
   if (tray) { try { tray.setContextMenu(Menu.buildFromTemplate(buildPetMenu(true))); } catch {} }
+  if (next.voiceWakeEnabled !== false) startVoiceWake('wake');
+  else winAsr.stop();
 }
+
+function startVoiceWake(initialMode = 'wake') {
+  const cfg = config.load();
+  if (cfg.voiceWakeEnabled === false) { winAsr.stop(); return; }
+  winAsr.start({ ...cfg, initialMode });
+}
+
+winAsr.on('wake', (msg) => { if (petWin && !petWin.isDestroyed()) petWin.webContents.send('voice:wake', msg); });
+winAsr.on('command', (msg) => { if (petWin && !petWin.isDestroyed()) petWin.webContents.send('voice:command', msg); });
+winAsr.on('error', (msg) => { if (petWin && !petWin.isDestroyed()) petWin.webContents.send('voice:error', msg); });
+winAsr.on('status', (msg) => { if (petWin && !petWin.isDestroyed()) petWin.webContents.send('voice:status', msg); });
 
 function moveTick() {
   if (!petWin || petWin.isDestroyed() || !petWin.isVisible()) { setPetMoving(false); return; }
@@ -433,6 +447,8 @@ ipcMain.on('pet:action', (_e, action) => {
   sendPetAction(action.type || 'pat', action);
 });
 ipcMain.on('pet:set-scale', (_e, scale) => setPetScale(scale));
+ipcMain.on('voice:start', (_e, payload) => startVoiceWake(payload && payload.initialMode === 'command' ? 'command' : 'wake'));
+ipcMain.on('voice:stop', () => winAsr.stop());
 ipcMain.on('pet:resize', (_e, p) => {
   if (!petWin) return;
   const h = Math.round(Number(p?.h ?? p) || 0);
@@ -483,6 +499,8 @@ ipcMain.handle('config:set', (_e, patch) => {
     for (const win of [petWin, chatWin]) {
       if (win && !win.isDestroyed()) win.webContents.send('tts:config', next);
     }
+    if (next.voiceWakeEnabled !== false) startVoiceWake('wake');
+    else winAsr.stop();
   }
   return next;
 });
@@ -584,6 +602,7 @@ if (!gotLock) {
     consolidateLongTerm().catch(() => {});
     createPet();
     createTray();
+    if (config.load().voiceWakeEnabled !== false) setTimeout(() => startVoiceWake('wake'), 800);
     if (!config.load().apiKey) createChat();
   });
 
@@ -600,6 +619,7 @@ if (!gotLock) {
 
   app.on('will-quit', () => {
     stopMovement();
+    winAsr.stop();
     try { tray?.destroy(); } catch {}
     tray = null;
   });

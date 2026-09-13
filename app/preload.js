@@ -19,6 +19,12 @@ contextBridge.exposeInMainWorld('petAPI', {
   onDirection: (cb) => on('pet:direction', cb),
   onMoving: (cb) => on('pet:moving', cb),
   onTtsConfig: (cb) => on('tts:config', cb),
+  voiceStart: (payload) => ipcRenderer.send('voice:start', payload || {}),
+  voiceStop: () => ipcRenderer.send('voice:stop'),
+  onVoiceWake: (cb) => on('voice:wake', cb),
+  onVoiceCommand: (cb) => on('voice:command', cb),
+  onVoiceError: (cb) => on('voice:error', cb),
+  onVoiceStatus: (cb) => on('voice:status', cb),
   setScale: (scale) => ipcRenderer.send('pet:set-scale', scale),
   onChatState: (cb) => {
     ipcRenderer.on('chat:opened', () => cb(true));
