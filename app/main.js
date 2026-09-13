@@ -9,6 +9,7 @@ const assistant = require('./src/assistant');
 const web = require('./src/web');
 const dsh = require('./src/dsh');
 const vocab = require('./src/vocab');
+const edgeTts = require('./src/edgeTts');
 
 let petWin = null;
 let chatWin = null;
@@ -483,6 +484,10 @@ ipcMain.handle('config:set', (_e, patch) => {
     }
   }
   return next;
+});
+
+ipcMain.handle('tts:edge', async (_e, payload) => {
+  return await edgeTts.synthesize(payload && payload.text, payload || {});
 });
 
 ipcMain.handle('config:test', async (_e, patch) => {

@@ -32,7 +32,8 @@
       "!**/*.md",
       "!**/shots/**",
       "!**/*.log",
-      "build/icon.ico"
+      "build/icon.ico",
+      "vendor/**/*"
     ],
     "asarUnpack": [
       "node_modules/playwright/**",

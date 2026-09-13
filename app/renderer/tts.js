@@ -1,84 +1,93 @@
-/* 大肥鱼桌宠 · 朗读音色与风格选择 */
+/* 大肥鱼桌宠 · Edge 神经语音（晓晓 / 晓伊 / 云希 / 云扬） */
 (function () {
   const STYLES = {
-    tsundere: { rate: 1.02, pitch: 1.18, label: '傲娇少女（推荐）' },
-    cute: { rate: 1.08, pitch: 1.28, label: '元气可爱' },
-    gentle: { rate: 0.88, pitch: 1.08, label: '温柔小声' },
+    tsundere: { rate: 1.02, pitch: 1.12, label: '傲娇少女（推荐）' },
+    cute: { rate: 1.08, pitch: 1.22, label: '元气可爱' },
+    gentle: { rate: 0.90, pitch: 1.04, label: '温柔小声' },
     cool: { rate: 0.96, pitch: 0.94, label: '清冷御姐' },
-    custom: { rate: 1.0, pitch: 1.1, label: '自定义' }
+    custom: { rate: 1.0, pitch: 1.0, label: '自定义' }
   };
-  const FEMALE_HINTS = ['aria','jenny','michelle','samantha','zira','hazel','eva','ava','emma','olivia','sophia','karen','victoria','moira','tessa','fiona','xiaoxiao','xiaoyi','huihui','xiaoqiu','female','woman','女'];
-  const MALE_HINTS = ['david','mark','george','daniel','james','guy','ryan','alex','fred','male','man','男'];
-  const NATURAL_HINTS = ['natural','online','neural','cloud','azure','edge'];
-  function getVoices() {
-    if (!window.speechSynthesis) return [];
-    try { return window.speechSynthesis.getVoices() || []; } catch { return []; }
-  }
-  function scoreVoice(v, cfg) {
-    const name = String(v.name || '').toLowerCase();
-    const uri = String(v.voiceURI || '').toLowerCase();
-    const lang = String(v.lang || '').toLowerCase();
-    let s = 0;
-    if (cfg && cfg.ttsVoice && (v.voiceURI === cfg.ttsVoice || v.name === cfg.ttsVoice)) s += 1000;
-    if (NATURAL_HINTS.some((x) => name.includes(x) || uri.includes(x))) s += 90;
-    if (FEMALE_HINTS.some((x) => name.includes(x) || uri.includes(x))) s += 55;
-    if (MALE_HINTS.some((x) => name.includes(x) || uri.includes(x))) s -= 85;
-    if (lang.startsWith('en-us')) s += 25;
-    else if (lang.startsWith('en-gb')) s += 20;
-    else if (lang.startsWith('en-au') || lang.startsWith('en-ca')) s += 17;
-    else if (lang.startsWith('en')) s += 12;
-    else if (lang.startsWith('zh')) s += 3;
-    if (v.localService) s += 2;
-    return s;
-  }
+
+  const EDGE_VOICES = [
+    { name: '晓晓（女，温柔）', voiceURI: 'zh-CN-XiaoxiaoNeural', lang: 'zh-CN' },
+    { name: '晓伊（女，活泼）', voiceURI: 'zh-CN-XiaoyiNeural', lang: 'zh-CN' },
+    { name: '云希（男，阳光）', voiceURI: 'zh-CN-YunxiNeural', lang: 'zh-CN' },
+    { name: '云扬（男，沉稳）', voiceURI: 'zh-CN-YunyangNeural', lang: 'zh-CN' }
+  ];
+  const DEFAULT_VOICE = 'zh-CN-XiaoxiaoNeural';
+  let currentAudio = null;
+
+  function getVoices() { return EDGE_VOICES.slice(); }
+  function listVoices() { return EDGE_VOICES.slice(); }
   function bestVoice(cfg) {
-    const voices = getVoices();
-    if (!voices.length) return null;
-    let best = null, bestScore = -Infinity;
-    for (const v of voices) {
-      const s = scoreVoice(v, cfg || {});
-      if (s > bestScore) { best = v; bestScore = s; }
+    const id = (cfg && cfg.ttsVoice) || '';
+    return EDGE_VOICES.find((v) => v.voiceURI === id) || EDGE_VOICES[0];
+  }
+
+  function stop() {
+    if (currentAudio) {
+      try { currentAudio.pause(); currentAudio.src = ''; } catch {}
+      currentAudio = null;
     }
-    return best;
+    try { window.speechSynthesis?.cancel(); } catch {}
   }
 
   function speak(text, cfg, done) {
-    if (!text || !window.speechSynthesis) { done?.(); return; }
+    if (!text) { done?.(); return; }
     cfg = cfg || {};
+    stop();
     let finished = false;
     const finish = () => { if (finished) return; finished = true; done?.(); };
-    const doSpeak = () => {
+    const style = STYLES[cfg.ttsStyle] || STYLES.tsundere;
+    const voice = bestVoice(cfg);
+
+    if (window.petAPI && window.petAPI.edgeTts) {
+      window.petAPI.edgeTts({
+        text,
+        voice: voice.voiceURI,
+        rate: Number(cfg.ttsRate) || style.rate,
+        pitch: Number(cfg.ttsPitch) || style.pitch,
+        style: cfg.ttsStyle || 'tsundere'
+      }).then((res) => {
+        if (!res || !res.ok || !res.url) throw new Error((res && res.error) || 'Edge TTS 合成失败');
+        const audio = new Audio(res.url);
+        currentAudio = audio;
+        const audioDone = () => {
+          if (currentAudio === audio) currentAudio = null;
+          finish();
+        };
+        audio.onended = audioDone;
+        audio.onerror = audioDone;
+        audio.play().catch(audioDone);
+      }).catch((err) => {
+        console.warn('[EdgeTTS]', err);
+        finish();
+      });
+      return;
+    }
+
+    // 仅在开发环境没有 preload 时兜底；正式包不会走这里。
+    if (window.speechSynthesis) {
       try {
-        window.speechSynthesis.cancel();
         const u = new SpeechSynthesisUtterance(text);
-        const voice = bestVoice(cfg);
-        const style = STYLES[cfg.ttsStyle] || STYLES.tsundere;
-        if (voice) u.voice = voice;
-        u.lang = (voice && voice.lang) || 'en-US';
+        u.lang = 'zh-CN';
         u.rate = Number(cfg.ttsRate) || style.rate;
         u.pitch = Number(cfg.ttsPitch) || style.pitch;
-        u.volume = 1;
         u.onend = finish;
         u.onerror = finish;
         window.speechSynthesis.speak(u);
       } catch { finish(); }
-    };
-    // Chromium 首次 getVoices() 可能为空，稍等 voiceschanged 后再读一次。
-    if (getVoices().length) { doSpeak(); return; }
-    let tries = 0;
-    const timer = setInterval(() => {
-      if (getVoices().length || ++tries >= 6) {
-        clearInterval(timer);
-        doSpeak();
-      }
-    }, 120);
+    } else finish();
   }
 
-  function listVoices(cfg) {
-    const voices = getVoices().slice();
-    voices.sort((a, b) => scoreVoice(b, cfg || {}) - scoreVoice(a, cfg || {}));
-    return voices;
-  }
-
-  window.DayuTTS = { STYLES, getVoices, listVoices, bestVoice, speak, voiceLabel: (v) => `${v.name} · ${v.lang || ''}` };
+  window.DayuTTS = {
+    STYLES,
+    EDGE_VOICES,
+    getVoices,
+    listVoices,
+    bestVoice,
+    speak,
+    stop,
+    voiceLabel: (v) => `${v.name || ''} · ${v.lang || ''}`
+  };
 })();

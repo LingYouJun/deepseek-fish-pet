@@ -36,6 +36,7 @@ contextBridge.exposeInMainWorld('petAPI', {
   // 对话
   chatSend: (payload) => ipcRenderer.invoke('chat:send', payload),
   chatGreet: () => ipcRenderer.invoke('chat:greet'),
+  edgeTts: (payload) => ipcRenderer.invoke('tts:edge', payload),
   // 人设
   personaGet: () => ipcRenderer.invoke('persona:get'),
   personaSet: (patch) => ipcRenderer.invoke('persona:set', patch),
