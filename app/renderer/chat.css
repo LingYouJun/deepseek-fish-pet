@@ -41,6 +41,10 @@ button:disabled { opacity: .5; cursor: default; }
   transition: .15s;
 }
 .panel input:focus, .panel select:focus, .panel textarea:focus { border-color: #4d6bfe; box-shadow: 0 0 0 3px rgba(77,107,254,.09); }
+.panel .sep { border: none; border-top: 1px solid #eef1f7; margin: 18px 0 10px; }
+.panel .val { color: #4d6bfe; font-weight: 800; margin-left: 4px; }
+.panel input[type="range"] { padding: 0; height: 26px; border: none; box-shadow: none; background: transparent; accent-color: #4d6bfe; }
+.panel input[type="range"]:focus { box-shadow: none; }
 
 /* ---------- 对话主窗 ---------- */
 #main { flex: 1; display: flex; flex-direction: column; min-height: 0; }

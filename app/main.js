@@ -428,7 +428,16 @@ ipcMain.on('chat:shot', () => {
 });
 
 ipcMain.handle('config:get', () => config.load());
-ipcMain.handle('config:set', (_e, patch) => config.save(patch || {}));
+ipcMain.handle('config:set', (_e, patch) => {
+  const next = config.save(patch || {});
+  const keys = ['ttsEnabled', 'ttsStyle', 'ttsVoice', 'ttsRate', 'ttsPitch'];
+  if (patch && keys.some((k) => Object.prototype.hasOwnProperty.call(patch, k))) {
+    for (const win of [petWin, chatWin]) {
+      if (win && !win.isDestroyed()) win.webContents.send('tts:config', next);
+    }
+  }
+  return next;
+});
 
 ipcMain.handle('config:test', async (_e, patch) => {
   const cfg = { ...config.load(), ...(patch || {}) };

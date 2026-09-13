@@ -49,6 +49,7 @@ let listening = true, micEnabled = true, chatOpen = false, rec = null, busy = fa
 let clickCount = 0, clickTimer = null, lastMicErr = 0;
 let petSize = 350, petScale = 1;
 let moodState = { affection: 30, mood: 70 };
+let ttsCfg = { ttsStyle: 'tsundere', ttsVoice: '', ttsRate: 1.02, ttsPitch: 1.18 };
 let expressionTimer = null;
 
 /* ---------------- 悬停音标提示 ---------------- */
@@ -194,19 +195,19 @@ function showReply(reply, hold, opts = {}) {
 
 /* ---------------- TTS ---------------- */
 function speak(text, done) {
-  if (!text || !window.speechSynthesis) { done?.(); return; }
-  try {
-    window.speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang = 'en-US';
-    u.rate = 0.95;
-    u.pitch = 1.05;
-    curUtter = u;
-    const finish = () => { if (curUtter === u) { curUtter = null; done?.(); } };
-    u.onend = finish;
-    u.onerror = finish;
-    window.speechSynthesis.speak(u);
-  } catch { done?.(); }
+  if (!text) { done?.(); return; }
+  if (ttsCfg.ttsEnabled === false) { done?.(); return; }
+  if (window.DayuTTS) {
+    window.DayuTTS.speak(text, ttsCfg, done);
+  } else {
+    try {
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = 'en-US'; u.rate = 0.95; u.pitch = 1.05;
+      u.onend = u.onerror = () => done?.();
+      window.speechSynthesis.speak(u);
+    } catch { done?.(); }
+  }
 }
 
 async function sendText(text) {
@@ -386,6 +387,7 @@ if (window.petAPI.onScale) window.petAPI.onScale((scale) => applyScale(scale));
 if (window.petAPI.onDirection) window.petAPI.onDirection((dir) => {
   petArea.classList.toggle('dir-left', dir === 'left');
 });
+if (window.petAPI.onTtsConfig) window.petAPI.onTtsConfig((cfg) => { ttsCfg = { ...ttsCfg, ...(cfg || {}) }; });
 if (window.petAPI.onChatState) window.petAPI.onChatState((open) => {
   chatOpen = open;
   if (open) pauseListening(); else resumeListening();
@@ -448,6 +450,7 @@ function fitWindow() {
 (async function init() {
   let cfg = {};
   try { cfg = await window.petAPI.configGet(); } catch {}
+  ttsCfg = { ...ttsCfg, ...(cfg || {}) };
   applyScale(cfg.petScale || 1);
   setModeUi(cfg.petMode || 'idle');
   await refreshMood();

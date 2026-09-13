@@ -37,9 +37,95 @@ function renderEn(text, words) {
   cfg = await window.petAPI.configGet();
   ttsOn = cfg.ttsEnabled !== false;
   $('ttsBtn').classList.toggle('on', ttsOn);
+  initTtsControls();
   if (!cfg.apiKey) showSetup(true); else { showMain(); greet(); }
   refreshMood();
 })();
+
+/* ---------------- 朗读音色设置 ---------------- */
+function applyTtsToForm() {
+  const style = cfg.ttsStyle || 'tsundere';
+  const st = (window.DayuTTS && window.DayuTTS.STYLES[style]) || { rate: 1.02, pitch: 1.18 };
+  $('ttsStyle').value = style;
+  $('ttsRate').value = cfg.ttsRate != null ? cfg.ttsRate : st.rate;
+  $('ttsPitch').value = cfg.ttsPitch != null ? cfg.ttsPitch : st.pitch;
+  $('ttsRateVal').textContent = Number($('ttsRate').value).toFixed(2);
+  $('ttsPitchVal').textContent = Number($('ttsPitch').value).toFixed(2);
+  populateTtsVoices();
+}
+function populateTtsVoices() {
+  const sel = $('ttsVoice');
+  if (!sel) return;
+  const current = cfg.ttsVoice || '';
+  const voices = window.DayuTTS ? window.DayuTTS.listVoices(cfg) : [];
+  const opts = ['<option value="">自动选择最佳音色（推荐）</option>'];
+  voices.forEach((v) => {
+    const id = v.voiceURI || v.name;
+    const label = `${v.name}${v.lang ? ' · ' + v.lang : ''}${v.localService ? '' : ' · 在线'}`;
+    opts.push(`<option value="${esc(id)}">${esc(label)}</option>`);
+  });
+  sel.innerHTML = opts.join('');
+  sel.value = current;
+  if (current && sel.value !== current) {
+    const alt = Array.from(sel.options).find((o) => o.textContent.includes(current));
+    if (alt) sel.value = alt.value;
+  }
+}
+function applyTtsStyle(style) {
+  const st = window.DayuTTS?.STYLES?.[style];
+  if (!st || style === 'custom') return;
+  $('ttsRate').value = st.rate;
+  $('ttsPitch').value = st.pitch;
+  $('ttsRateVal').textContent = Number(st.rate).toFixed(2);
+  $('ttsPitchVal').textContent = Number(st.pitch).toFixed(2);
+}
+function initTtsControls() {
+  applyTtsToForm();
+  if (window.speechSynthesis) {
+    window.speechSynthesis.onvoiceschanged = () => populateTtsVoices();
+    setTimeout(populateTtsVoices, 500);
+  }
+  $('ttsStyle').addEventListener('change', () => {
+    const st = $('ttsStyle').value;
+    if (st !== 'custom') applyTtsStyle(st);
+  });
+  ['ttsRate', 'ttsPitch'].forEach((id) => {
+    $(id).addEventListener('input', () => {
+      $('ttsRateVal').textContent = Number($('ttsRate').value).toFixed(2);
+      $('ttsPitchVal').textContent = Number($('ttsPitch').value).toFixed(2);
+      if (id === 'ttsRate' || id === 'ttsPitch') $('ttsStyle').value = 'custom';
+    });
+  });
+  $('ttsSave').addEventListener('click', saveTtsConfig);
+  $('ttsPreview').addEventListener('click', () => {
+    const text = 'Hmph! I am NOT a freeloader fat fish. ...Anyway, good morning, Master.';
+    speakPreview(text);
+  });
+}
+async function saveTtsConfig() {
+  const patch = {
+    ttsStyle: $('ttsStyle').value,
+    ttsVoice: $('ttsVoice').value,
+    ttsRate: Number($('ttsRate').value),
+    ttsPitch: Number($('ttsPitch').value),
+    ttsEnabled: ttsOn
+  };
+  cfg = await window.petAPI.configSet(patch);
+  $('ttsMsg').textContent = '语音设置已保存 ✅';
+  setTimeout(() => { $('ttsMsg').textContent = ''; }, 2200);
+}
+function speakPreview(text) {
+  const oldCfg = cfg;
+  const previewCfg = {
+    ...cfg,
+    ttsStyle: $('ttsStyle').value,
+    ttsVoice: $('ttsVoice').value,
+    ttsRate: Number($('ttsRate').value),
+    ttsPitch: Number($('ttsPitch').value)
+  };
+  if (window.DayuTTS) window.DayuTTS.speak(text, previewCfg, () => {});
+  else { cfg = previewCfg; speak(text); cfg = oldCfg; }
+}
 
 async function refreshMood() {
   try {
@@ -72,6 +158,7 @@ function showSetup(prefill) {
     $('vocabLevel').value = cfg.vocabLevel || 'high_school';
     $('assistant').value = cfg.assistant || 'off';
     $('provider').value = 'custom';
+    applyTtsToForm();
   }
 }
 function showMain() {
@@ -79,6 +166,13 @@ function showMain() {
   $('main').classList.remove('hidden');
   $('input').focus();
 }
+
+if (window.petAPI.onTtsConfig) window.petAPI.onTtsConfig((next) => {
+  cfg = { ...cfg, ...(next || {}) };
+  ttsOn = cfg.ttsEnabled !== false;
+  $('ttsBtn').classList.toggle('on', ttsOn);
+  applyTtsToForm();
+});
 
 /* ---------------- 绑定 API ---------------- */
 $('provider').addEventListener('change', (e) => {
@@ -92,7 +186,7 @@ $('save').addEventListener('click', async () => {
   $('save').disabled = true; $('setupMsg').textContent = '正在测试连接…';
   try {
     await window.petAPI.configTest({ apiBase, apiKey, model });
-    cfg = await window.petAPI.configSet({ apiBase, apiKey, model, vocabLevel: $('vocabLevel').value, assistant: $('assistant').value });
+    cfg = await window.petAPI.configSet({ apiBase, apiKey, model, vocabLevel: $('vocabLevel').value, assistant: $('assistant').value, ttsStyle: $('ttsStyle').value, ttsVoice: $('ttsVoice').value, ttsRate: Number($('ttsRate').value), ttsPitch: Number($('ttsPitch').value), ttsEnabled: ttsOn });
     $('setupMsg').textContent = '';
     showMain(); greet();
   } catch (e) { $('setupMsg').textContent = '连接失败：' + e.message; }
@@ -340,19 +434,27 @@ $('input').addEventListener('keydown', (e) => {
 
 /* ---------------- TTS ---------------- */
 function speak(text) {
-  if (!ttsOn || !text || !window.speechSynthesis) return;
-  try {
-    window.speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang = 'en-US'; u.rate = 0.95;
-    window.speechSynthesis.speak(u);
-  } catch {}
+  if (!ttsOn || !text) return;
+  if (window.DayuTTS) window.DayuTTS.speak(text, cfg, () => {});
+  else if (window.speechSynthesis) {
+    try {
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = 'en-US'; u.rate = 0.95; u.pitch = 1.1;
+      window.speechSynthesis.speak(u);
+    } catch {}
+  }
 }
 $('ttsBtn').addEventListener('click', async () => {
   ttsOn = !ttsOn;
   $('ttsBtn').classList.toggle('on', ttsOn);
   if (!ttsOn) window.speechSynthesis?.cancel();
   await window.petAPI.configSet({ ttsEnabled: ttsOn });
+});
+// 右键朗读按钮：打开音色设置
+$('ttsBtn').addEventListener('contextmenu', (e) => {
+  e.preventDefault();
+  showSetup(true);
 });
 
 /* ---------------- 麦克风：点击发送 / 上滑后点任意位置取消 ---------------- */
