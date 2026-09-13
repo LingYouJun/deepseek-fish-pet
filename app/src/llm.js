@@ -52,6 +52,27 @@ async function request(cfg, messages) {
   return json?.choices?.[0]?.message?.content || '';
 }
 
+function isRateLimitError(e) {
+  const msg = String((e && e.message) || e || '');
+  return /\b429\b|rate_limit|tpm\/rpm|too many requests/i.test(msg);
+}
+
+async function requestWithRetry(cfg, messages, opts = {}) {
+  const retries = Number.isFinite(opts.retries) ? opts.retries : 5;
+  const delayMs = Number.isFinite(opts.delayMs) ? opts.delayMs : 3000;
+  let lastErr = null;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await request(cfg, messages);
+    } catch (e) {
+      lastErr = e;
+      if (!isRateLimitError(e) || attempt >= retries) break;
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  throw lastErr;
+}
+
 function parseReply(text) {
   const raw = String(text || '').trim();
 
@@ -106,4 +127,4 @@ function parseReply(text) {
   return { en: en || raw, zh, words, choices, action };
 }
 
-module.exports = { request, parseReply, requestJson };
+module.exports = { request, requestWithRetry, parseReply, requestJson, isRateLimitError };

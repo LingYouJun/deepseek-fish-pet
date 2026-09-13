@@ -53,11 +53,11 @@ const LINES = {
 };
 
 const FOODS = [
-  { emoji: '🐟', en: 'Dried fish! My favorite... d-don\'t tell anyone.', zh: '小鱼干！我的最爱……别告诉别人哦。', words: [{ w: 'favorite', ipa: '/ˈfeɪvərɪt/', zh: '最喜欢的' }], mood: 6, affection: 1 },
-  { emoji: '🍰', en: 'Cake! It is a guilty pleasure.', zh: '蛋糕！这是罪恶的快乐。', words: [{ w: 'guilty', ipa: '/ˈɡɪlti/', zh: '罪恶的' }], mood: 5, affection: 1 },
-  { emoji: '🍭', en: 'A lollipop! Sweet things make me happy.', zh: '棒棒糖！甜食让我开心。', words: [{ w: 'sweet', ipa: '/swiːt/', zh: '甜的' }], mood: 5, affection: 1 },
-  { emoji: '🍡', en: 'Dango! Soft and chewy... yum.', zh: '团子！软软糯糯……好吃。', words: [{ w: 'chewy', ipa: '/ˈtʃuːi/', zh: '有嚼劲的' }], mood: 5, affection: 1 },
-  { emoji: '💎', en: 'A diamond?! C-can I really eat this...?', zh: '钻石？！这、这个真的能吃吗……？', words: [{ w: 'diamond', ipa: '/ˈdaɪmənd/', zh: '钻石' }], mood: 8, affection: 2 }
+  { label: '鱼', en: 'Dried fish! My favorite... d-don\'t tell anyone.', zh: '小鱼干！我的最爱……别告诉别人哦。', words: [{ w: 'favorite', ipa: '/ˈfeɪvərɪt/', zh: '最喜欢的' }], mood: 6, affection: 1 },
+  { label: '蛋糕', en: 'Cake! It is a guilty pleasure.', zh: '蛋糕！这是罪恶的快乐。', words: [{ w: 'guilty', ipa: '/ˈɡɪlti/', zh: '罪恶的' }], mood: 5, affection: 1 },
+  { label: '糖果', en: 'A lollipop! Sweet things make me happy.', zh: '棒棒糖！甜食让我开心。', words: [{ w: 'sweet', ipa: '/swiːt/', zh: '甜的' }], mood: 5, affection: 1 },
+  { label: '团子', en: 'Dango! Soft and chewy... yum.', zh: '团子！软软糯糯……好吃。', words: [{ w: 'chewy', ipa: '/ˈtʃuːi/', zh: '有嚼劲的' }], mood: 5, affection: 1 },
+  { label: '钻石', en: 'A diamond?! C-can I really eat this...?', zh: '钻石？！这、这个真的能吃吗……？', words: [{ w: 'diamond', ipa: '/ˈdaɪmənd/', zh: '钻石' }], mood: 8, affection: 2 }
 ];
 
 const IDLE_LINES = [
@@ -208,6 +208,9 @@ function showReply(reply, hold, opts = {}) {
       `<button data-i="${i}" title="${esc(c.ipa || '')}"><span class="en">${esc(c.en)}</span><span class="meta">${c.ipa ? `<span class="ipa-mini">${esc(c.ipa)}</span> · ` : ''}${esc(c.zh)}</span></button>`
     ).join('') + `</div>`;
   }
+  if (typeof opts.retry === 'function') {
+    html += '<div class="retry-row"><button class="retry-btn" type="button">重试</button></div>';
+  }
   bubble.innerHTML = html;
   bubble.classList.add('show');
   fitWindow();
@@ -232,6 +235,15 @@ function showReply(reply, hold, opts = {}) {
       if (c && c.en) sendText(c.en);
     });
   });
+  const retryBtn = bubble.querySelector('.retry-btn');
+  if (retryBtn && typeof opts.retry === 'function') {
+    retryBtn.addEventListener('click', () => {
+      try { window.DayuTTS?.stop(); } catch {}
+      bubble.classList.remove('show');
+      fitWindow();
+      opts.retry();
+    });
+  }
 
   const done = opts.onDone || (() => {
     busy = false;
@@ -269,11 +281,22 @@ async function sendText(text) {
     await window.petAPI.chatSend({ text });
     // 回复通过 onSay 展示，busy 在 TTS 结束后清除
   } catch (e) {
-    showReply({ en: 'Sorry, something went wrong: ' + (e.message || e), zh: '' }, 6500, {
+    const raw = String((e && e.message) || e || "");
+    const rateLimited = /429|rate_limit|tpm\/rpm|too many requests/i.test(raw);
+    busy = false;
+    const retry = () => sendText(text);
+    showReply({
+      en: rateLimited
+        ? "The model is busy right now. Please tap retry in a moment."
+        : "Something went wrong. You can tap retry to try again.",
+      zh: rateLimited
+        ? "模型现在有点忙，请点击重试再试一次。"
+        : "刚刚出了点问题，请点击重试再试一次。"
+    }, 9000, {
       speak: true,
-      animation: 'shake',
-      mood: 'sad',
-      onDone: () => { busy = false; resumeListening(); }
+      animation: "shake",
+      mood: "sad",
+      retry
     });
   } finally {
     clearTimeout(safety);
@@ -405,7 +428,7 @@ function onWakeDetected() {
   clearTimeout(wakeListenTimer);
   pauseListening();
   voiceState = 'awake';
-  burst(['💗', '✨', '🐟'], 7);
+  burst(['♥', '✦'], 7);
   showReply({
     en: "Y-yes? I am here... n-not that I was waiting for you!",
     zh: '在、在啦！……才、才没有一直等你呢！',
@@ -518,7 +541,9 @@ function setView(dir) {
 }
 
 function setWalking(on) {
-  petArea.classList.toggle('walking', !!on);
+  on = !!on;
+  petArea.classList.toggle('walking', on);
+  petArea.classList.toggle('idle', !on);
 }
 
 function showFunctionPanel(show) {
@@ -571,8 +596,8 @@ function regionOf(e) {
 function reactAt(region) {
   const arr = LINES[region] || LINES.body;
   const r = arr[Math.floor(Math.random() * arr.length)];
-  const kinds = { head: ['💗', '✨', '💕'], body: ['✨', '🐟', '❗'], tail: ['💦', '❗', '🌀'] };
-  burst(kinds[region] || ['✨'], region === 'tail' ? 7 : 6);
+  const kinds = { head: ['♥', '✦'], body: ['✦', '·'], tail: ['!', '·'] };
+  burst(kinds[region] || ['✦'], region === 'tail' ? 7 : 6);
   if (region === 'head') adjustMood({ affection: 1, mood: 2 });
   else adjustMood({ mood: 1 });
   showReply(r, 6000, {
@@ -647,7 +672,7 @@ function openFeed(show) {
   }
 }
 function buildFeedPanel() {
-  feedRow.innerHTML = FOODS.map((f, i) => `<button class="feed-btn" data-i="${i}" title="${esc(f.en)}">${f.emoji}</button>`).join('');
+  feedRow.innerHTML = FOODS.map((f, i) => `<button class="feed-btn" data-i="${i}" title="${esc(f.en)}">${esc(f.label || f.emoji)}</button>`).join('');
   feedRow.querySelectorAll('.feed-btn').forEach((b) => {
     b.addEventListener('click', () => feed(FOODS[+b.dataset.i]));
   });
@@ -655,7 +680,7 @@ function buildFeedPanel() {
 async function feed(food) {
   if (!food) return;
   openFeed(false);
-  burst([food.emoji, '💗', '✨'], 10);
+  burst(['♥', '✦'], 10);
   await adjustMood({ mood: food.mood, affection: food.affection });
   showReply({ en: food.en, zh: food.zh, words: food.words }, 5200, {
     speak: true,

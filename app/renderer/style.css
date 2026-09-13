@@ -140,6 +140,12 @@ body { display: flex; justify-content: center; align-items: flex-start; }
 #bubble .choices .en { font-size: 12px; font-weight: 700; }
 #bubble .choices .meta { display: block; font-size: 10px; color: var(--ink2); font-weight: 400; margin-top: 2px; }
 #bubble .choices .ipa-mini { color: #3aa06a; font-family: Consolas, monospace; }
+#bubble .retry-row { margin-top: 8px; }
+#bubble .retry-btn {
+  border: none; border-radius: 10px; padding: 7px 14px;
+  background: #4d6bfe; color: #fff; font-size: 12px; font-weight: 700; cursor: pointer;
+}
+#bubble .retry-btn:hover { filter: brightness(1.05); }
 
 /* ---------------- 点击后出现的功能面板（同款 🗨️） ---------------- */
 #function-panel {
@@ -150,8 +156,9 @@ body { display: flex; justify-content: center; align-items: flex-start; }
 }
 #function-panel.hidden { display: none; }
 #function-panel button {
-  width: 48px; height: 44px; border: none; border-radius: 10px;
-  background: transparent; font-size: 26px; cursor: pointer; line-height: 1;
+  width: 58px; height: 42px; border: none; border-radius: 10px;
+  background: transparent; font: 700 13px/1 "Microsoft YaHei", sans-serif;
+  color: #3a4a7a; cursor: pointer;
 }
 #function-panel button:hover { background: rgba(0,0,0,.05); }
 #bubble.show ~ #pet-area ~ #function-panel { display: none !important; }
@@ -167,8 +174,9 @@ body { display: flex; justify-content: center; align-items: flex-start; }
 #feed-panel.hidden { display: none; }
 .feed-row { display: flex; justify-content: center; gap: 8px; }
 .feed-btn {
-  width: 44px; height: 44px; border-radius: 50%; border: 2px solid #ffb3c8;
-  background: rgba(255,255,255,.95); font-size: 23px; cursor: pointer; transition: .16s;
+  min-width: 46px; height: 36px; padding: 0 10px; border-radius: 11px; border: 1px solid rgba(255,255,255,.45);
+  background: rgba(255,255,255,.94); font: 700 12px/1 "Microsoft YaHei", sans-serif;
+  color: #3a4a7a; cursor: pointer; transition: .16s; white-space: nowrap;
 }
 .feed-btn:hover { transform: translateY(-3px) scale(1.06); background: #ffe3ec; border-color: #ff7fa8; }
 #feed-close {

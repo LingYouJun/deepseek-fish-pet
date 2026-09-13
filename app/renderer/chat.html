@@ -9,7 +9,7 @@
 
 <div id="setup" class="overlay hidden">
   <div class="panel">
-    <h1>🐳 绑定 API</h1>
+    <h1>绑定模型接口</h1>
     <p class="sub">先绑定模型接口，我才能开口说话</p>
     <label>模型 Provider</label>
     <select id="provider">
@@ -79,7 +79,7 @@
 
 <div id="persona" class="overlay hidden">
   <div class="panel">
-    <h1>👤 人设</h1>
+    <h1>人设</h1>
     <p class="sub">写你自己的设定，保存后立即生效</p>
     <label>名字</label>
     <input id="pName" placeholder="大肥鱼">
@@ -101,7 +101,7 @@
 
 <div id="diary" class="overlay hidden">
   <div class="panel">
-    <h1>📖 记忆日记</h1>
+    <h1>记忆</h1>
     <p class="sub">长期记忆按天归档；中期记忆是今天的会话</p>
     <div id="diaryBody"></div>
     <div class="row"><button id="diaryClose" class="ghost">关闭</button></div>
@@ -110,7 +110,7 @@
 
 <div id="vocab" class="overlay hidden">
   <div class="panel">
-    <h1>📒 生词本</h1>
+    <h1>生词本</h1>
     <p class="sub">点对话里带虚线的单词即可收藏；跟读读错的词也能点一下加入</p>
     <div id="vocabBody"></div>
     <div class="row">
@@ -124,35 +124,35 @@
   <header>
     <img class="avatar" src="../assets/pet-character.png" alt="大肥鱼">
     <div class="head-meta">
-      <div class="title">🐳 大肥鱼</div>
+      <div class="title">大肥鱼</div>
       <div class="subtitle">傲娇鲸鱼女仆 · 英语陪练</div>
     </div>
     <div id="moodBar" class="moodbar">
-      <span class="heart">❤️ <b id="affVal">--</b></span>
-      <span class="mood">😊 <b id="moodVal">--</b></span>
+      <span class="heart">好感 <b id="affVal">--</b></span>
+      <span class="mood">心情 <b id="moodVal">--</b></span>
     </div>
     <div id="dshBar" class="dshbar"></div>
     <div class="tools">
-      <span id="vocabBtn" class="tool" title="生词本">📒</span>
-      <span id="diaryBtn" class="tool" title="记忆日记">📖</span>
-      <span id="personaBtn" class="tool" title="人设">👤</span>
-      <span id="ttsBtn" class="tool on" title="左键开关朗读 · 右键设置音色">🔊</span>
-      <span id="settingsBtn" class="tool" title="设置">⚙️</span>
+      <span id="vocabBtn" class="tool" title="生词本">生词</span>
+      <span id="diaryBtn" class="tool" title="记忆">日记</span>
+      <span id="personaBtn" class="tool" title="人设">人设</span>
+      <span id="ttsBtn" class="tool on" title="左键开关朗读 · 右键设置音色">朗读</span>
+      <span id="settingsBtn" class="tool" title="设置">设置</span>
     </div>
   </header>
 
   <div id="quickActions">
-    <button class="quick" data-act="pat">✋ 摸摸头</button>
-    <button class="quick" data-act="feed">🍰 投喂</button>
-    <button class="quick" data-act="listen">🎤 跟读</button>
-    <button class="quick" data-act="review">📒 复习单词</button>
+    <button class="quick" data-act="pat">摸摸头</button>
+    <button class="quick" data-act="feed">投喂</button>
+    <button class="quick" data-act="listen">跟读</button>
+    <button class="quick" data-act="review">复习单词</button>
   </div>
 
   <div id="msgs"></div>
   <div id="choices"></div>
 
   <div id="composer">
-    <button id="mic" title="点击录音">🎤</button>
+    <button id="mic" title="点击录音">录音</button>
     <div id="recStatus" class="hidden">
       <div class="waves"><span></span><span></span><span></span><span></span><span></span></div>
       <span id="recHint">再点一次发送 · 上滑取消</span>

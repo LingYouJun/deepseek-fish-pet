@@ -111,7 +111,7 @@ Rules:
 }
 
 async function genReply(cfg, messages) {
-  const raw = await llm.request(cfg, messages);
+  const raw = await llm.requestWithRetry(cfg, messages, { retries: 5, delayMs: 3000 });
   const reply = llm.parseReply(raw);
   if (!reply.en) reply.en = "Hmm, I'm not sure what to say... n-not that I care!";
   return { reply, raw };
@@ -356,7 +356,7 @@ function moveWander() {
   if (dist < 6) {
     wanderTarget = null;
     setPetMoving(false);
-    wanderCooldownUntil = Date.now() + 1200 + Math.random() * 1800;
+    wanderCooldownUntil = Date.now() + 5000 + Math.random() * 5000;
     return;
   }
   setPetMoving(true);

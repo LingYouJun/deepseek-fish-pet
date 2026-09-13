@@ -163,7 +163,7 @@ async function refreshDsh() {
     const s = await window.petAPI.dshState();
     if (!s || !s.ok) { $('dshBar').textContent = ''; return; }
     const map = { working: '执行中', thinking: '思考中', idle: '空闲' };
-    $('dshBar').textContent = `🖥 DSH ${map[s.state] || ''}${s.tool ? ' · ' + s.tool : ''}${s.active ? '' : '（已停）'}`;
+    $('dshBar').textContent = `DSH ${map[s.state] || ''}${s.tool ? ' · ' + s.tool : ''}${s.active ? '' : '（已停）'}`;
   } catch {}
 }
 setInterval(refreshDsh, 5000);
@@ -329,7 +329,7 @@ document.addEventListener('click', async (e) => {
   const w = el.textContent.trim();
   if (!w) return;
   await window.petAPI.vocabAdd({ w, ipa: el.dataset.ipa || '', zh: el.dataset.zh || '' });
-  addSys(`📒 已加入生词本：${w}`);
+  addSys(`生词本：已加入 ${w}`);
 });
 
 /* ---------------- 消息渲染 ---------------- */
@@ -374,7 +374,7 @@ function addSys(text) {
 function renderAction(msgEl, action) {
   const bar = document.createElement('div');
   bar.className = 'actionbar';
-  bar.innerHTML = `<span class="atool">🤖 ${esc(action.tool)}</span><span class="aarg" title="${esc(action.arg)}">${esc(action.arg)}</span>`;
+  bar.innerHTML = `<span class="atool">助手 · ${esc(action.tool)}</span><span class="aarg" title="${esc(action.arg)}">${esc(action.arg)}</span>`;
   const allow = document.createElement('button'); allow.textContent = '允许'; allow.className = 'allow';
   const deny = document.createElement('button'); deny.textContent = '拒绝'; deny.className = 'deny';
   bar.appendChild(allow); bar.appendChild(deny);
@@ -384,7 +384,7 @@ function renderAction(msgEl, action) {
     bar.remove();
     try {
       const r = await window.petAPI.assistantRun(action);
-      addSys('🤖 ' + r.result);
+      addSys('助手：' + r.result);
     } catch (e) { addErr('助手执行失败：' + e.message); }
   });
   deny.addEventListener('click', () => { bar.remove(); addSys('已拒绝该操作'); });
@@ -423,7 +423,7 @@ document.querySelectorAll('#quickActions .quick').forEach((btn) => {
     else if (act === 'feed') window.petAPI.action?.('feed');
     else if (act === 'listen') { if (!recording) startRec(); else finalize(); }
     else if (act === 'review') { $('vocab').classList.remove('hidden'); startReview(); }
-    addSys(`已把「${btn.textContent.trim()}」告诉大肥鱼 🐳`);
+    addSys(`已把「${btn.textContent.trim()}」告诉大肥鱼`);
   });
 });
 
