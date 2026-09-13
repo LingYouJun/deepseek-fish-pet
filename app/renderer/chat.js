@@ -105,6 +105,11 @@ function initTtsControls() {
   $('wakeSensitivity').addEventListener('input', () => {
     $('wakeSensitivityVal').textContent = Number($('wakeSensitivity').value).toFixed(2);
   });
+  $('replyLanguage').addEventListener('change', async () => {
+    cfg = await window.petAPI.configSet({ replyLanguage: $('replyLanguage').value === 'zh' ? 'zh' : 'en' });
+    $('ttsMsg').textContent = 'AI 回复语言已切换';
+    setTimeout(() => { $('ttsMsg').textContent = ''; }, 1800);
+  });
   $('ttsSave').addEventListener('click', saveTtsConfig);
   $('ttsPreview').addEventListener('click', () => {
     const text = 'Hmph! I am NOT a freeloader fat fish. ...Anyway, good morning, Master.';

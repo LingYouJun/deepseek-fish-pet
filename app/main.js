@@ -75,8 +75,8 @@ function buildSystemPrompt(cfg) {
 
   const replyZh = cfg.replyLanguage === 'zh';
   const langRule = replyZh
-    ? '- ALWAYS reply in natural Chinese, 1-3 short sentences.'
-    : '- ALWAYS reply in natural English, 1-3 short sentences.';
+    ? '- You MUST reply in natural Chinese, 1-3 short sentences. Do NOT reply in English, even if the user writes in English or previous messages were English.'
+    : '- You MUST reply in natural English, 1-3 short sentences. Do NOT reply in Chinese.';
   const outputFormat = replyZh ? [
     '# Output format — reply with EXACTLY these lines, no markdown, no extra text:',
     'EN: <你的中文回复，1-3 个短句>',
@@ -523,7 +523,7 @@ ipcMain.on('chat:shot', () => {
 ipcMain.handle('config:get', () => config.load());
 ipcMain.handle('config:set', (_e, patch) => {
   const next = config.save(patch || {});
-  const keys = ['ttsEnabled', 'ttsStyle', 'ttsVoice', 'ttsRate', 'ttsPitch', 'voiceWakeEnabled', 'wakeWords', 'wakeSensitivity', 'wakeLang', 'voiceCommandLang'];
+  const keys = ['ttsEnabled', 'ttsStyle', 'ttsVoice', 'ttsRate', 'ttsPitch', 'voiceWakeEnabled', 'wakeWords', 'wakeSensitivity', 'wakeLang', 'voiceCommandLang', 'replyLanguage'];
   if (patch && keys.some((k) => Object.prototype.hasOwnProperty.call(patch, k))) {
     for (const win of [petWin, chatWin]) {
       if (win && !win.isDestroyed()) win.webContents.send('tts:config', next);
@@ -560,9 +560,12 @@ ipcMain.handle('chat:send', async (_e, payload) => {
   if (!text) return { en: '', zh: '', words: [], choices: [] };
   const messages = [
     { role: 'system', content: buildSystemPrompt(cfg) },
-    ...sessionArr.slice(-20),
-    { role: 'user', content: text }
+    ...sessionArr.slice(-20)
   ];
+  messages.push(cfg.replyLanguage === 'zh'
+    ? { role: 'system', content: '本轮必须使用中文回复。无论之前的对话是什么语言，都必须使用自然中文回答。' }
+    : { role: 'system', content: 'Always answer in English in this turn.' });
+  messages.push({ role: 'user', content: text });
   const { reply, raw } = await genReply(cfg, messages);
   if (reply.en) {
     sessionArr.push({ role: 'user', content: text }, { role: 'assistant', content: raw });
@@ -576,7 +579,9 @@ ipcMain.handle('chat:greet', async () => {
   const cfg = config.load();
   const messages = [
     { role: 'system', content: buildSystemPrompt(cfg) },
-    { role: 'user', content: '你的主人刚打开电脑。请用英语说一句简短的开场白问候。' }
+    { role: 'user', content: cfg.replyLanguage === 'zh'
+        ? '你的主人刚打开电脑。请用中文说一句简短的开场白问候。'
+        : '你的主人刚打开电脑。请用英语说一句简短的开场白问候。' }
   ];
   const { reply, raw } = await genReply(cfg, messages);
   if (reply.en) sessionArr.push({ role: 'assistant', content: raw });
