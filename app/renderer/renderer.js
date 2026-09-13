@@ -11,7 +11,7 @@ const feedRow = feedPanel.querySelector('.feed-row');
 const SKINS = {
   dafeiyu: {
     label: '大肥鱼三视图',
-    baseWidth: 200,
+    baseHeight: 240,
     views: {
       down: '../assets/sprites/dafeiyu/front.png',
       up: '../assets/sprites/dafeiyu/back.png',
@@ -19,10 +19,10 @@ const SKINS = {
       right: '../assets/sprites/dafeiyu/side.png'
     }
   },
-  deepseek: { label: 'DeepSeek 立绘', baseWidth: 350, single: '../assets/pet-character.png' },
-  cute: { label: '可爱占位立绘', baseWidth: 240, single: '../assets/pet-cute.svg' },
-  melon: { label: '忧郁占位立绘', baseWidth: 240, single: '../assets/pet-melon.svg' },
-  default: { label: '默认占位立绘', baseWidth: 240, single: '../assets/pet-default.svg' }
+  deepseek: { label: 'DeepSeek 立绘', baseHeight: 300, single: '../assets/pet-character.png' },
+  cute: { label: '可爱占位立绘', baseHeight: 230, single: '../assets/pet-cute.svg' },
+  melon: { label: '忧郁占位立绘', baseHeight: 230, single: '../assets/pet-melon.svg' },
+  default: { label: '默认占位立绘', baseHeight: 230, single: '../assets/pet-default.svg' }
 };
 
 const esc = (s) => String(s == null ? '' : s)
@@ -65,7 +65,7 @@ const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 let dragging = false, offX = 0, offY = 0, moved = 0, suppressClick = false, hideTimer = null;
 let listening = true, micEnabled = true, chatOpen = false, rec = null, busy = false, curUtter = null;
 let clickCount = 0, clickTimer = null, lastMicErr = 0;
-let petSize = 200, petScale = 1;
+let petSize = 240, petScale = 1;
 let currentSkin = 'dafeiyu';
 let currentView = 'down';
 let moodState = { affection: 30, mood: 70 };
@@ -285,8 +285,8 @@ function setMic(enabled) {
   else { listening = true; resumeListening(); }
 }
 
-function baseWidthForSkin(skin) {
-  return (SKINS[skin] && SKINS[skin].baseWidth) || 260;
+function baseHeightForSkin(skin) {
+  return (SKINS[skin] && SKINS[skin].baseHeight) || 240;
 }
 
 function applySkin(skin) {
@@ -300,8 +300,8 @@ function applySkin(skin) {
   } else {
     pet.src = cfg.single;
   }
-  petSize = Math.round(baseWidthForSkin(skin) * petScale);
-  document.documentElement.style.setProperty('--pet-w', petSize + 'px');
+  petSize = Math.round(baseHeightForSkin(skin) * petScale);
+  document.documentElement.style.setProperty('--pet-h', petSize + 'px');
   fitWindow();
 }
 
@@ -309,14 +309,14 @@ function setView(dir) {
   const cfg = SKINS[currentSkin];
   if (!cfg) return;
   if (!cfg.views) {
-    if (dir === 'left') petArea.classList.add('flip');
-    else if (dir === 'right') petArea.classList.remove('flip');
+    if (dir === 'right') petArea.classList.add('flip');
+    else if (dir === 'left') petArea.classList.remove('flip');
     return;
   }
   if (!cfg.views[dir]) return;
   currentView = dir;
   if (pet.src !== cfg.views[dir]) pet.src = cfg.views[dir];
-  petArea.classList.toggle('flip', dir === 'left');
+  petArea.classList.toggle('flip', dir === 'right');
 }
 
 function setWalking(on) {
@@ -502,15 +502,17 @@ function hardGreet() {
 
 function applyScale(scale) {
   petScale = Math.min(1.5, Math.max(0.75, Number(scale) || 1));
-  petSize = Math.round(baseWidthForSkin(currentSkin) * petScale);
-  document.documentElement.style.setProperty('--pet-w', petSize + 'px');
+  petSize = Math.round(baseHeightForSkin(currentSkin) * petScale);
+  document.documentElement.style.setProperty('--pet-h', petSize + 'px');
   document.documentElement.style.setProperty('--bubble-w', Math.round(370 * Math.max(.88, petScale)) + 'px');
   fitWindow();
 }
 
 function fitWindow() {
   try {
-    const w = Math.ceil(Math.max(petSize, bubble.offsetWidth || 0) + 46);
+    const pr = pet.getBoundingClientRect();
+    const petW = pr.width || petSize || 200;
+    const w = Math.ceil(Math.max(petW, bubble.offsetWidth || 0) + 48);
     const h = Math.ceil(stage.offsetHeight + 8);
     window.petAPI.resize(h, bubble.offsetHeight, w);
   } catch {}

@@ -4,7 +4,7 @@
   --ink: #2b3450;
   --ink2: #6b7490;
   --line: #e3e8f2;
-  --pet-w: 200px;
+  --pet-h: 240px;
   --bubble-w: 370px;
 }
 
@@ -26,8 +26,9 @@ body { display: flex; justify-content: center; align-items: flex-start; }
 
 /* ---------------- 立绘 ---------------- */
 #pet-area {
-  position: relative; width: var(--pet-w); max-width: calc(100vw - 8px);
+  position: relative; width: 100%; max-width: 100%;
   flex: 0 0 auto; transform-origin: 50% 50%;
+  display: flex; justify-content: center; align-items: flex-end;
   transition: transform .28s cubic-bezier(.2, .8, .2, 1);
   filter: drop-shadow(0 12px 14px rgba(30, 40, 80, .22));
 }
@@ -35,8 +36,8 @@ body { display: flex; justify-content: center; align-items: flex-start; }
 #pet-area.dragging #pet { animation: none !important; }
 
 #pet {
-  display: block; width: 100%; height: auto; pointer-events: auto;
-  -webkit-user-drag: none; transform-origin: 50% 88%;
+  display: block; height: var(--pet-h); width: auto; max-width: 100%;
+  pointer-events: auto; -webkit-user-drag: none; transform-origin: 50% 88%;
 }
 #pet-area.idle #pet { animation: breathe 3.8s ease-in-out infinite; }
 #pet-area.walking #pet { animation: walkBob .48s ease-in-out infinite; }
