@@ -592,6 +592,7 @@ window.addEventListener('mouseup', (e) => {
   dragging = false;
   petArea.classList.remove('dragging');
   window.petAPI.endDrag(e.screenX - offX, e.screenY - offY);
+  setView('down');
   suppressClick = moved >= 10;
   if (moved >= 90 && Math.random() < 0.55) {
     const r = LINES.drag[Math.floor(Math.random() * LINES.drag.length)];
@@ -665,7 +666,10 @@ if (window.petAPI.onAction) window.petAPI.onAction((a) => {
 if (window.petAPI.onMode) window.petAPI.onMode((mode) => setModeUi(mode));
 if (window.petAPI.onScale) window.petAPI.onScale((scale) => applyScale(scale));
 if (window.petAPI.onDirection) window.petAPI.onDirection((dir) => setView(dir));
-if (window.petAPI.onMoving) window.petAPI.onMoving((moving) => setWalking(!!moving));
+if (window.petAPI.onMoving) window.petAPI.onMoving((moving) => {
+  setWalking(!!moving);
+  if (!moving) setView('down');
+});
 if (window.petAPI.onSkin) window.petAPI.onSkin((skin) => applySkin(skin));
 if (window.petAPI.onTtsConfig) window.petAPI.onTtsConfig((next) => {
   ttsCfg = { ...ttsCfg, ...(next || {}) };
