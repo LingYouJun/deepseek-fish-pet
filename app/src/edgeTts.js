@@ -6,8 +6,10 @@ const { app } = require('electron');
 const WebSocket = require('../vendor/ws');
 
 const TRUSTED_CLIENT_TOKEN = '6A5AA1D4EAFF4E9FB37E23D68491D6F4';
-const SEC_MS_GEC_VERSION = '1-130.0.2849.68';
+const CHROMIUM_FULL_VERSION = '143.0.3650.75';
 const WSS_BASE = 'wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1';
+const CRLF = String.fromCharCode(13, 10);
+
 const EDGE_VOICES = {
   'zh-CN-XiaoxiaoNeural': '晓晓（女，温柔）',
   'zh-CN-XiaoyiNeural': '晓伊（女，活泼）',
@@ -16,12 +18,14 @@ const EDGE_VOICES = {
 };
 const DEFAULT_VOICE = 'zh-CN-XiaoxiaoNeural';
 
-function secMsGec() {
-  const WIN_EPOCH = 11644473600;
-  const S_TO_NS = 1e9;
-  let ticks = (Date.now() / 1000 + WIN_EPOCH) * S_TO_NS / 100;
-  ticks = ticks - (ticks % 3000000000); // 5 分钟一档
-  return crypto.createHash('sha256').update(`${ticks.toFixed(0)}${TRUSTED_CLIENT_TOKEN}`).digest('hex').toUpperCase();
+function generateSecMsGecToken() {
+  const WINDOWS_FILE_TIME_EPOCH = 11644473600n;
+  const ticks = BigInt(Math.floor(Date.now() / 1000) + Number(WINDOWS_FILE_TIME_EPOCH)) * 10000000n;
+  const roundedTicks = ticks - (ticks % 3000000000n);
+  return crypto.createHash('sha256')
+    .update(String(roundedTicks) + TRUSTED_CLIENT_TOKEN, 'ascii')
+    .digest('hex')
+    .toUpperCase();
 }
 
 function escapeXml(s) {
@@ -49,97 +53,112 @@ function cacheDir() {
   return dir;
 }
 
+function synthesizeOnce(voice, text, outPath, lang, rate, pitch, volume) {
+  return new Promise((resolve, reject) => {
+    const secMsGec = generateSecMsGecToken();
+    const url = `${WSS_BASE}?TrustedClientToken=${TRUSTED_CLIENT_TOKEN}&Sec-MS-GEC=${secMsGec}&Sec-MS-GEC-Version=1-${CHROMIUM_FULL_VERSION}`;
+    let ws;
+    try {
+      ws = new WebSocket(url, {
+        headers: {
+          'Pragma': 'no-cache',
+          'Cache-Control': 'no-cache',
+          'Origin': 'chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold',
+          'User-Agent': `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${CHROMIUM_FULL_VERSION} Safari/537.36 Edg/${CHROMIUM_FULL_VERSION}`,
+          'Accept-Encoding': 'gzip, deflate, br, zstd',
+          'Accept-Language': 'en-US,en;q=0.9'
+        }
+      });
+    } catch (e) { reject(e); return; }
+
+    const chunks = [];
+    let settled = false;
+    const timeout = setTimeout(() => {
+      if (!settled) { settled = true; try { ws.close(); } catch {} reject(new Error('timeout')); }
+    }, 45000);
+
+    function finish(err) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      try { ws.close(); } catch {}
+      if (err) { reject(err); return; }
+      const buf = Buffer.concat(chunks);
+      if (buf.length < 100) { reject(new Error('audio too small: ' + buf.length)); return; }
+      try { fs.writeFileSync(outPath, buf); resolve(buf.length); }
+      catch (e) { reject(e); }
+    }
+
+    ws.on('open', () => {
+      const requestId = crypto.randomBytes(16).toString('hex');
+      const speechConfig = {
+        context: { synthesis: { audio: {
+          metadataoptions: { sentenceBoundaryEnabled: 'false', wordBoundaryEnabled: 'true' },
+          outputFormat: 'audio-24khz-48kbitrate-mono-mp3'
+        } } }
+      };
+      const ssml = `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="https://www.w3.org/2001/mstts" xml:lang="${lang}">` +
+        `<voice name="${escapeXml(voice)}"><prosody rate="${escapeXml(rate)}" pitch="${escapeXml(pitch)}" volume="${escapeXml(volume || 'default')}">` +
+        `${escapeXml(text)}</prosody></voice></speak>`;
+      ws.send('Content-Type:application/json; charset=utf-8' + CRLF + 'Path:speech.config' + CRLF + CRLF + JSON.stringify(speechConfig));
+      ws.send('X-RequestId:' + requestId + CRLF + 'Content-Type:application/ssml+xml' + CRLF + 'Path:ssml' + CRLF + CRLF + ssml);
+    });
+
+    ws.on('message', (data, isBinary) => {
+      if (settled) return;
+      if (!isBinary) {
+        const s = String(data);
+        if (s.includes('Path:turn.end')) finish(null);
+        return;
+      }
+      const raw = Buffer.isBuffer(data) ? data : Buffer.from(data);
+      const marker = Buffer.from('Path:audio' + CRLF);
+      const idx = raw.indexOf(marker);
+      if (idx >= 0) {
+        const body = raw.subarray(idx + marker.length);
+        if (body.length) chunks.push(body);
+      } else if (raw.length) {
+        chunks.push(raw);
+      }
+    });
+
+    ws.on('error', (e) => finish(e instanceof Error ? e : new Error(String(e && e.message || e))));
+    ws.on('close', (e) => {
+      if (!settled) {
+        const code = e && e.code;
+        if (chunks.length) finish(null);
+        else finish(new Error(`closed early code=${code || ''} reason=${(e && e.reason) || ''}`));
+      }
+    });
+  });
+}
+
 async function synthesize(text, opts = {}) {
   text = String(text || '').trim();
   if (!text) throw new Error('TTS 文本为空');
   const voice = EDGE_VOICES[opts.voice] ? opts.voice : DEFAULT_VOICE;
   const rate = toRatePercent(opts.rate);
   const pitch = toPitchPercent(opts.pitch);
+  const volume = 'default';
+  const lang = voice.split('-').slice(0, 2).join('-') || 'zh-CN';
   const key = crypto.createHash('sha256').update(`${voice}|${rate}|${pitch}|${text}`).digest('hex');
   const file = path.join(cacheDir(), `edge-${key}.mp3`);
   if (fs.existsSync(file) && fs.statSync(file).size > 100) {
     return { ok: true, file, url: pathToFileURL(file).href, cached: true, voice };
   }
 
-  const gec = secMsGec();
-  const connectionId = crypto.randomUUID();
-  const url = `${WSS_BASE}?TrustedClientToken=${TRUSTED_CLIENT_TOKEN}&ConnectionId=${connectionId}&Sec-MS-GEC=${gec}&Sec-MS-GEC-Version=${SEC_MS_GEC_VERSION}`;
-
-  return await new Promise((resolve, reject) => {
-    const chunks = [];
-    let settled = false;
-    const requestId = crypto.randomUUID().replace(/-/g, '');
-    const timestamp = new Date().toUTCString();
-    const timeout = setTimeout(() => finish(new Error('Edge TTS 连接超时')), 25000);
-
-    let ws;
-    function finish(err) {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      try { ws && ws.close(); } catch {}
-      if (err) { reject(err); return; }
-      if (!chunks.length) { reject(new Error('Edge TTS 没有返回音频')); return; }
-      try {
-        fs.writeFileSync(file, Buffer.concat(chunks));
-        resolve({ ok: true, file, url: pathToFileURL(file).href, cached: false, voice });
-      } catch (e) { reject(e); }
-    }
-
+  let lastErr = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      ws = new WebSocket(url, {
-        origin: 'chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold',
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0',
-          'Pragma': 'no-cache',
-          'Cache-Control': 'no-cache',
-          'Accept-Encoding': 'gzip, deflate, br',
-          'Accept-Language': 'en-US,en;q=0.9',
-          'Sec-MS-GEC': gec,
-          'Sec-MS-GEC-Version': SEC_MS_GEC_VERSION
-        }
-      });
-    } catch (e) { finish(e); return; }
-
-    ws.on('open', () => {
-      const config = JSON.stringify({
-        context: { synthesis: { audio: {
-          metadataoptions: { sentenceBoundaryEnabled: false, wordBoundaryEnabled: false },
-          outputFormat: 'audio-24khz-48kbitrate-mono-mp3'
-        } } }
-      });
-      ws.send(
-        `X-Timestamp:${timestamp}\r\n` +
-        'Content-Type:application/json; charset=utf-8\r\n' +
-        'Path:speech.config\r\n\r\n' + config
-      );
-      const ssml = `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='zh-CN'>` +
-        `<voice name='${voice}'><prosody rate='${rate}' pitch='${pitch}'>${escapeXml(text)}</prosody></voice></speak>`;
-      ws.send(
-        `X-RequestId:${requestId}\r\n` +
-        'Content-Type:application/ssml+xml\r\n' +
-        `X-Timestamp:${timestamp}\r\n` +
-        'Path:ssml\r\n\r\n' + ssml
-      );
-    });
-
-    ws.on('message', (data, isBinary) => {
-      if (!isBinary) {
-        const s = data.toString();
-        if (s.includes('Path:turn.end')) finish(null);
-        return;
-      }
-      const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
-      if (buf.length < 2) return;
-      const headerLen = buf.readUInt16BE(0);
-      if (buf.length < 2 + headerLen) return;
-      const header = buf.slice(2, 2 + headerLen).toString('utf8');
-      if (header.includes('Path:audio')) chunks.push(buf.slice(2 + headerLen));
-    });
-
-    ws.on('error', (e) => finish(e));
-    ws.on('close', () => { if (!settled) finish(chunks.length ? null : new Error('Edge TTS 连接被关闭')); });
-  });
+      await synthesizeOnce(voice, text, file, lang, rate, pitch, volume);
+      return { ok: true, file, url: pathToFileURL(file).href, cached: false, voice };
+    } catch (e) {
+      lastErr = e;
+      const msg = String(e && e.message || e);
+      if (!msg.includes('1006')) break;
+    }
+  }
+  throw lastErr || new Error('Edge TTS 合成失败');
 }
 
 module.exports = { synthesize, EDGE_VOICES, DEFAULT_VOICE };

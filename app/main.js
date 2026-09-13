@@ -10,6 +10,7 @@ const web = require('./src/web');
 const dsh = require('./src/dsh');
 const vocab = require('./src/vocab');
 const edgeTts = require('./src/edgeTts');
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
 let petWin = null;
 let chatWin = null;
@@ -487,7 +488,14 @@ ipcMain.handle('config:set', (_e, patch) => {
 });
 
 ipcMain.handle('tts:edge', async (_e, payload) => {
-  return await edgeTts.synthesize(payload && payload.text, payload || {});
+  const result = await edgeTts.synthesize(payload && payload.text, payload || {});
+  if (result && result.file) {
+    try {
+      const buf = fs.readFileSync(result.file);
+      result.dataUrl = 'data:audio/mpeg;base64,' + buf.toString('base64');
+    } catch {}
+  }
+  return result;
 });
 
 ipcMain.handle('config:test', async (_e, patch) => {

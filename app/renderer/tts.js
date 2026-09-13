@@ -49,8 +49,8 @@
         pitch: Number(cfg.ttsPitch) || style.pitch,
         style: cfg.ttsStyle || 'tsundere'
       }).then((res) => {
-        if (!res || !res.ok || !res.url) throw new Error((res && res.error) || 'Edge TTS 合成失败');
-        const audio = new Audio(res.url);
+        if (!res || !res.ok || (!res.dataUrl && !res.url)) throw new Error((res && res.error) || 'Edge TTS 合成失败');
+        const audio = new Audio(res.dataUrl || res.url);
         currentAudio = audio;
         const audioDone = () => {
           if (currentAudio === audio) currentAudio = null;
