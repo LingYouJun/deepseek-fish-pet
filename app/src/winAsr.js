@@ -6,7 +6,7 @@ const { app } = require('electron');
 
 const emitter = new EventEmitter();
 let child = null;
-let stopped = true;
+let runId = 0;
 
 function scriptPath() {
   const src = path.join(__dirname, '..', 'scripts', 'wake-listener.ps1');
@@ -29,7 +29,7 @@ function powershellPath() {
 
 function start(cfg = {}) {
   stop();
-  stopped = false;
+  const myId = ++runId;
   const wakeWords = (Array.isArray(cfg.wakeWords) ? cfg.wakeWords : [cfg.wakeWords])
     .filter(Boolean).join('|') || '你好大肥鱼';
   const args = [
@@ -40,14 +40,16 @@ function start(cfg = {}) {
     '-Sensitivity', String(Number(cfg.wakeSensitivity) || 0.55),
     '-InitialMode', cfg.initialMode === 'command' ? 'command' : 'wake'
   ];
+  let thisChild;
   try {
-    child = spawn(powershellPath(), args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    thisChild = spawn(powershellPath(), args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    child = thisChild;
   } catch (e) {
     emitter.emit('error', { message: e.message || String(e) });
     return false;
   }
   let buf = '';
-  child.stdout.on('data', (d) => {
+  thisChild.stdout.on('data', (d) => {
     buf += String(d);
     const lines = buf.split(/\r?\n/);
     buf = lines.pop() || '';
@@ -64,19 +66,23 @@ function start(cfg = {}) {
     }
   });
   let errBuf = '';
-  child.stderr.on('data', (d) => { errBuf += String(d); });
-  child.on('error', (e) => emitter.emit('error', { message: e.message || String(e) }));
-  child.on('exit', (code, signal) => {
-    if (!stopped && code !== 0) {
+  thisChild.stderr.on('data', (d) => { errBuf += String(d); });
+  thisChild.on('error', (e) => {
+    if (myId === runId) emitter.emit('error', { message: e.message || String(e) });
+  });
+  thisChild.on('exit', (code, signal) => {
+    if (child === thisChild) child = null;
+    // stop()/start() 会主动 kill，旧进程的 SIGTERM 不再当成错误提示
+    if (myId !== runId) return;
+    if (code !== 0 && signal !== 'SIGTERM') {
       emitter.emit('error', { message: `语音监听已退出 code=${code} signal=${signal || ''} ${errBuf.slice(0, 200)}` });
     }
-    child = null;
   });
   return true;
 }
 
 function stop() {
-  stopped = true;
+  runId++;
   if (child) {
     try { child.kill(); } catch {}
     child = null;
