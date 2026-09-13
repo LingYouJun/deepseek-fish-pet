@@ -56,6 +56,7 @@ function applyTtsToForm() {
   $('wakeSensitivity').value = cfg.wakeSensitivity != null ? cfg.wakeSensitivity : 0.68;
   $('wakeSensitivityVal').textContent = Number($('wakeSensitivity').value).toFixed(2);
   $('voiceCommandLang').value = cfg.voiceCommandLang || 'en-US';
+  $('replyLanguage').value = cfg.replyLanguage === 'zh' ? 'zh' : 'en';
   populateTtsVoices();
 }
 function populateTtsVoices() {
@@ -128,7 +129,8 @@ async function saveTtsConfig() {
     wakeWords: parseWakeWords(),
     wakeSensitivity: Number($('wakeSensitivity').value),
     wakeLang: 'zh-CN',
-    voiceCommandLang: $('voiceCommandLang').value
+    voiceCommandLang: $('voiceCommandLang').value,
+    replyLanguage: $('replyLanguage').value === 'zh' ? 'zh' : 'en'
   };
   cfg = await window.petAPI.configSet(patch);
   $('ttsMsg').textContent = '语音设置已保存 ✅';
@@ -208,7 +210,7 @@ $('save').addEventListener('click', async () => {
   $('save').disabled = true; $('setupMsg').textContent = '正在测试连接…';
   try {
     await window.petAPI.configTest({ apiBase, apiKey, model });
-    cfg = await window.petAPI.configSet({ apiBase, apiKey, model, vocabLevel: $('vocabLevel').value, assistant: $('assistant').value, ttsStyle: $('ttsStyle').value, ttsVoice: $('ttsVoice').value, ttsRate: Number($('ttsRate').value), ttsPitch: Number($('ttsPitch').value), ttsEnabled: ttsOn });
+    cfg = await window.petAPI.configSet({ apiBase, apiKey, model, vocabLevel: $('vocabLevel').value, assistant: $('assistant').value, ttsStyle: $('ttsStyle').value, ttsVoice: $('ttsVoice').value, ttsRate: Number($('ttsRate').value), ttsPitch: Number($('ttsPitch').value), ttsEnabled: ttsOn, replyLanguage: $('replyLanguage').value === 'zh' ? 'zh' : 'en' });
     $('setupMsg').textContent = '';
     showMain(); greet();
   } catch (e) { $('setupMsg').textContent = '连接失败：' + e.message; }

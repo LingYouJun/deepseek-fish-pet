@@ -65,12 +65,48 @@ function buildSystemPrompt(cfg) {
     }
     actionSec = '\n# Computer actions (AI assistant)\nYou may request ONE computer action by adding a final line to your reply:\nACTION: <tool>|<argument>\nTools:\n' + tools + 'Only add the ACTION line when the user explicitly asks you to do something on their computer. The user must approve before it runs. Otherwise omit the line entirely.\n';
   }
+
   const mem = memory.load();
   const longs = (mem.long || []).slice(-5);
   const meds = (mem.medium || []).slice(-6);
   let memCtx = '';
   if (longs.length) memCtx += '\n# Long-term memory (your diary from recent days)\n' + longs.map((e) => `- [${e.date}] ${String(e.diary || '').slice(0, 3000)}`).join('\n') + '\n';
   if (meds.length) memCtx += '\n# Recent sessions (today)\n' + meds.map((e) => `- ${String(e.summary || '').slice(0, 200)}`).join('\n') + '\n';
+
+  const replyZh = cfg.replyLanguage === 'zh';
+  const langRule = replyZh
+    ? '- ALWAYS reply in natural Chinese, 1-3 short sentences.'
+    : '- ALWAYS reply in natural English, 1-3 short sentences.';
+  const outputFormat = replyZh ? [
+    '# Output format — reply with EXACTLY these lines, no markdown, no extra text:',
+    'EN: <你的中文回复，1-3 个短句>',
+    'ZH: <English translation of your reply>',
+    'WORDS:',
+    'C1: <下一句用户可能说的中文回复>',
+    'C1ZH: <English translation of C1>',
+    'C2: <另一句用户可能说的中文回复>',
+    'C2ZH: <English translation of C2>',
+    '',
+    'Rules:',
+    '- Each line must start with its exact label (EN:/ZH:/WORDS:/C1:/C1ZH:/C2:/C2ZH:).',
+    '- WORDS: 留空即可。',
+    '- Do not use markdown, code fences, or anything else.'
+  ].join('\n') : [
+    '# Output format — reply with EXACTLY these lines, no markdown, no extra text:',
+    'EN: <your English reply, 1-3 short sentences>',
+    'ZH: <完整中文翻译>',
+    'WORDS: <word1>=<IPA1>=<中文意思1>, <word2>=<IPA2>=<中文意思2>',
+    'C1: <a short English reply the user could say next>',
+    'C1ZH: <中文翻译 of C1>',
+    'C2: <another short English reply the user could say next>',
+    'C2ZH: <中文翻译 of C2>',
+    '',
+    'Rules:',
+    '- Each line must start with its exact label (EN:/ZH:/WORDS:/C1:/C1ZH:/C2:/C2ZH:).',
+    '- WORDS: 3-6 notable words from your EN reply, each as word=IPA=中文意思, comma separated.',
+    '- Do not use markdown, code fences, or anything else.'
+  ].join('\n');
+
   return `You are "${p.name || '大肥鱼'}", a desktop pet.
 
 # World setting
@@ -87,7 +123,7 @@ ${p.hidden_setting || ''}
 Never mention, hint at, or allude to this on your own.
 
 # Language rules
-- ALWAYS speak English, natural spoken English, 1-3 short sentences.
+${langRule}
 - Vocabulary level: ${VOCAB[cfg.vocabLevel] || VOCAB.high_school}.
 
 # Current relationship state (internal — never mention these numbers directly)
@@ -95,19 +131,7 @@ Never mention, hint at, or allude to this on your own.
 - Your current mood: ${mo.mood}/100
 - Tone guide: high affection = warmer and more honest; low affection = more distant and tsundere. Low mood = a bit sulky/down; high mood = cheerful and playful.
 ${memCtx}${actionSec}
-# Output format — reply with EXACTLY these lines, no markdown, no extra text:
-EN: <your English reply, 1-3 short sentences>
-ZH: <完整中文翻译>
-WORDS: <word1>=<IPA1>=<中文意思1>, <word2>=<IPA2>=<中文意思2>
-C1: <a short English reply the user could say next>
-C1ZH: <中文翻译 of C1>
-C2: <another short English reply the user could say next>
-C2ZH: <中文翻译 of C2>
-
-Rules:
-- Each line must start with its exact label (EN:/ZH:/WORDS:/C1:/C1ZH:/C2:/C2ZH:).
-- WORDS: 3-6 notable words from your EN reply, each as word=IPA=中文意思, comma separated.
-- Do not use markdown, code fences, or anything else.`;
+${outputFormat}`;
 }
 
 async function genReply(cfg, messages) {

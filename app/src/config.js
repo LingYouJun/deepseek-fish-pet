@@ -22,7 +22,8 @@ const DEFAULTS = {
   wakeWords: ['你好大肥鱼', '大肥鱼', '你好大飞鱼'],
   wakeSensitivity: 0.68,
   wakeLang: 'zh-CN',
-  voiceCommandLang: 'en-US'
+  voiceCommandLang: 'en-US',
+  replyLanguage: 'en'
 };
 
 function load() {
