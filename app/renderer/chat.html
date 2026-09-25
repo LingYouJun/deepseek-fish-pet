@@ -71,16 +71,18 @@
 <div id="persona" class="overlay hidden">
   <div class="panel">
     <h1>👤 人设</h1>
-    <p class="sub">写你自己的设定，保存后立即生效</p>
-    <label>名字</label>
+    <p class="sub">她的人设会随着经历慢慢变化（🔓 的字段 AI 能改）。点小锁可锁住：<b>🔒 锁住的字段 AI 就不能改了，但你随时能改</b>。</p>
+    <label class="lockrow"><span>名字</span><span class="locksym" data-field="name">🔓</span></label>
     <input id="pName" placeholder="大肥鱼">
-    <label>世界观设定</label>
+    <label class="lockrow"><span>世界观设定</span><span class="locksym" data-field="world_setting">🔒</span></label>
     <textarea id="pWorld" rows="3" placeholder="现代都市，主人是普通人，你是住在主人电脑里的桌宠……"></textarea>
-    <label>人物设定</label>
+    <label class="lockrow"><span>人物设定</span><span class="locksym" data-field="character_setting">🔓</span></label>
     <textarea id="pChar" rows="4" placeholder="蓝发鲸鱼女仆，傲娇、温柔、嘴硬……"></textarea>
-    <label>口头禅</label>
+    <label class="lockrow"><span>性格</span><span class="locksym" data-field="personality">🔓</span></label>
+    <input id="pPersonality" placeholder="傲娇、温柔、嘴硬">
+    <label class="lockrow"><span>口头禅</span><span class="locksym" data-field="catchphrase">🔓</span></label>
     <input id="pCatch" placeholder="I am NOT a freeloader fat fish!">
-    <label>隐藏设定（保密，非必要不提及）</label>
+    <label class="lockrow"><span>隐藏设定（保密，非必要不提及）</span><span class="locksym" data-field="hidden_setting">🔓</span></label>
     <textarea id="pHidden" rows="3" placeholder="只有用户主动聊到才说……"></textarea>
     <div class="row">
       <button id="pSave" class="primary">保存</button>

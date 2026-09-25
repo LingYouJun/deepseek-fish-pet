@@ -8,8 +8,12 @@ const { app } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
-/* AI 可以改的字段（其它字段——比如 language/vocab_level——不属于"人设"，AI 碰不到） */
-const FIELDS = ['name', 'world_setting', 'character_setting', 'personality', 'catchphrase', 'hidden_setting'];
+/* AI 可以改的字段（世界观不在这里：**只有用户能改世界观**） */
+const FIELDS = ['name', 'character_setting', 'personality', 'catchphrase', 'hidden_setting'];
+/* 永远只有用户能改的字段 */
+const USER_ONLY = ['world_setting'];
+/* 界面上要展示、能上锁的全部字段 */
+const ALL_FIELDS = FIELDS.concat(USER_ONLY);
 const LABELS = {
   name: '名字',
   world_setting: '世界观',
@@ -46,24 +50,27 @@ function patch(p) { return save({ ...load(), ...(p || {}) }); }
 /* ---- 锁 ---- */
 function locks() { const l = load().locks; return (l && typeof l === 'object') ? l : {}; }
 function setLock(field, locked) {
-  if (!FIELDS.includes(field)) return load();
+  if (!ALL_FIELDS.includes(field) || USER_ONLY.includes(field)) return load();   // 世界观不给锁开关（本来就锁死）
   const p = load();
   const l = Object.assign({}, p.locks || {});
   if (locked) l[field] = true; else delete l[field];
   p.locks = l;
   return save(p);
 }
-const unlocked = (field) => !locks()[field];
+/* 这个字段 AI 能不能改：世界观永远不能；其余看锁 */
+function aiEditable(field) {
+  if (USER_ONLY.includes(field)) return false;
+  return !locks()[field];
+}
 
-/* ---- AI 写入：只改没锁的字段 ---- */
+/* ---- AI 写入：只改没锁、且属于 AI 可改范围的字段 ---- */
 function applyAI(changes) {
   const p = load();
-  const l = locks();
   const applied = [], skipped = [], ignored = [];
   for (const k of Object.keys(changes || {})) {
     const v = changes[k];
-    if (!FIELDS.includes(k)) { ignored.push(k); continue; }
-    if (l[k]) { skipped.push(k); continue; }
+    if (!ALL_FIELDS.includes(k) || USER_ONLY.includes(k)) { ignored.push(k); continue; }
+    if (!aiEditable(k)) { skipped.push(k); continue; }
     if (typeof v !== 'string' || !v.trim()) continue;
     p[k] = v.trim();
     applied.push(k);
@@ -72,4 +79,4 @@ function applyAI(changes) {
   return { applied, skipped, ignored };
 }
 
-module.exports = { FIELDS, LABELS, file, builtinFile, ensure, load, save, patch, locks, setLock, unlocked, applyAI };
+module.exports = { FIELDS, USER_ONLY, ALL_FIELDS, LABELS, file, builtinFile, ensure, load, save, patch, locks, setLock, aiEditable, applyAI };

@@ -211,5 +211,5 @@ function pickHistory(budgetTokens, fullTurns) {
 module.exports = {
   init, onAppStart, onTurn, onAssistant, onSessionEnd, buildContext, pickHistory, judgeStatsNow,
   migrate, dayStr,
-  session, medium, long, permanent, skillmem, stats, tokens, bus,
+  session, medium, long, permanent, skillmem, stats, tokens, bus, jobs,
 };

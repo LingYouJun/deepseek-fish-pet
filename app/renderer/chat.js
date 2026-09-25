@@ -202,6 +202,15 @@ function renderFiles(msgEl, files) {
   deny.addEventListener('click', () => { bar.remove(); addSys('已跳过写入'); });
 }
 
+/* 她的人设随经历演化了 → 告诉你一声 */
+const PERSONA_LABELS = { name: '名字', world_setting: '世界观', character_setting: '人物设定', personality: '性格', catchphrase: '口头禅', hidden_setting: '隐藏设定' };
+if (window.petAPI.onPersonaChanged) window.petAPI.onPersonaChanged((d) => {
+  if (!d || !d.applied || !d.applied.length) return;
+  try {
+    addSys('🌱 她的人设悄悄变了：' + d.applied.map((f) => PERSONA_LABELS[f] || f).join('、') + (d.reason ? '\n（' + d.reason + '）' : ''));
+  } catch {}
+});
+
 /* ---------------- 🎮 游戏助手 ---------------- */
 const GAME_PRESET = [
   '这是《明日方舟》的战斗关卡。请观察屏幕，判断当前该做什么，一步一步帮我把这关打过去。',
@@ -265,24 +274,49 @@ if (window.petAPI.onGameLog) window.petAPI.onGameLog((e) => {
   if (String(e.text).indexOf('已停止') >= 0) setGameRunning(false);
 });
 
-/* ---------------- 人设 ---------------- */
+/* ---------------- 人设（含逐字段锁：锁住 = AI 不能改，你随时能改） ---------------- */
+function paintLocks(locks, userOnly) {
+  document.querySelectorAll('#persona .locksym').forEach((el) => {
+    const f = el.dataset.field;
+    const fixed = (userOnly || []).indexOf(f) >= 0;
+    const locked = fixed || !!(locks && locks[f]);
+    el.textContent = locked ? '🔒' : '🔓';
+    el.classList.toggle('locked', locked);
+    el.classList.toggle('fixed', fixed);
+    el.title = fixed ? '这个世界观只有你能改，AI 永远不能动'
+      : (locked ? '已锁住：AI 自己不能改这里（你随时能改）。点一下解锁' : '未锁：AI 可能随经历慢慢修改这里。点一下锁住');
+  });
+}
 $('personaBtn').addEventListener('click', async () => {
   const p = await window.petAPI.personaGet();
   $('pName').value = p.name || ''; $('pWorld').value = p.world_setting || '';
-  $('pChar').value = p.character_setting || ''; $('pCatch').value = p.catchphrase || ''; $('pHidden').value = p.hidden_setting || '';
+  $('pChar').value = p.character_setting || ''; $('pPersonality').value = p.personality || '';
+  $('pCatch').value = p.catchphrase || ''; $('pHidden').value = p.hidden_setting || '';
+  paintLocks(p.locks, p.userOnly);
   $('pMsg').textContent = '';
   $('persona').classList.remove('hidden');
+});
+document.querySelectorAll('#persona .locksym').forEach((el) => {
+  el.addEventListener('click', async () => {
+    if (el.classList.contains('fixed')) { $('pMsg').textContent = '世界观只有你能改，AI 永远不能动它'; return; }
+    const next = !el.classList.contains('locked');
+    try {
+      const r = await window.petAPI.personaLock({ field: el.dataset.field, locked: next });
+      paintLocks(r && r.locks, []);
+      $('pMsg').textContent = next ? '已锁住 —— AI 不能再改这一项了' : '已解锁 —— AI 可以随经历慢慢修改这一项';
+    } catch (e) { $('pMsg').textContent = '操作失败：' + e.message; }
+  });
 });
 $('pSave').addEventListener('click', async () => {
   $('pSave').disabled = true; $('pMsg').textContent = '保存中…';
   try {
     await window.petAPI.personaSet({
       name: $('pName').value.trim(), world_setting: $('pWorld').value.trim(),
-      character_setting: $('pChar').value.trim(), catchphrase: $('pCatch').value.trim(),
-      hidden_setting: $('pHidden').value.trim()
+      character_setting: $('pChar').value.trim(), personality: $('pPersonality').value.trim(),
+      catchphrase: $('pCatch').value.trim(), hidden_setting: $('pHidden').value.trim()
     });
-    $('pMsg').textContent = '已保存 ✅';
-    setTimeout(() => $('persona').classList.add('hidden'), 600);
+    $('pMsg').textContent = '已保存 ✅（锁的状态也一起保留了）';
+    setTimeout(() => $('persona').classList.add('hidden'), 700);
   } catch (e) { $('pMsg').textContent = '保存失败：' + e.message; }
   finally { $('pSave').disabled = false; }
 });

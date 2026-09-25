@@ -18,6 +18,7 @@ const skills = require('./src/skills');
 const style = require('./src/style');
 const projects = require('./src/projects');
 const stats = require('./src/stats');
+const persona = require('./src/persona');
 
 const dbg = (msg) => { try { fs.appendFileSync(path.join(app.getPath('userData'), 'debug.log'), new Date().toISOString() + ' ' + msg + '\n'); } catch {} };
 
@@ -29,8 +30,7 @@ let allowChatClose = false;
 const posFile = () => path.join(app.getPath('userData'), 'position.json');
 const loadPosition = () => { try { return JSON.parse(fs.readFileSync(posFile(), 'utf8')); } catch { return null; } };
 const savePosition = (x, y) => { try { fs.writeFileSync(posFile(), JSON.stringify({ x, y })); } catch {} };
-const personaFile = () => path.join(__dirname, 'persona.json');
-const loadPersona = () => { try { return JSON.parse(fs.readFileSync(personaFile(), 'utf8')); } catch { return {}; } };
+const loadPersona = () => persona.load();   // 人设现在放在 userData（AI 要能改它）
 
 /* 记忆系统：依赖注入（记忆层不硬依赖 llm/config/persona，方便以后替换或单测） */
 memory.init({ llm, config, persona: loadPersona, skillCatalog: () => skills.catalog() });
@@ -464,12 +464,39 @@ ipcMain.handle('chat:greet', async () => {
   return reply;
 });
 
-ipcMain.handle('persona:get', () => loadPersona());
-ipcMain.handle('persona:set', (_e, patch) => {
-  const next = { ...loadPersona(), ...(patch || {}) };
-  fs.writeFileSync(personaFile(), JSON.stringify(next, null, 2));
-  return next;
+ipcMain.handle('persona:get', () => ({ ...loadPersona(), locks: persona.locks(), aiFields: persona.FIELDS, userOnly: persona.USER_ONLY, labels: persona.LABELS }));
+ipcMain.handle('persona:set', (_e, patch) => persona.patch(patch || {}));   // 用户改：所有字段都能改
+ipcMain.handle('persona:lock', (_e, o) => {
+  persona.setLock(o && o.field, !!(o && o.locked));
+  return { locks: persona.locks() };
 });
+
+/* ---------------- 人设自改：随经历缓慢演化（世界观只有用户能改） ---------------- */
+async function evolvePersonaOnce() {
+  const cfg = config.load();
+  if (!cfg.apiKey) return null;
+  const p = persona.load();
+  const lockNote = persona.ALL_FIELDS.filter((f) => !persona.aiEditable(f)).map((f) => persona.LABELS[f]).join('、') || '（无）';
+  const rec = memory.long.list().slice(-3).map((d) => d.date + '：' + String(d.diary || '').slice(0, 200)).join('\n');
+  const facts = memory.permanent.topFacts(20).map((f) => '· ' + f.text).join('\n');
+  const mo = mood.load();
+  const j = await memory.jobs.evolvePersona(llm, cfg, {
+    persona: p, diary: rec, facts, lockNote, affection: mo.affection, mood: mo.mood,
+  });
+  if (!j || !j.changed || !Object.keys(j.fields || {}).length) { dbg('[persona] 这次不需要改'); return null; }
+  const r = persona.applyAI(j.fields);
+  dbg('[persona] 演化 applied=[' + r.applied.join(',') + '] skipped=[' + r.skipped.join(',') + '] 因为：' + j.reason);
+  if (r.applied.length && petWin && !petWin.isDestroyed()) {
+    petWin.webContents.send('persona:changed', { applied: r.applied, reason: j.reason });
+  }
+  return { ...r, reason: j.reason };
+}
+/* 永久记忆一旦有新的晋升 → 顺带检测一次人设要不要变（没有晋升就完全不跑，省 token） */
+memory.bus.on('memory:permanent', (r) => {
+  if (!r || !r.promoted) return;
+  setTimeout(() => { evolvePersonaOnce().catch((e) => dbg('[persona] evolve err ' + e)); }, 2000);
+});
+ipcMain.handle('persona:evolve', () => evolvePersonaOnce());
 
 /* 📖 日记面板只暴露「长期记忆」；中期记忆对用户隐藏 */
 ipcMain.handle('memory:get', () => ({ long: memory.long.list(), session: memory.session.info() }));

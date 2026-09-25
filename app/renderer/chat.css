@@ -149,3 +149,10 @@ header .tools { margin-left: auto; display: flex; gap: 8px; }
 .gamelog .gline.act  { color: #ffd479; }
 .gamelog .gline.wait { color: #7a8699; }
 .gamelog .gline.err  { color: #ff8d7a; }
+
+/* 👤 人设字段锁 */
+.lockrow { display: flex !important; align-items: center; justify-content: space-between; }
+.locksym { cursor: pointer; font-size: 14px; line-height: 1; opacity: .5; user-select: none; padding: 0 2px; }
+.locksym:hover { opacity: 1; }
+.locksym.locked { opacity: 1; }
+.locksym.fixed { cursor: help; opacity: .9; }

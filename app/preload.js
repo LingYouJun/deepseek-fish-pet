@@ -50,7 +50,10 @@ contextBridge.exposeInMainWorld('petAPI', {
   onChatLog: (cb) => ipcRenderer.on('chat:log', (_e, data) => cb(data)),
   // 人设
   personaGet: () => ipcRenderer.invoke('persona:get'),
+  personaLock: (o) => ipcRenderer.invoke('persona:lock', o),
+  onPersonaChanged: (cb) => ipcRenderer.on('persona:changed', (_e, d) => cb(d)),
   personaSet: (patch) => ipcRenderer.invoke('persona:set', patch),
+  personaEvolve: () => ipcRenderer.invoke('persona:evolve'),
   // 记忆
   memoryGet: () => ipcRenderer.invoke('memory:get'),
   memoryDelete: (ref) => ipcRenderer.invoke('memory:delete', ref),
