@@ -7,6 +7,8 @@ contextBridge.exposeInMainWorld('petAPI', {
   dragEnd: () => ipcRenderer.send('drag-end'),
   quit: () => ipcRenderer.send('quit'),
   onSay: (cb) => ipcRenderer.on('pet:say', (_e, data) => cb(data)),
+  onSayPartial: (cb) => ipcRenderer.on('pet:say-partial', (_e, data) => cb(data)),
+  onChatPartial: (cb) => ipcRenderer.on('chat:partial', (_e, data) => cb(data)),
   onChatState: (cb) => {
     ipcRenderer.on('chat:opened', () => cb(true));
     ipcRenderer.on('chat:closed', () => cb(false));

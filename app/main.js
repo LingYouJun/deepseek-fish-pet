@@ -92,8 +92,24 @@ Rules:
 - Do not use markdown, code fences, or anything else.`;
 }
 
-async function genReply(cfg, messages) {
-  const raw = await llm.request(cfg, messages);
+async function genReply(cfg, messages, onPartial) {
+  let raw;
+  if (onPartial && typeof llm.stream === 'function') {
+    let sent = false;
+    try {
+      raw = await llm.stream(cfg, messages, (full) => {
+        if (sent) return;
+        // EN 行写完（后面跟了换行）就把英文先抛出去，让渲染层提前开始朗读
+        const m = full.match(/^EN[:：]\s*([\s\S]+?)\r?\n/);
+        if (m && m[1].trim()) { sent = true; onPartial(m[1].trim()); }
+      });
+    } catch (e) {
+      dbg('[llm] stream fail, fallback to non-stream: ' + String((e && e.message) || e));
+      raw = await llm.request(cfg, messages);
+    }
+  } else {
+    raw = await llm.request(cfg, messages);
+  }
   const reply = llm.parseReply(raw);
   if (!reply.en) reply.en = "Hmm, I'm not sure what to say... n-not that I care!";
   return { reply, raw };
@@ -342,13 +358,20 @@ ipcMain.handle('chat:send', async (e, payload) => {
     ...memory.pickHistory(),
     { role: 'user', content: text }
   ];
-  const { reply, raw } = await genReply(cfg, messages);
+  const fromChat = isFromChat(e);
+  try { dbg('[chat] send from=' + (fromChat ? 'chat' : 'pet') + ' len=' + text.length); } catch {}
+  const { reply, raw } = await genReply(cfg, messages, (en) => {
+    // 流式：EN 一行一出来就先推给"发问方"窗口，让它先开始朗读/显示（谁问的谁出声）
+    if (fromChat) {
+      if (chatWin && !chatWin.isDestroyed()) chatWin.webContents.send('chat:partial', { en });
+    } else if (petWin && !petWin.isDestroyed()) {
+      petWin.webContents.send('pet:say-partial', { en });
+    }
+  });
   if (reply.en) {
     memory.onTurn(text, raw, reply.en);
     mood.adjust({ affection: 1, mood: 2 });
   }
-  const fromChat = isFromChat(e);
-  try { dbg('[chat] send from=' + (fromChat ? 'chat' : 'pet') + ' len=' + text.length); } catch {}
   logTurn(text, reply);
   // 谁问的谁说话：对话窗发起的 → 对话窗读，桌宠只显示气泡不出声（反之同理）
   if (petWin && !petWin.isDestroyed()) petWin.webContents.send('pet:say', { ...reply, silent: fromChat });

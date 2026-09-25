@@ -345,16 +345,17 @@ async function send(text) {
   $('input').value = ''; $('choices').innerHTML = '';
   addUser(text);
   const pending = addPet('…', '', []);
+  pendingEl = pending; partialSpoken = false;
   try {
     const reply = await window.petAPI.chatSend({ text });
-    pending.remove();
+    pending.remove(); pendingEl = null;
     const pe = addPet(reply.en, reply.zh, reply.words);
-    speak(reply.en);
+    if (!partialSpoken) speak(reply.en);   // 流式里已经读过了就别重读
     renderChoices(reply.choices);
     refreshMood();
     if (reply.action) renderAction(pe, reply.action);
   } catch (e) {
-    pending.remove(); addErr(e.message || String(e));
+    pending.remove(); pendingEl = null; addErr(e.message || String(e));
   } finally {
     busy = false; $('input').focus();
   }
@@ -362,6 +363,20 @@ async function send(text) {
 $('send').addEventListener('click', () => send($('input').value));
 $('input').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send($('input').value); }
+});
+
+/* 流式：英文一出来就先填进占位气泡并开始朗读 */
+let pendingEl = null, partialSpoken = false;
+if (window.petAPI.onChatPartial) window.petAPI.onChatPartial((d) => {
+  if (!d || !d.en) return;
+  partialSpoken = true;
+  try {
+    if (pendingEl) {
+      const en = pendingEl.querySelector('.en');
+      if (en) en.textContent = d.en;
+    }
+  } catch {}
+  speak(d.en);
 });
 
 /* ---------------- TTS（Edge 神经音色，失败时退回系统语音） ---------------- */

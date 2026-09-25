@@ -147,7 +147,8 @@ function showReply(reply, hold) {
       if (c && c.en) sendText(c.en);
     });
   });
-  if (reply.silent) { stopSpeech(); busy = false; resumeListening(); }
+  if (reply.noSpeak) { /* 流式里英文已经读过了：只更新气泡，不打断也不重读 */ }
+  else if (reply.silent) { stopSpeech(); busy = false; resumeListening(); }
   else speak(reply.en);
 }
 
@@ -384,7 +385,17 @@ pet.addEventListener('click', () => {
 });
 
 /* ---------------- 跨窗口 ---------------- */
-if (window.petAPI.onSay) window.petAPI.onSay((reply) => { if (reply && reply.en) showReply(reply); });
+let partialTurn = false;
+if (window.petAPI.onSayPartial) window.petAPI.onSayPartial((d) => {
+  if (!d || !d.en) return;
+  partialTurn = true;
+  showReply({ en: d.en, zh: '', words: [], choices: [] });   // 英文先冒出来 + 先开始读
+});
+if (window.petAPI.onSay) window.petAPI.onSay((reply) => {
+  if (!reply || !reply.en) return;
+  if (partialTurn) { partialTurn = false; reply = { ...reply, noSpeak: true }; }   // 已经读过一遍，最终版别重读
+  showReply(reply);
+});
 if (window.petAPI.onChatState) window.petAPI.onChatState((open) => { chatOpen = open; if (open) pauseListening(); else resumeListening(); });
 if (window.petAPI.onFeed) window.petAPI.onFeed(() => feedFish());
 if (window.petAPI.onPat) window.petAPI.onPat(() => {

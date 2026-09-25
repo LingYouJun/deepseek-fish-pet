@@ -17,6 +17,46 @@ async function request(cfg, messages) {
   return json?.choices?.[0]?.message?.content || '';
 }
 
+/* 流式：边生成边回调 onDelta(累计全文)。返回最终全文。 */
+async function stream(cfg, messages, onDelta) {
+  const base = String(cfg.apiBase || '').replace(/\/+$/, '');
+  if (!base) throw new Error('未配置 API 地址');
+  if (!cfg.apiKey) throw new Error('未配置 API Key');
+
+  const res = await fetch(base + '/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + cfg.apiKey },
+    body: JSON.stringify({ model: cfg.model || 'deepseek-chat', messages, temperature: 0.4, stream: true }),
+  });
+  if (!res.ok) {
+    const body = (await res.text()).slice(0, 300);
+    throw new Error(`HTTP ${res.status} ${body}`);
+  }
+  if (!res.body || typeof res.body.getReader !== 'function') throw new Error('当前环境不支持流式读取');
+
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '', full = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let i;
+    while ((i = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
+      if (!line.startsWith('data:')) continue;
+      const data = line.slice(5).trim();
+      if (!data || data === '[DONE]') continue;
+      try {
+        const j = JSON.parse(data);
+        const d = j && j.choices && j.choices[0] && j.choices[0].delta && j.choices[0].delta.content;
+        if (d) { full += d; if (onDelta) onDelta(full); }
+      } catch {}
+    }
+  }
+  return full;
+}
+
 function parseReply(text) {
   const raw = String(text || '').trim();
 
@@ -72,4 +112,4 @@ function parseReply(text) {
   return { en: en || raw, zh, words, choices, action };
 }
 
-module.exports = { request, parseReply };
+module.exports = { request, stream, parseReply };
