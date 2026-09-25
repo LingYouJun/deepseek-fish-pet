@@ -353,11 +353,13 @@ function pauseListening() {
 function resumeListening() { if (chatOpen || busy) return; listening = true; startListening(); }
 
 /* ---------------- 拖拽 / 摸头 / 戳（全区域） ----------------
-   拖拽：mousemove 只当触发器，主进程读真实光标坐标来算目标位置，
-   所以窗口移动不会影响坐标（不会漂移）。 */
-let dragging = false, dragMoved = 0, dragOffX = 0, dragOffY = 0;
+   拖拽：mousedown 发 drag-start（主进程开 8ms 自采样定时器）、
+   mouseup 发 drag-end（关定时器）；移动由主进程定时器读真实光标坐标完成，
+   渲染层 mousemove 不再逐帧触发（只用来统计 dragMoved 判断"拖拽还是点一下"）。 */
+let dragging = false, dragMoved = 0;
 
 pet.addEventListener('mousedown', (e) => {
+  if (e.button !== 0) return;               // 只左键
   holding = true;
   try { window.petAPI.hold(true); } catch {}   // 按住期间强制窗口可交互，别拖到一半被穿透打断
   const r = pet.getBoundingClientRect();
@@ -365,7 +367,6 @@ pet.addEventListener('mousedown', (e) => {
     petting = true; petAccum = 0; lastPetX = e.clientX; patFired = false;   // 头部：左右滑 = 摸头
   } else {
     dragging = true; dragMoved = 0;
-    dragOffX = e.clientX; dragOffY = e.clientY;    // 抓点相对窗口左上角的偏移
     window.petAPI.dragStart();
   }
   e.preventDefault();
@@ -379,12 +380,8 @@ window.addEventListener('mousemove', (e) => {
     return;
   }
   if (!dragging) return;
-  dragMoved += Math.abs(e.movementX) + Math.abs(e.movementY);
-  /* 关键：用鼠标事件自带的最新屏幕坐标**直接算窗口目标**，主进程只负责 setPosition。
-     中间那版让主进程读 getCursorScreenPoint()（缓存值、还带 8ms 轮询）会跟不上手。
-     注意：不要在这里检查 e.buttons —— 窗口被 setPosition 移动时 Chromium 会合成一批
-     buttons=0 的 mousemove，一查就把拖拽当场杀掉（表现为"有时不拖动"）。 */
-  window.petAPI.dragMove({ x: e.screenX - dragOffX, y: e.screenY - dragOffY });
+  dragMoved += Math.abs(e.movementX) + Math.abs(e.movementY);   // 只用来判断"拖拽还是点一下"
+  // 不再发 dragTick：主进程 8ms 定时器自采样，避免 setPosition 中断 mousemove 造成断流
 });
 window.addEventListener('mouseup', () => {
   holding = false;
@@ -401,10 +398,7 @@ window.addEventListener('mouseup', () => {
 });
 window.addEventListener('mouseleave', () => { try { updateHit(-1, -1); } catch {} });
 
-/* 失焦/隐藏时把"按住"状态收干净。
-   以前 blur 只复位了 holding/petting：没通知主进程、也没复位 dragging ——
-   主进程的 holdInteractive 永远停在 true，命中轮询不再让窗口穿透，
-   桌宠那块透明矩形从此挡住桌面点击；dragging 残留还会让后续 mousemove 一直拖窗口。 */
+/* 失焦/隐藏时把"按住"状态收干净。 */
 function releasePointerState(why) {
   if (!holding && !dragging && !petting) return;
   const wasDragging = dragging;
@@ -413,8 +407,14 @@ function releasePointerState(why) {
   if (wasDragging) { try { window.petAPI.dragEnd(); } catch {} }
   try { window.petAPI.logErr('pointer released by ' + why); } catch {}
 }
-window.addEventListener('blur', () => releasePointerState('blur'));
-document.addEventListener('visibilitychange', () => { if (document.hidden) releasePointerState('hidden'); });
+window.addEventListener('blur', () => {
+  try { window.petAPI.logErr('[pointer-diag] blur ' + JSON.stringify({ holding, dragging, petting })); } catch {}
+  releasePointerState('blur');
+});
+document.addEventListener('visibilitychange', () => {
+  try { window.petAPI.logErr('[pointer-diag] visibility ' + JSON.stringify({ hidden: document.hidden, holding, dragging, petting })); } catch {}
+  if (document.hidden) { releasePointerState('hidden'); }
+});
 
 // 连点 15 下才打开对话窗口（避免误触）
 pet.addEventListener('click', () => {

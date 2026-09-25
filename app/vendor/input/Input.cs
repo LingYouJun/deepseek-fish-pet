@@ -6,6 +6,10 @@
 //   input.exe rclick  fx fy
 //   input.exe dclick  fx fy
 //   input.exe drag    fx1 fy1 fx2 fy2
+//   input.exe fdrag   fx1 fy1 fx2 fy2 [steps] [delayms]   （高速拖拽，默认 200 步 / 1ms）
+//   input.exe fcircle cx cy r [steps] [delayms]           （高速画圆拖拽，默认 180 步 / 1ms）
+//   input.exe press                 （按下左键不放）
+//   input.exe release               （松开左键）
 //   input.exe scroll  fx fy delta
 //   input.exe type    <文本>
 //   input.exe key     <按键名或组合，如 enter / esc / f5 / ctrl+c>
@@ -105,6 +109,32 @@ class Program
                     Move(x, y); Sleep(50); mouse_event(LEFTDOWN, 0, 0, 0, 0); Sleep(50);
                     for (int i = 1; i <= 24; i++) { Move(x + (x2 - x) * i / 24, y + (y2 - y) * i / 24); Sleep(10); }
                     mouse_event(LEFTUP, 0, 0, 0, 0); break;
+                case "press":
+                    mouse_event(LEFTDOWN, 0, 0, 0, 0); break;
+                case "release":
+                    mouse_event(LEFTUP, 0, 0, 0, 0); break;
+                case "fdrag":
+                    x = double.Parse(args[1]); y = double.Parse(args[2]);
+                    x2 = double.Parse(args[3]); y2 = double.Parse(args[4]);
+                    int fsteps = args.Length > 5 ? int.Parse(args[5]) : 200;
+                    int fdelay = args.Length > 6 ? int.Parse(args[6]) : 1;
+                    Move(x, y); Sleep(30); mouse_event(LEFTDOWN, 0, 0, 0, 0); Sleep(20);
+                    for (int i = 1; i <= fsteps; i++) { Move(x + (x2 - x) * i / fsteps, y + (y2 - y) * i / fsteps); if (fdelay > 0) Sleep(fdelay); }
+                    mouse_event(LEFTUP, 0, 0, 0, 0); break;
+                case "fcircle":
+                    {
+                        double ccx = double.Parse(args[1]), ccy = double.Parse(args[2]), rr = double.Parse(args[3]);
+                        int csteps = args.Length > 4 ? int.Parse(args[4]) : 180;
+                        int cdelay = args.Length > 5 ? int.Parse(args[5]) : 1;
+                        Move(ccx + rr, ccy); Sleep(30); mouse_event(LEFTDOWN, 0, 0, 0, 0); Sleep(20);
+                        for (int i = 1; i <= csteps; i++)
+                        {
+                            double ang = 2 * Math.PI * i / csteps;
+                            Move(ccx + rr * Math.Cos(ang), ccy + rr * Math.Sin(ang));
+                            if (cdelay > 0) Sleep(cdelay);
+                        }
+                        mouse_event(LEFTUP, 0, 0, 0, 0); break;
+                    }
                 case "scroll":
                     Move(double.Parse(args[1]), double.Parse(args[2]));
                     delta = int.Parse(args[3]);

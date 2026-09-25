@@ -182,9 +182,7 @@ function createPet() {
   petWin.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   petWin.on('moved', scheduleSavePos);
   hitInfo = null; hitIgnoring = null; holdInteractive = false;
-  /* 点穿系统已禁用（见 applyIgnore 的注释）—— 它依赖的 getCursorScreenPoint() 是缓存值，
-     和拖拽跟手是同一个根因，会把"光标在身体上"误判成"在透明区"，导致窗口穿透、拖不动。
-     当年能跟手的 b9f02a0 本来就没有这套点穿。 */
+  startHitLoop();
 
   petWin.webContents.on('context-menu', () => {
     Menu.buildFromTemplate([
@@ -276,31 +274,87 @@ function scheduleSavePos() {
     savePosition(x, y);
   }, 400);
 }
-/* 拖拽：**由渲染层的鼠标事件直接驱动**（最早版本 b9f02a0 的做法，最跟手）。
- *
- * 中间改过两版，都跟不上手：
- *   1) "渲染层 mousemove 只当触发器，主进程读 getCursorScreenPoint() 算锚点差"
- *   2) "主进程 8ms 定时器轮询 getCursorScreenPoint()"
- * 根因：getCursorScreenPoint() 是主进程的**缓存值**，而且 8ms 一个 setPosition 会把
- * 事件循环占满、缓存更新更滞后 —— 拖得越快、差得越远，就是"跟不上"。
- * 鼠标事件自带的 e.screenX/e.screenY 才是每一帧最新鲜的光标位置，直接用它算窗口目标。 */
+/* 拖拽：主进程 8ms 自采样定时器 + setBounds 瞬时定位。
+ * 渲染层 mousedown 只发 drag-start（开启定时器）、mouseup 发 drag-end（关闭定时器）；
+ * 移动由主进程定时器读真实光标坐标完成，不依赖渲染层 mousemove 逐帧触发，
+ * 因此移动窗口不会中断 mousemove → 事件断流（拖拽跟不上/延迟）被打破。
+ * 定位用 target = dragWin + (cursor - dragAnchor)：坐标公式本身没问题（实测 afterError ≤1px）。
+ * 必须用 setBounds 并每 tick 钉死 w/h：本机（125% DPI + 透明窗口）移动窗口时尺寸会随位移
+ * 持续变大（width += dx/2），而立绘是 margin:0 auto 居中，窗口一变宽立绘就在窗口内右移
+ * → 表现为"拖拽时立绘偏出光标、点一下又弹回"。详见 错题本.md。
+ * 保留 1px 死区：125% DPI 下 setBounds/getPosition 有 ±1px 取整误差，若不抑制会产生"按住平移"抖动。
+ * 注：当前带诊断日志（[drag-diag]/[hit-diag]/[pointer-diag]），排查用，可随时移除。 */
 let dragging = false;
-let dragLast = null;
-function beginDrag() { dragging = true; dragLast = null; }
+let dragWin = null;      // 按下时窗口位置（锚点）
+let dragAnchor = null;   // 按下时光标位置（锚点）
+let dragTimer = null;    // 8ms 自采样定时器
+const PET_W = 380;       // 桌宠窗口固定宽度（与 createPet / pet:resize 保持一致）
+let petH = 196;          // 桌宠窗口期望高度（由 pet:resize 维护，拖拽时钉死防止尺寸累积）
+
+/* ---- 拖拽诊断（临时）---- */
+let dragDiagLast = 0;
+let dragDiagSeq = 0;
+
+function beginDrag() {
+  if (!petWin || petWin.isDestroyed()) return;
+  const [wx, wy] = petWin.getPosition();
+  const c = screen.getCursorScreenPoint();
+  dragWin = { x: wx, y: wy };
+  dragAnchor = { x: c.x, y: c.y };
+  dragging = true;
+  dragDiagLast = 0;
+  dragDiagSeq = 0;
+  applyIgnore(false, 'drag-start');
+  if (dragTimer) clearInterval(dragTimer);
+  dragTimer = setInterval(dragStep, 8);
+}
+function dragStep() {
+  if (!dragging || !petWin || petWin.isDestroyed() || !dragWin || !dragAnchor) return;
+  const tickStart = performance.now();
+  const gap = dragDiagLast ? tickStart - dragDiagLast : 0;
+  dragDiagLast = tickStart;
+  dragDiagSeq += 1;
+
+  const c = screen.getCursorScreenPoint();
+  const tx = Math.round(dragWin.x + (c.x - dragAnchor.x));
+  const ty = Math.round(dragWin.y + (c.y - dragAnchor.y));
+
+  const [beforeX, beforeY] = petWin.getPosition();
+  const beforeErrX = tx - beforeX;
+  const beforeErrY = ty - beforeY;
+
+  // 1px 死区（保留）：防 DPI 取整抖动
+  if (Math.abs(beforeErrX) <= 1 && Math.abs(beforeErrY) <= 1) {
+    return;
+  }
+
+  /* 用 setBounds 而不是 setPosition：本机实测（125% DPI + 透明窗口）移动窗口时
+     尺寸会随位移持续变大（width += dx/2），立绘是 margin:0 auto 居中，
+     窗口一变宽立绘就在窗口内右移 → 拖拽时立绘偏出光标。
+     每 tick 用固定的 w/h 覆盖即可阻止累积（不能回填当前 bounds，否则会自增）。 */
+  petWin.setBounds({ x: tx, y: ty, width: PET_W, height: petH });
+
+  const [afterX, afterY] = petWin.getPosition();
+  const afterErrX = tx - afterX;
+  const afterErrY = ty - afterY;
+  const stepMs = performance.now() - tickStart;
+
+  /* 诊断：sp 记录立绘盒（窗口内偏移/尺寸），用来确认立绘在窗口内没有移位 */
+  const sp = hitInfo ? [hitInfo.left, hitInfo.top, hitInfo.width, hitInfo.height] : null;
+
+  if (gap > 40 || Math.abs(afterErrX) > 1 || Math.abs(afterErrY) > 1 || dragDiagSeq % 60 === 0) {
+    dbg('[drag-diag] ' + JSON.stringify({ seq: dragDiagSeq, gap: Math.round(gap), step: Math.round(stepMs * 10) / 10, cursor: [c.x, c.y], target: [tx, ty], before: [beforeX, beforeY], beforeError: [beforeErrX, beforeErrY], after: [afterX, afterY], afterError: [afterErrX, afterErrY], sp }));
+  }
+}
 function endDrag() {
+  if (!dragging) return;
   dragging = false;
-  dragLast = null;
+  if (dragTimer) { clearInterval(dragTimer); dragTimer = null; }
+  dragWin = null;
+  dragAnchor = null;
   scheduleSavePos();
 }
 ipcMain.on('drag-start', () => beginDrag());
-ipcMain.on('drag-move', (_e, p) => {
-  if (!dragging || !petWin || petWin.isDestroyed() || !p) return;
-  const x = Math.round(Number(p.x)), y = Math.round(Number(p.y));
-  if (!Number.isFinite(x) || !Number.isFinite(y)) return;
-  if (dragLast && dragLast.x === x && dragLast.y === y) return;   // 目标没变就别再 setPosition
-  dragLast = { x, y };
-  petWin.setPosition(x, y);
-});
 ipcMain.on('drag-end', () => endDrag());
 ipcMain.on('quit', () => app.quit());
 /* 语音/识别失败等错误写进 debug.log —— 方便远程收集试用者的现场 */
@@ -362,7 +416,8 @@ ipcMain.on('pet:resize', (_e, p) => {
   const [x, y] = petWin.getPosition();
   let newY = y;
   if (y + h > wa.y + wa.height) newY = Math.max(wa.y, wa.y + wa.height - h);
-  petWin.setBounds({ x, y: newY, width: 380, height: h });
+  if (h >= 60) petH = h;   // 忽略渲染层瞬时上报的 4px 噪声，只记录有效高度
+  petWin.setBounds({ x, y: newY, width: PET_W, height: h });
 });
 
 let shotN = 0;
@@ -632,34 +687,32 @@ function solidAtCursor() {
   const [wx, wy] = petWin.getPosition();
   const lx = c.x - wx - hitInfo.left;
   const ly = c.y - wy - hitInfo.top;
-  if (lx < 0 || ly < 0 || lx >= hitInfo.width || ly >= hitInfo.height) return false;
-  const mx = Math.min(hitInfo.w - 1, Math.floor(lx / hitInfo.width * hitInfo.w));
-  const my = Math.min(hitInfo.h - 1, Math.floor(ly / hitInfo.height * hitInfo.h));
-  const idx = my * hitInfo.w + mx;
-  return ((hitInfo.mask[idx >> 3] >> (idx & 7)) & 1) === 1;
+  /* 光标在立绘**包围盒内** → 一律可交互（点/拖都行）。
+     之前按像素 alpha 细判，把立绘身上的透明缝（约 31%）也判成穿透，
+     导致点桌宠经常点不中（戳不出反应）。点穿只针对立绘外的空白边。 */
+  return lx >= 0 && ly >= 0 && lx < hitInfo.width && ly < hitInfo.height;
 }
 
-function applyIgnore(ignore) {
+function applyIgnore(ignore, reason = '') {
   if (!petWin || petWin.isDestroyed()) return;
-  /* 点穿暂时整体关掉：setIgnoreMouseEvents(true) 会让窗口吃不到 mousedown/mousemove，
-     而它依赖的 getCursorScreenPoint() 又是缓存值（和拖拽跟手同一个坑），会把
-     "光标在身体上"误判成"在透明区" → 拖不动 / 拖一下断。
-     所以这里只允许"恢复可交互"，绝不再主动穿透。以后要做点穿得先解决光标实时性。 */
-  if (ignore) return;
-  if (hitIgnoring === false) return;
-  hitIgnoring = false;
-  try { petWin.setIgnoreMouseEvents(false, { forward: true }); } catch {}
+  if (hitIgnoring === ignore) return;
+  hitIgnoring = ignore;
+  /* 诊断：记录点穿为何被打开（reason）。hitInfo 只留关键字段，不 dump mask */
+  const cursor = screen.getCursorScreenPoint();
+  const [wx, wy] = petWin.getPosition();
+  const hi = hitInfo ? { w: hitInfo.w, h: hitInfo.h, left: hitInfo.left, top: hitInfo.top, width: hitInfo.width, height: hitInfo.height } : null;
+  dbg('[hit-diag] ' + JSON.stringify({ ignore, reason, dragging, holdInteractive, cursor: [cursor.x, cursor.y], window: [wx, wy], hitInfo: hi }));
+  try { petWin.setIgnoreMouseEvents(ignore, { forward: true }); }
+  catch (error) { dbg('[hit-diag] setIgnoreMouseEvents failed ' + error); }
 }
 
 function startHitLoop() {
   clearInterval(hitTimer);
   hitTimer = setInterval(() => {
     if (!petWin || petWin.isDestroyed()) { clearInterval(hitTimer); hitTimer = null; return; }
-    /* 拖拽中 / 按住中：一律保持窗口可交互，绝不让点穿把鼠标事件吃掉。
-       （以前只靠 renderer 的 hold IPC 置 holdInteractive，会有竞态；现在主进程自己也
-         知道 dragging，双保险。） */
-    if (dragging || holdInteractive) { applyIgnore(false); return; }
-    applyIgnore(!solidAtCursor());
+    if (dragging || holdInteractive) { applyIgnore(false, 'dragging-or-holding'); return; }
+    const solid = solidAtCursor();
+    applyIgnore(!solid, solid ? 'solid' : 'outside-hit-box');
   }, 30);
 }
 ipcMain.handle('art:open', async () => {
