@@ -12,6 +12,7 @@ const vocab = require('./src/vocab');
 const tts = require('./src/tts');
 const asr = require('./src/asr');
 const chatlog = require('./src/chatlog');
+const screenstream = require('./src/screenstream');
 
 const dbg = (msg) => { try { fs.appendFileSync(path.join(app.getPath('userData'), 'debug.log'), new Date().toISOString() + ' ' + msg + '\n'); } catch {} };
 
@@ -583,6 +584,7 @@ if (!gotLock) {
     mood.startupDecay();
     memory.onAppStart().catch((e) => dbg('[memory] onAppStart err ' + e));
     createPet();
+    screenstream.warm().catch(() => {});   // 预热屏幕流，第一次"看屏幕"不卡那一下
     if (!config.load().apiKey) createChat();
   });
 

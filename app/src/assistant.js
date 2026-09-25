@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const web = require('./web');
+const screenstream = require('./screenstream');
 
 // 每个工具所需的最低权限档
 const TOOL_TIER = {
@@ -19,9 +20,24 @@ function allowed(tier, tool) {
 }
 
 /* ---------------- 全屏截图（主屏） ----------------
-   返回 { path, width, height, dataUrl }。用 desktopCapturer 走 Electron 正规通道，
-   不像 Graphics.CopyFromScreen 那样有 DPI 缩放错位。 */
+   优先走连续屏幕流（抓一帧 ~50ms），流起不来退回 desktopCapturer（~650ms）。 */
+function shotsDir() {
+  const d = path.join(app.getPath('userData'), 'shots');
+  try { fs.mkdirSync(d, { recursive: true }); } catch {}
+  return d;
+}
+
 async function captureScreen() {
+  const frame = await screenstream.grabFrame();
+  if (frame && frame.dataUrl) {
+    const p = path.join(shotsDir(), 'screen-' + Date.now() + '.jpg');
+    fs.writeFileSync(p, Buffer.from(frame.dataUrl.split(',')[1], 'base64'));
+    return { path: p, width: frame.width, height: frame.height, dataUrl: frame.dataUrl };
+  }
+  return captureScreenFallback();
+}
+
+async function captureScreenFallback() {
   const primary = screen.getPrimaryDisplay();
   const { width, height } = primary.size;                 // DIP 尺寸
   const scale = primary.scaleFactor || 1;
@@ -32,9 +48,7 @@ async function captureScreen() {
   if (match) src = match;
   const png = src.thumbnail.toPNG();
 
-  const dir = path.join(app.getPath('userData'), 'shots');
-  try { fs.mkdirSync(dir, { recursive: true }); } catch {}
-  const p = path.join(dir, 'screen-' + Date.now() + '.png');
+  const p = path.join(shotsDir(), 'screen-' + Date.now() + '.png');
   fs.writeFileSync(p, png);
   return { path: p, width: tw, height: th, dataUrl: 'data:image/png;base64,' + png.toString('base64') };
 }
