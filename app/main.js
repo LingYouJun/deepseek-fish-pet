@@ -55,6 +55,7 @@ function buildSystemPrompt(cfg) {
       tools += '- screen_shot  (capture the user\'s screen and read any text on it — use this to "see" what is on screen before helping)\n';
       tools += '- screen_look|<question>  (send a screenshot to a vision model to actually see the layout/buttons/icons and get coordinates; falls back to reading text if no vision model is configured)\n';
       tools += '- click|x,y  (left-click; x,y are pixels in the 1280x720 screenshot, 0,0 = top-left)\n- rclick|x,y  (right-click)\n- dclick|x,y  (double-click)\n- move|x,y  (move mouse without clicking)\n- drag|x1,y1|x2,y2  (hold left button and drag from point 1 to point 2)\n- scroll|x,y|delta  (scroll wheel at position; +120 = up, -120 = down)\n- type|<text>  (type text into the currently focused field)\n- key|<name>  (press a key: enter / esc / tab / space / backspace / delete / up / down / left / right / home / end / f1..f12 / ctrl+c etc.)\n';
+      tools += '- game_start|<game name + goal + strategy>  (ONLY when the user explicitly asks you to play a game for them — start the game assistant; it watches the screen and plays. Append ||<maxSteps> to cap steps. Read the play-game skill first.)\n- game_stop  (stop the game assistant immediately)\n- game_status  (check whether it is still playing)\n';
     }
     const auto = (tier === 'full') ? 'You are fully trusted: your actions run automatically without asking each time.' : 'The user must approve before it runs.';
     actionSec = '\n# Computer actions (AI assistant)\nYou may request ONE computer action per reply by adding a final line to your reply:\nACTION: <tool>|<argument>\nTools:\n' + tools + 'Only add the ACTION line when the user explicitly asks you to do something on their computer. ' + auto + ' Otherwise omit the line entirely.\nYou can do a multi-step task: give ONE action per reply; the system runs it, shows you the result, and asks you to continue until the task is done.\n';
@@ -811,8 +812,12 @@ ipcMain.handle('assistant:run', async (_e, a) => {
   const text = (r && typeof r === 'object') ? String(r.text || '') : String(r || '');
   const image = (r && typeof r === 'object') ? r.image : null;
   const action = (r && typeof r === 'object') ? r.action : null;
-  // 工具结果可能很长（列目录 / 抓网页 / 截屏文字），入库前先截断，别把上下文撑爆
-  const cut = memory.tokens.clip(text, ((config.load().memory || {}).toolResultChars) || 500);
+  // 工具结果可能很长（列目录 / 抓网页 / 截屏文字），入库前先截断，别把上下文撑爆。
+  // 但「读」类工具的结果**就是模型要读的内容**，按普通上限截等于没读到
+  // （技能说明被砍到 250 字，模型就会说"说明被截断了"然后乱找路）——所以按工具给不同上限。
+  const READ_CAPS = { use_skill: 5000, skill_read: 5000, proj_read: 5000, read_file: 2500, skill_ls: 1200, proj_ls: 1200, list_dir: 2000 };
+  const cap = READ_CAPS[a.tool] || ((config.load().memory || {}).toolResultChars) || 500;
+  const cut = memory.tokens.clip(text, cap);
   memory.session.push({ role: 'user', content: `[系统] 我刚执行了操作 ${a.tool}（${a.arg}），结果如下：\n${cut}` });
   return { ok: true, result: text, image, action };
 });
@@ -827,7 +832,7 @@ function buildContinuePrompt(cfg) {
   tools += '- skill_ls|<path>   - skill_read|<path>   - skill_write|<path>||<text>   - skill_rm|<path>\n';
   tools += '- proj_ls|<path>   - proj_read|<path>   - proj_rm|<path>   - proj_open|<path>   - proj_run|<path>\n';
   if (tier === 'web' || tier === 'full') tools += '- web_open|<url>   - web_click|<css selector>   - web_type|<selector>||<text>   - web_read\n';
-  if (tier === 'full') tools += '- screen_shot   - screen_look|<question>   - click|x,y   - rclick|x,y   - dclick|x,y   - move|x,y   - drag|x1,y1|x2,y2   - scroll|x,y|delta   - type|<text>   - key|<name>\n';
+  if (tier === 'full') tools += '- screen_shot   - screen_look|<question>   - click|x,y   - rclick|x,y   - dclick|x,y   - move|x,y   - drag|x1,y1|x2,y2   - scroll|x,y|delta   - type|<text>   - key|<name>   - game_start|<game+goal+strategy>   - game_stop   - game_status\n';
   return `You are "${p.name || '大肥鱼'}", a desktop pet (${p.personality || '傲娇、温柔、嘴硬'}). Stay in character.
 You are IN THE MIDDLE of a multi-step task the user asked for. Keep every line short.
 
@@ -860,16 +865,24 @@ ipcMain.handle('chat:continue', async (e, _payload) => {
   return reply;
 });
 
-/* ---------------- 游戏助手（持续盯屏 + 决策 + 操作） ---------------- */
+/* ---------------- 游戏助手（持续盯屏 + 决策 + 操作） ----------------
+   平时完全关闭；用户对她说"打游戏"→ 她按 play-game 技能调 game_start 才会跑。 */
 gameagent.init({
   onLog: (e) => { if (chatWin && !chatWin.isDestroyed()) chatWin.webContents.send('game:log', e); },
-  onStop: () => { if (petWin && !petWin.isDestroyed()) petWin.show(); },   // 循环自己结束时把桌宠放回来
+  onStart: () => { if (petWin && !petWin.isDestroyed()) petWin.hide(); },   // 开打先把桌宠收起来，免得挡住点击
+  onStop: () => { if (petWin && !petWin.isDestroyed()) petWin.show(); },    // 循环自己结束时把桌宠放回来
+  onFinish: (r) => {
+    // 这趟的过程与结论进会话，交给已有的"经验提炼"在会话结束时消化，不另外造经验
+    try {
+      memory.session.push({
+        role: 'user',
+        content: '[系统] 游戏助手这趟的结果：' + r.summary + '\n（任务：' + String(r.task || '').slice(0, 120) + '）',
+      });
+    } catch {}
+    if (chatWin && !chatWin.isDestroyed()) chatWin.webContents.send('game:log', { kind: 'info', text: '📘 这趟已记进会话，收尾时会提炼成经验。', at: Date.now() });
+  },
 });
-ipcMain.handle('game:start', async (_e, o) => {
-  const r = await gameagent.start(o || {});
-  if (r && r.ok && petWin && !petWin.isDestroyed()) petWin.hide();   // 打游戏先把桌宠收起来，免得挡住点击
-  return r;
-});
+ipcMain.handle('game:start', async (_e, o) => gameagent.start(o || {}));
 ipcMain.handle('game:stop', () => gameagent.stop());
 ipcMain.handle('game:status', () => gameagent.status());
 

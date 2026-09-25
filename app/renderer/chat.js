@@ -282,10 +282,33 @@ $('gStop').addEventListener('click', async () => {
   try { await window.petAPI.gameStop(); } catch {}
   setGameRunning(false);
 });
+/* 游戏助手在对话里开的"实况卡"：它由技能启动时游戏面板是关着的，
+   所以把实况直接贴进对话，用户不点任何按钮也看得到它每一步在干什么。 */
+let gameCard = null;
+function gameCardLine(kind, text) {
+  if (!$('game').classList.contains('hidden')) return;   // 面板开着就只看面板，别重复刷屏
+  if (!gameCard || !gameCard.isConnected) {
+    const d = document.createElement('div');
+    d.className = 'msg sys gamecard';
+    d.innerHTML = '<div class="gchead">🎮 游戏助手实况</div><div class="gcbody"></div>';
+    $('msgs').appendChild(d);
+    gameCard = d.querySelector('.gcbody');
+    scroll();
+  }
+  const line = document.createElement('div');
+  line.className = 'gline ' + (kind || 'info');
+  line.textContent = text;
+  gameCard.appendChild(line);
+  while (gameCard.childElementCount > 400) gameCard.removeChild(gameCard.firstChild);
+  scroll();
+}
+
 if (window.petAPI.onGameLog) window.petAPI.onGameLog((e) => {
   if (!e) return;
   gLogLine(e.kind, e.text);
-  if (String(e.text).indexOf('已停止') >= 0) setGameRunning(false);
+  if (String(e.text).indexOf('🎮 启动') === 0) gameCard = null;   // 新的一趟，换一张卡
+  gameCardLine(e.kind, e.text);
+  if (/已停止|收手了/.test(String(e.text))) setGameRunning(false);
 });
 
 /* ---------------- 人设（含逐字段锁：锁住 = AI 不能改，你随时能改） ---------------- */

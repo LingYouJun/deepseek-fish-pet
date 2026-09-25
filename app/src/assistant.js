@@ -19,10 +19,13 @@ const TOOL_TIER = {
   web_open: 'web', web_click: 'web', web_type: 'web', web_read: 'web',
   screen_shot: 'full', screen_look: 'full',
   click: 'full', rclick: 'full', dclick: 'full', move: 'full', drag: 'full', scroll: 'full', type: 'full', key: 'full',
+  game_start: 'full', game_stop: 'read', game_status: 'read',
 };
 const RANK = { off: 0, read: 1, normal: 2, web: 3, full: 4 };
 
 function allowed(tier, tool) {
+  // 停手和查状态永远允许：万一权限被调低，也得能让她把游戏助手停下来
+  if (tool === 'game_stop' || tool === 'game_status') return true;
   const need = TOOL_TIER[tool];
   return !!need && (RANK[tier] || 0) >= RANK[need];
 }
@@ -114,8 +117,9 @@ async function run(tool, arg) {
     return { text: (usedVision ? '👁 视觉模型：\n' : '🖥 屏幕文字：\n') + text, image: cap.dataUrl, path: cap.path, action };
   }
 
-  // skill_ls / proj_ls 允许空参数（列根目录），其它需要参数的工具才拦
-  if (!arg && tool !== 'skill_ls' && tool !== 'proj_ls') throw new Error('操作参数为空');
+  // 这几个允许空参数（列根目录 / 停手 / 查状态），其它需要参数的工具才拦
+  const NOARG = { skill_ls: 1, proj_ls: 1, game_stop: 1, game_status: 1, screen_shot: 1, web_read: 1 };
+  if (!arg && !NOARG[tool]) throw new Error('操作参数为空');
   if (tool === 'open_url') {
     if (!/^https?:\/\//i.test(arg)) throw new Error('网址需以 http(s):// 开头');
     await shell.openExternal(arg);
@@ -205,6 +209,33 @@ async function run(tool, arg) {
       ? '⏱ 运行超时被强制结束（' + Math.round(r.ms / 1000) + 's）'
       : (r.code === 0 ? '✅ 运行成功（' + Math.round(r.ms / 1000) + 's，退出码 0）' : '❌ 运行出错（退出码 ' + r.code + '，' + Math.round(r.ms / 1000) + 's）');
     return head + '：' + r.path + '\n--- 输出 ---\n' + r.output;
+  }
+
+  /* ---------------- 游戏助手（默认关闭，用户开口才启动） ----------------
+     懒加载：gameagent 自己依赖 assistant，放在函数里 require 避免循环依赖。 */
+  if (tool === 'game_start' || tool === 'game_stop' || tool === 'game_status') {
+    const game = require('./gameagent');
+    if (tool === 'game_status') {
+      const s = game.status();
+      if (!s.running) return '🎮 游戏助手（替你打游戏的那个循环）现在**没有在运行**。\n'
+        + '注意：这只表示"我没在帮打"，**不代表游戏本身开没开** —— 游戏开没开要看屏幕（用 screen_look 或 screen_shot）。';
+      return '🎮 正在打：第 ' + s.step + ' / ' + s.maxSteps + ' 步，已操作 ' + (s.tally.act || 0) + ' 次'
+        + '（成功 ' + (s.tally.ok || 0) + ' / 失败 ' + (s.tally.fail || 0) + '）\n任务：' + s.task;
+    }
+    if (tool === 'game_stop') {
+      const r = game.stop();
+      return r.already
+        ? '🎮 游戏助手本来就没在运行，不用停（这不代表游戏没开着）。'
+        : '🛑 已经让她停手了，正在收尾（一两秒内就完全停下）。';
+    }
+    const s = String(arg || '');
+    const i = s.indexOf('||');
+    const task = (i >= 0 ? s.slice(0, i) : s).trim();
+    const maxSteps = i >= 0 ? (Number(s.slice(i + 2)) || 0) : 0;
+    const r = await game.start({ task, maxSteps: maxSteps || undefined });
+    if (!r || !r.ok) throw new Error((r && r.error) || '启动失败');
+    return '🎮 已经开打了，她在持续盯屏操作，每一步都会汇报到对话里。\n任务：' + task.slice(0, 120)
+      + '\n（**不需要再调 game_start**：现在只要用正常格式跟主人说一声你已经上手了、想停就说「停」。用户说停的时候再调 game_stop。）';
   }
 
   /* ---------------- OS 级键鼠（坐标是 1280x720 截图空间） ---------------- */

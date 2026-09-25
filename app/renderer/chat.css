@@ -150,6 +150,23 @@ header .tools { margin-left: auto; display: flex; gap: 8px; }
 .gamelog .gline.wait { color: #7a8699; }
 .gamelog .gline.err  { color: #ff8d7a; }
 
+/* 对话里的实况卡：游戏助手由技能启动时面板是关着的，实况直接贴在对话里 */
+#msgs .msg.sys.gamecard {
+  align-self: stretch; max-width: 100%; background: #0f1420; color: #c8d3e8;
+  padding: 8px 10px; border-radius: 10px;
+}
+#msgs .msg.sys.gamecard .gchead { font-size: 12px; font-weight: 600; color: #9fb4dd; margin-bottom: 4px; }
+#msgs .msg.sys.gamecard .gcbody {
+  font-family: Consolas, Menlo, monospace; font-size: 12px; line-height: 1.55;
+  max-height: 260px; overflow-y: auto;
+}
+#msgs .msg.sys.gamecard .gline { color: #c8d3e8; white-space: pre-wrap; overflow-wrap: break-word; }
+#msgs .msg.sys.gamecard .gline.info { color: #7fd8a6; }
+#msgs .msg.sys.gamecard .gline.see  { color: #a9c0e8; }
+#msgs .msg.sys.gamecard .gline.act  { color: #ffd479; }
+#msgs .msg.sys.gamecard .gline.wait { color: #7a8699; }
+#msgs .msg.sys.gamecard .gline.err  { color: #ff8d7a; }
+
 /* 👤 人设字段锁 */
 .lockrow { display: flex !important; align-items: center; justify-content: space-between; }
 .locksym { cursor: pointer; font-size: 14px; line-height: 1; opacity: .5; user-select: none; padding: 0 2px; }

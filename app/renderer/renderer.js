@@ -395,8 +395,10 @@ if (window.petAPI.onSay) window.petAPI.onSay((reply) => {
   if (!reply || !reply.en) return;
   if (partialTurn) { partialTurn = false; reply = { ...reply, noSpeak: true }; }   // 已经读过一遍，最终版别重读
   showReply(reply);
-  // 她若答应要操作电脑（ACTION），桌宠窗口自己执行不了 —— 自动把对话窗叫出来接着做
-  if (reply.action && reply.action.tool && window.petAPI.runPetAction) {
+  // 她若答应要操作电脑（ACTION），桌宠窗口自己执行不了 —— 自动把对话窗叫出来接着做。
+  // 但 silent=true 表示这句话是对话窗问出来的，对话窗自己会执行这个动作；
+  // 这里再转一次就成了"同一件事做两遍"（use_skill 白跑一趟，click 会点两下）。
+  if (!reply.silent && reply.action && reply.action.tool && window.petAPI.runPetAction) {
     try { window.petAPI.runPetAction(reply.action); } catch {}
   }
 });

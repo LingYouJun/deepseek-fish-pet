@@ -122,7 +122,10 @@ function safePath(rel) {
   const base = path.resolve(userDir());
   const cleaned = String(rel == null ? '' : rel).replace(/\\/g, '/').replace(/^\/+/, '').trim();
   const full = path.resolve(base, cleaned);
-  if (full !== base && !full.startsWith(base + path.sep)) throw new Error('路径越界（只能在技能目录里操作）');
+  if (full !== base && !full.startsWith(base + path.sep)) {
+    throw new Error('路径越界：这里只能填**技能目录内的相对路径**（例如 play-game 或 play-game/某游戏/日常.md），'
+      + '留空表示技能根目录；不要填 C:\\ 这种绝对路径。用 skill_ls| 先看看有哪些技能。');
+  }
   return full;
 }
 
