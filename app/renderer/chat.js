@@ -164,6 +164,25 @@ $('skillsArchive').addEventListener('click', async () => {
   finally { btn.disabled = false; }
 });
 
+/* ---------------- 🎨 界面风格 ---------------- */
+$('styleView').addEventListener('click', async () => {
+  try {
+    const r = await window.petAPI.styleGet();
+    $('styleMsg').textContent = r && r.style ? (r.spec || '（还没生成）') : '还没生成风格，点「生成」让 AI 按人设推导一套';
+  } catch (e) { $('styleMsg').textContent = '读取失败：' + e.message; }
+});
+$('styleGen').addEventListener('click', async () => {
+  const btn = $('styleGen');
+  btn.disabled = true;
+  const had = await window.petAPI.styleGet().then((r) => !!(r && r.style)).catch(() => false);
+  $('styleMsg').textContent = had ? '正在按当前人设重新生成…（会花一点 token）' : '正在按人设生成界面风格…（会花一点 token）';
+  try {
+    const r = await window.petAPI.styleEnsure(had);   // 已有就强制重生成
+    $('styleMsg').textContent = (r && r.ok) ? ('✅ 风格「' + ((r.style && r.style.name) || '') + '」已生成，并写成技能「界面风格」\n\n' + (r.spec || '')) : ('❌ ' + ((r && r.error) || '生成失败'));
+  } catch (e) { $('styleMsg').textContent = '❌ ' + e.message; }
+  finally { btn.disabled = false; }
+});
+
 /* ---------------- 🎮 游戏助手 ---------------- */
 const GAME_PRESET = [
   '这是《明日方舟》的战斗关卡。请观察屏幕，判断当前该做什么，一步一步帮我把这关打过去。',

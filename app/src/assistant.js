@@ -8,6 +8,7 @@ const input = require('./input');
 const vision = require('./vision');
 const config = require('./config');
 const skills = require('./skills');
+const style = require('./style');
 
 // 每个工具所需的最低权限档
 const TOOL_TIER = {
@@ -143,6 +144,13 @@ async function run(tool, arg) {
     if (s.memory && s.memory.length) {
       const facts = s.memory.slice().sort((a, b) => (Number(b.weight) || 0) - (Number(a.weight) || 0)).slice(0, 10);
       out += '\n\n【这个技能积累下来的经验】\n' + facts.map((f) => '- ' + f.text).join('\n');
+    }
+    // 界面风格这一个技能要跟"记忆"联动：加载时按当前好感度/心情微调冷暖
+    if (s.id === style.SKILL_ID) {
+      try {
+        const hint = style.moodHint(require('./mood').load());
+        if (hint) out += '\n\n【当前状态微调（记忆联动）】\n' + hint;
+      } catch {}
     }
     return out;
   }

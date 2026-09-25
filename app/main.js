@@ -15,6 +15,7 @@ const chatlog = require('./src/chatlog');
 const screenstream = require('./src/screenstream');
 const gameagent = require('./src/gameagent');
 const skills = require('./src/skills');
+const style = require('./src/style');
 
 const dbg = (msg) => { try { fs.appendFileSync(path.join(app.getPath('userData'), 'debug.log'), new Date().toISOString() + ' ' + msg + '\n'); } catch {} };
 
@@ -696,6 +697,17 @@ ipcMain.handle('skills:pool', () => ({
   cand: memory.skillmem.candidates().map((c) => ({ text: c.text, weight: c.weight, hits: c.hits || 1, skill: c.skill || '' })),
   ready: memory.skillmem.ready((config.load().memory || {}).skillFileWeight || 4).length,
 }));
+
+/* ---------------- 界面风格（从人设推导 + 记忆微调） ---------------- */
+ipcMain.handle('style:get', () => ({ style: style.load(), spec: style.spec(config.load(), mood.load()) }));
+ipcMain.handle('style:ensure', async (_e, force) => {
+  try {
+    const s = await style.ensure(llm, config.load(), loadPersona(), !!force);
+    return { ok: true, style: s, spec: style.spec(config.load(), mood.load()) };
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+});
 ipcMain.handle('art:reset', () => {
   try { fs.unlinkSync(path.join(artDir(), 'pet-character.png')); } catch {}
   return true;

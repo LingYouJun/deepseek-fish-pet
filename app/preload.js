@@ -76,5 +76,7 @@ contextBridge.exposeInMainWorld('petAPI', {
   skillsList: () => ipcRenderer.invoke('skills:list'),
   skillsArchive: () => ipcRenderer.invoke('skills:archive'),
   skillsPool: () => ipcRenderer.invoke('skills:pool'),
+  styleGet: () => ipcRenderer.invoke('style:get'),
+  styleEnsure: (force) => ipcRenderer.invoke('style:ensure', force),
   artReset: () => ipcRenderer.invoke('art:reset')
 });
