@@ -35,8 +35,8 @@ const DEFAULTS = {
   ttsPitch: 1.18,
   vocabLevel: 'high_school',
   assistant: 'off',
-  // 视觉模型（可选）：用于"看懂屏幕"。留空就复用主模型的 apiBase/apiKey，
-  // 默认用 DeepSeek 的 deepseek-flash 视觉模型（同一个 Key）。
+  // 视觉模型（可选）：用于"看懂屏幕"，会花 token。默认关闭，关闭时退回本地 OCR（免费）。
+  visionEnabled: false,
   visionBase: '',
   visionKey: '',
   visionModel: 'deepseek-flash',

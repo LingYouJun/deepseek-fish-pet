@@ -85,18 +85,21 @@ async function run(tool, arg) {
 
   if (tool === 'screen_look') {
     const cap = await captureScreen();
-    const question = arg || '看这张屏幕截图，用一句话说明画面，并给出主要可点击元素的位置坐标（x,y，基于 1280x720 截图）。不要长篇描述。';
+    const cfg = config.load();
     let text = '';
     let usedVision = false;
-    try {
-      text = await vision.describe(config.load(), cap.dataUrl, question, 'low');
-      usedVision = true;
-    } catch (e) {
-      text = '';
+    if (cfg.visionEnabled) {
+      const question = arg || '看这张屏幕截图，用一句话说明画面，并给出主要可点击元素的位置坐标（x,y，基于 1280x720 截图）。不要长篇描述。';
+      try {
+        text = await vision.describe(cfg, cap.dataUrl, question, 'low');
+        usedVision = true;
+      } catch (e) {
+        text = '';
+      }
     }
     if (!text) {
       const t = ocr(cap.path);
-      text = t ? ('屏幕上识别到的文字：\n' + t) : '（未配置视觉模型，且未识别到文字）';
+      text = t ? ('屏幕上识别到的文字：\n' + t) : '（未启用视觉模型，且未识别到文字）';
     }
     return { text: (usedVision ? '👁 视觉模型：\n' : '🖥 屏幕文字：\n') + text, image: cap.dataUrl, path: cap.path };
   }
