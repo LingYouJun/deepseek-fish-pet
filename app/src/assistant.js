@@ -111,7 +111,8 @@ async function run(tool, arg) {
     return { text: (usedVision ? '👁 视觉模型：\n' : '🖥 屏幕文字：\n') + text, image: cap.dataUrl, path: cap.path, action };
   }
 
-  if (!arg) throw new Error('操作参数为空');
+  // skill_ls 允许空参数（列出技能根目录），其它需要参数的工具才拦
+  if (!arg && tool !== 'skill_ls') throw new Error('操作参数为空');
   if (tool === 'open_url') {
     if (!/^https?:\/\//i.test(arg)) throw new Error('网址需以 http(s):// 开头');
     await shell.openExternal(arg);

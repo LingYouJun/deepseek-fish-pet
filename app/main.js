@@ -30,7 +30,7 @@ const personaFile = () => path.join(__dirname, 'persona.json');
 const loadPersona = () => { try { return JSON.parse(fs.readFileSync(personaFile(), 'utf8')); } catch { return {}; } };
 
 /* 记忆系统：依赖注入（记忆层不硬依赖 llm/config/persona，方便以后替换或单测） */
-memory.init({ llm, config, persona: loadPersona });
+memory.init({ llm, config, persona: loadPersona, skillCatalog: () => skills.catalog() });
 
 const VOCAB = {
   high_school: 'high-school level (simple, common words)',
@@ -600,6 +600,102 @@ ipcMain.handle('skills:open', async () => {
   return d || skills.userDir();
 });
 ipcMain.handle('skills:list', () => skills.list().map((s) => ({ id: s.id, name: s.name, description: s.description })));
+
+/* 把攒够权重的经验归档进技能文件夹：AI 自己决定放哪个技能、哪个文件、怎么写 */
+const ARCHIVE_SYS = `你是一个"知识库管理员"。任务：把一条经验归档进技能文件夹。
+
+技能文件夹结构：skills/<技能名>/SKILL.md，技能内部可以有自己的子文件夹。
+
+你有两种回复方式：
+
+【1】先查看现有内容（需要时用；每次回复的最后一行写）：
+   ACTION: skill_ls|路径          列目录（要看技能根目录就写 ACTION: skill_ls|）
+   ACTION: skill_read|路径        读一个文件
+
+【2】最终写入（内容可以多行，原样放在 <<< 和 >>> 之间）：
+   WRITE: <路径>
+   <<<
+   <这个文件的完整内容，用真实换行，必须保留文件原有内容>
+   >>>
+
+规则：
+- 先 skill_ls 看看现在有哪些技能；必要时 skill_read 看看相关 SKILL.md 的现有结构
+- 判断这条经验属于哪个技能：能并进已有技能就并进去；确实是全新领域才新建技能（新技能的 SKILL.md 开头必须有 --- name: xxx 和 description: xxx --- 的头）
+- SKILL.md 保持**简短**（总览 + 索引），详细经验放进子文件夹（如 <技能>/<子类>/<主题>.md）
+- 合并进已有文件时，**必须保留原有内容**，只在合适的位置补充
+- 全部归档完成后，回复 DONE
+
+只做归档，不要闲聊、不要解释。`;
+
+/* 解析 WRITE 块（多行内容） */
+function parseWriteBlock(raw) {
+  const m = String(raw || '').match(/WRITE\s*[:：]\s*([^\r\n]+)[\s\S]*?<<<[\r\n]+([\s\S]*?)[\r\n]*>>>/);
+  if (!m) return null;
+  const p = m[1].trim().replace(/^["'`]|["'`]$/g, '');
+  if (!p) return null;
+  return { path: p, content: m[2] };
+}
+
+async function archiveSkills(limit) {
+  const cfg = config.load();
+  if (!cfg.apiKey) return { ok: false, error: '没配 API Key' };
+  const mc = cfg.memory || {};
+  const th = mc.skillFileWeight || 4;
+  const items = memory.skillmem.ready(th).slice(0, Math.max(1, Math.min(10, Number(limit) || mc.skillArchiveMax || 5)));
+  if (!items.length) return { ok: true, filed: 0, total: 0, log: [] };
+  const log = [];
+  let filed = 0;
+  for (const it of items) {
+    try {
+      const messages = [
+        { role: 'system', content: ARCHIVE_SYS },
+        { role: 'user', content: '要归档的经验（权重 ' + it.weight + '，出现过 ' + (it.hits || 1) + ' 次）：\n' + it.text + (it.skill ? '\n（可能属于技能：' + it.skill + '）' : '') }
+      ];
+      let wrote = false;
+      for (let i = 0; i < 8; i++) {
+        const raw = await llm.request(cfg, messages);
+        // ① 写入块（支持多行内容）
+        const w = parseWriteBlock(raw);
+        if (w) {
+          try {
+            const r = skills.writeFile(w.path, w.content);
+            wrote = true;
+            dbg('[skills] write ' + r.path + ' (' + r.bytes + 'B)');
+            messages.push({ role: 'assistant', content: raw });
+            messages.push({ role: 'user', content: '[系统] 已写入 ' + r.path + '（' + r.bytes + ' 字节）。如果还有别的文件要写就继续，否则回复 DONE。' });
+            continue;
+          } catch (e) {
+            messages.push({ role: 'assistant', content: raw });
+            messages.push({ role: 'user', content: '[系统] 写入失败：' + ((e && e.message) || e) + '。请修正后重试。' });
+            continue;
+          }
+        }
+        // ② 查看类工具（单行 ACTION）
+        const act = llm.parseReply(raw).action;
+        if (act && /^skill_(ls|read)$/.test(String(act.tool).toLowerCase())) {
+          let out = '';
+          try { const r = await assistant.run(act.tool, act.arg); out = String((r && typeof r === 'object') ? r.text : r); }
+          catch (e) { out = '失败：' + ((e && e.message) || e); }
+          messages.push({ role: 'assistant', content: raw });
+          messages.push({ role: 'user', content: '[系统] 操作结果：\n' + memory.tokens.clip(out, 500) });
+          continue;
+        }
+        break;   // DONE / 没有可执行动作
+      }
+      if (wrote) { memory.skillmem.drop([it.text]); filed++; log.push('✅ ' + it.text.slice(0, 50)); }
+      else log.push('⏭ 模型没写入：' + it.text.slice(0, 50));
+    } catch (e) {
+      log.push('❌ ' + it.text.slice(0, 40) + '：' + ((e && e.message) || e));
+    }
+  }
+  dbg('[skills] archive filed=' + filed + '/' + items.length);
+  return { ok: true, filed, total: items.length, log };
+}
+ipcMain.handle('skills:archive', () => archiveSkills());
+ipcMain.handle('skills:pool', () => ({
+  cand: memory.skillmem.candidates().map((c) => ({ text: c.text, weight: c.weight, hits: c.hits || 1, skill: c.skill || '' })),
+  ready: memory.skillmem.ready((config.load().memory || {}).skillFileWeight || 4).length,
+}));
 ipcMain.handle('art:reset', () => {
   try { fs.unlinkSync(path.join(artDir(), 'pet-character.png')); } catch {}
   return true;
@@ -661,6 +757,10 @@ if (!gotLock) {
     memory.onAppStart().catch((e) => dbg('[memory] onAppStart err ' + e));
     createPet();
     screenstream.warm().catch(() => {});   // 预热屏幕流，第一次"看屏幕"不卡那一下
+    // 启动几秒后，默默把攒够权重的经验归档进技能文件夹（AI 自己整理）
+    if ((config.load().memory || {}).skillAutoArchive !== false) {
+      setTimeout(() => { archiveSkills().catch((e) => dbg('[skills] auto archive err ' + e)); }, 8000);
+    }
     if (!config.load().apiKey) createChat();
   });
 

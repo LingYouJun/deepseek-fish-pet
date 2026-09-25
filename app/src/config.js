@@ -12,6 +12,10 @@ const MEMORY_DEFAULTS = {
   candDays: 14,          // 候选多少天没再出现就开始衰减
   candDecay: 0.8,        // 衰减系数
   candFloor: 1,          // 权重低于此值从候选池清掉
+  skillCandDays: 21,     // 技能经验候选多少天没出现开始衰减
+  skillFileWeight: 4,    // 技能经验权重到多少就归档进技能文件夹
+  skillArchiveMax: 5,    // 每次最多归档几条经验
+  skillAutoArchive: true,// 启动时自动把攒够权重的经验归档进技能
   historyTokens: 6000,   // 历史按 token 预算保留（不是按条数）
   fullTurns: 3,          // 最近几轮助手回复保留完整格式（格式锚）
   toolResultChars: 500,  // AI 助手执行结果入库时的截断长度

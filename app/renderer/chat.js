@@ -142,10 +142,26 @@ $('skillsOpen').addEventListener('click', async () => {
 $('skillsRefresh').addEventListener('click', async () => {
   try {
     const list = await window.petAPI.skillsList();
-    $('skillsMsg').textContent = (list && list.length)
+    const pool = await window.petAPI.skillsPool();
+    const line = (list && list.length)
       ? ('已装 ' + list.length + ' 个技能：' + list.map((s) => s.id).join('、'))
       : '还没有技能，点「打开技能文件夹」丢一个进去';
+    const p = pool && pool.cand ? pool.cand.length : 0;
+    $('skillsMsg').textContent = line + '\n经验池：' + p + ' 条' + (pool && pool.ready ? ('（其中 ' + pool.ready + ' 条已够权重，等归档）') : '');
   } catch (e) { $('skillsMsg').textContent = '读取失败：' + e.message; }
+});
+$('skillsArchive').addEventListener('click', async () => {
+  const btn = $('skillsArchive');
+  btn.disabled = true;
+  $('skillsMsg').textContent = '正在让 AI 整理归档…（会花一点 token）';
+  try {
+    const r = await window.petAPI.skillsArchive();
+    if (!r || !r.ok) { $('skillsMsg').textContent = '❌ ' + ((r && r.error) || '整理失败'); return; }
+    $('skillsMsg').textContent = r.total
+      ? ('✅ 归档 ' + r.filed + ' / ' + r.total + ' 条\n' + (r.log || []).join('\n'))
+      : '经验池里还没有攒够权重的经验（多跟它一起做点事，权重够了就会自动归档）';
+  } catch (e) { $('skillsMsg').textContent = '❌ ' + e.message; }
+  finally { btn.disabled = false; }
 });
 
 /* ---------------- 🎮 游戏助手 ---------------- */

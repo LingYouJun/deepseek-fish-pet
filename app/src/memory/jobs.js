@@ -84,4 +84,63 @@ function parseFacts(raw) {
   return out;
 }
 
-module.exports = { summarize, diary, extractFacts, parseFacts, convoToText };
+/* 抽"做事的经验"（procedure），进共有的技能长期记忆库。
+ * 和 extractFacts 的区别：facts 是"主人是什么样的人"，经验是"这类事该怎么做"。
+ * 输出行格式：经验|权重|技能|标签
+ */
+async function extractExperiences(llm, cfg, msgs, catalog) {
+  const cat = String(catalog || '').trim();
+  const sys = `你是一台"经验筛选器"。从下面这段主人和桌宠的对话里，挑出**下次遇到同类任务可以直接复用的做法**。
+
+只挑这类（"怎么做事"的程序性经验）：
+- 帮主人完成的具体操作任务，以及**有效的做法/步骤**
+- 踩过的坑：什么做法不行、为什么、该换成什么
+- 主人明确交代过的做事规矩（"以后都这样"）
+
+**不要挑**：关于主人本人的事实、喜好、情绪、闲聊（那些另有地方存）。
+
+${cat ? '现有技能（能把经验归到某个技能就写它的 id，否则写 none）：\n' + cat + '\n' : ''}
+权重 1~10：
+- 主人明确说"以后都这么做" → 9~10
+- 验证过能用的完整做法 → 6~8
+- 一次性的、不确定对不对的尝试 → 2~4
+- 纯闲聊、没做成事 → **不要输出**
+
+输出格式：每行一条，四段用竖线分隔，**只输出这些行**，不要编号、不要解释、不要代码块：
+经验|权重|技能|标签
+
+示例：
+排查 Electron 打包后原生 exe 跑不起来：要先加进 asarUnpack|8|none|Electron,打包
+主人要 commit 信息时，标题用动词开头、别罗列文件名|7|write-commit|git
+
+如果这段对话里没有任何值得记的经验，就只输出一个空行。`;
+
+  const raw = await llm.request(cfg, [
+    { role: 'system', content: sys },
+    { role: 'user', content: convoToText(msgs, 6000) }
+  ]);
+  return parseExperiences(raw);
+}
+
+function parseExperiences(raw) {
+  const out = [];
+  for (const line of String(raw || '').split(/\r?\n/)) {
+    const t = line.trim().replace(/^[-*•\d.、)）\s]+/, '');
+    if (!t || !t.includes('|')) continue;
+    const seg = t.split('|');
+    const text = String(seg[0] || '').trim();
+    if (!text || text.length < 4) continue;
+    const weight = Number(String(seg[1] || '').replace(/[^\d.]/g, ''));
+    const skill = String(seg[2] || '').trim().toLowerCase();
+    const tags = String(seg[3] || '').split(/[,，、]/).map((s) => s.trim()).filter(Boolean);
+    out.push({
+      text: text.slice(0, 300),
+      weight: Number.isFinite(weight) ? Math.max(1, Math.min(10, weight)) : 4,
+      skill: (skill && skill !== 'none' && skill !== '无') ? skill : '',
+      tags: tags.slice(0, 4),
+    });
+  }
+  return out;
+}
+
+module.exports = { summarize, diary, extractFacts, parseFacts, extractExperiences, parseExperiences, convoToText };

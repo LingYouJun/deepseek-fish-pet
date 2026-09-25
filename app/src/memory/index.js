@@ -16,10 +16,11 @@ const session = require('./session');
 const medium = require('./medium');
 const long = require('./long');
 const permanent = require('./permanent');
+const skillmem = require('./skillmem');
 const context = require('./context');
 const jobs = require('./jobs');
 
-let deps = { llm: null, config: null, persona: null };
+let deps = { llm: null, config: null, persona: null, skillCatalog: null };
 function init(d) { deps = Object.assign(deps, d || {}); return deps; }
 
 const cfg = () => { try { return deps.config ? deps.config.load() : {}; } catch { return {}; } };
@@ -81,6 +82,7 @@ async function onAppStart() {
   session.restore();
   const mc = memCfg();
   try { permanent.decay(mc.candDays || 14, mc.candDecay || 0.8, mc.candFloor || 1); } catch {}
+  try { skillmem.decay(mc.skillCandDays || 21, mc.candDecay || 0.8, mc.candFloor || 1); } catch {}
   try { await consolidate(mc); } catch {}
   try { permanent.promote(mc.promoteWeight || 7); } catch {}
   applyRetention(mc);
@@ -133,10 +135,24 @@ async function onSessionEnd() {
     } catch {}
   }
 
+  /* 同一段对话里再抽一次"做事的经验" → 进共有的技能长期记忆库（权重够了再归档进技能文件夹） */
+  let learned = 0;
+  if (llm && c.apiKey) {
+    try {
+      const cat = deps.skillCatalog ? deps.skillCatalog() : '';
+      const exps = await jobs.extractExperiences(llm, c, msgs, cat);
+      if (exps.length) {
+        skillmem.merge(exps);
+        learned = exps.length;
+        bus.emit('memory:skillmem', { learned });
+      }
+    } catch {}
+  }
+
   applyRetention(mc);
   session.clear();
-  bus.emit('session:end', { id: info.id, extracted });
-  return { ok: true, extracted };
+  bus.emit('session:end', { id: info.id, extracted, learned });
+  return { ok: true, extracted, learned };
 }
 
 function buildContext() { return context.build(cfg()); }
@@ -153,5 +169,5 @@ function pickHistory(budgetTokens, fullTurns) {
 module.exports = {
   init, onAppStart, onTurn, onAssistant, onSessionEnd, buildContext, pickHistory,
   migrate, dayStr,
-  session, medium, long, permanent, tokens, bus,
+  session, medium, long, permanent, skillmem, tokens, bus,
 };
