@@ -97,4 +97,72 @@ function parseWriteBlocks(raw) {
 
 function openFolder(rel) { return shell.openPath(rel ? safePath(rel) : rootDir()); }
 
-module.exports = { rootDir, safePath, ls, readFile, writeOne, writeMany, remove, open, openFolder, parseWriteBlocks };
+/* ---------------- 执行脚本 ----------------
+ * 只允许白名单解释器（不跑任意 exe），带超时强杀，输出/报错都抓回来给模型看。
+ * 注意：这是**真在你电脑上跑程序**，沙箱拦不住它——所以执行权限由助手的权限档把关：
+ *   normal/web 档 → 每次弹「允许 / 拒绝」
+ *   full 完全权限 → 自动执行、不再确认
+ */
+const { spawn } = require('child_process');
+
+const RUNNERS = {
+  '.py': [['python', (p) => [p]], ['py', (p) => [p]]],
+  '.js': [['node', (p) => [p]]],
+  '.mjs': [['node', (p) => [p]]],
+  '.cjs': [['node', (p) => [p]]],
+  '.bat': [['cmd', (p) => ['/c', p]]],
+  '.cmd': [['cmd', (p) => ['/c', p]]],
+  '.ps1': [['powershell', (p) => ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', p]]],
+};
+
+function clipOut(s, max) {
+  const t = String(s || '');
+  const cap = max || 4000;
+  return t.length > cap ? t.slice(0, cap) + '\n…（输出过长已截断，共 ' + t.length + ' 字）' : t;
+}
+
+function run(rel, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const p = safePath(rel);
+    if (!fs.existsSync(p)) return reject(new Error('文件不存在：' + rel));
+    if (fs.statSync(p).isDirectory()) return reject(new Error('这是个文件夹，不能运行'));
+    const ext = path.extname(p).toLowerCase();
+    const cands = RUNNERS[ext];
+    if (!cands) {
+      return reject(new Error('不支持直接运行 ' + (ext || '（无扩展名）') + '。能运行：' + Object.keys(RUNNERS).join(' / ') + '（网页 .html 请用 proj_open 打开）'));
+    }
+    const cwd = path.dirname(p);
+    const t0 = Date.now();
+    const limit = Math.max(3000, Math.min(300000, Number(timeoutMs) || 60000));
+    let out = '', done = false;
+    const finish = (v) => { if (!done) { done = true; resolve(v); } };
+
+    const tryAt = (i) => {
+      if (i >= cands.length) return reject(new Error('没找到可用的解释器（试过：' + cands.map((c) => c[0]).join(' / ') + '）'));
+      const [cmd, mk] = cands[i];
+      let child;
+      try {
+        child = spawn(cmd, mk(p), { cwd, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      } catch (e) { return tryAt(i + 1); }
+      const timer = setTimeout(() => {
+        try { child.kill(); } catch {}
+        finish({ path: String(rel), code: -1, timeout: true, ms: Date.now() - t0, output: clipOut(out) + '\n（超过 ' + Math.round(limit / 1000) + ' 秒，已强制结束）' });
+      }, limit);
+      child.stdout.on('data', (d) => { out += d; });
+      child.stderr.on('data', (d) => { out += d; });
+      child.on('error', (e) => {
+        clearTimeout(timer);
+        if (done) return;
+        if (e && e.code === 'ENOENT') { out = ''; return tryAt(i + 1); }   // 解释器不在，换下一个
+        done = true; reject(new Error('启动失败：' + ((e && e.message) || e)));
+      });
+      child.on('close', (code) => {
+        clearTimeout(timer);
+        finish({ path: String(rel), code, timeout: false, ms: Date.now() - t0, output: clipOut(out) || '(程序没有任何输出)' });
+      });
+    };
+    tryAt(0);
+  });
+}
+
+module.exports = { rootDir, safePath, ls, readFile, writeOne, writeMany, remove, open, openFolder, parseWriteBlocks, run };

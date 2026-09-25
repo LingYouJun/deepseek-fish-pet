@@ -15,7 +15,7 @@ const projects = require('./projects');
 const TOOL_TIER = {
   list_dir: 'read', read_file: 'read', use_skill: 'read', skill_ls: 'read', skill_read: 'read',
   proj_ls: 'read', proj_read: 'read',
-  open_path: 'normal', open_url: 'normal', skill_write: 'normal', skill_rm: 'normal', proj_rm: 'normal', proj_open: 'normal',
+  open_path: 'normal', open_url: 'normal', skill_write: 'normal', skill_rm: 'normal', proj_rm: 'normal', proj_open: 'normal', proj_run: 'normal',
   web_open: 'web', web_click: 'web', web_type: 'web', web_read: 'web',
   screen_shot: 'full', screen_look: 'full',
   click: 'full', rclick: 'full', dclick: 'full', move: 'full', drag: 'full', scroll: 'full', type: 'full', key: 'full',
@@ -197,6 +197,14 @@ async function run(tool, arg) {
   if (tool === 'proj_open') {
     const r = await projects.open(arg || '');
     return '🌐 已用默认程序打开：' + r.path;
+  }
+  if (tool === 'proj_run') {
+    const cfgR = config.load();
+    const r = await projects.run(arg || '', (cfgR.memory || {}).projRunTimeout || 60000);
+    const head = r.timeout
+      ? '⏱ 运行超时被强制结束（' + Math.round(r.ms / 1000) + 's）'
+      : (r.code === 0 ? '✅ 运行成功（' + Math.round(r.ms / 1000) + 's，退出码 0）' : '❌ 运行出错（退出码 ' + r.code + '，' + Math.round(r.ms / 1000) + 's）');
+    return head + '：' + r.path + '\n--- 输出 ---\n' + r.output;
   }
 
   /* ---------------- OS 级键鼠（坐标是 1280x720 截图空间） ---------------- */

@@ -81,7 +81,8 @@ function buildSystemPrompt(cfg) {
       + 'To create files, put one or more blocks anywhere in your reply:\n'
       + '<<<WRITE: <project>/index.html\n<the complete file content, real line breaks>\n>>>\n'
       + '(several blocks = several files; nothing is written until the user approves)\n'
-      + 'Tools (paths are relative to the project folder): proj_ls|<path>  proj_read|<path>  proj_rm|<path>  proj_open|<path>\n'
+      + 'Tools (paths are relative to the project folder): proj_ls|<path>  proj_read|<path>  proj_rm|<path>  proj_open|<path>  proj_run|<path>\n'
+      + 'proj_run actually EXECUTES a file and returns its stdout/stderr — use it to test and debug your own scripts (.py .js .mjs .cjs .bat .cmd .ps1) and then fix them. For .html use proj_open (browser) instead.\n'
       + 'proj_open opens a file with the default app — for .html that is the browser, which is how you "run" a web app.\n'
       + 'Whenever you build an interface, follow your 「界面风格」 skill. Keep apps self-contained: one HTML file when possible, no CDN, no external images.\n';
   }

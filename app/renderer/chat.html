@@ -29,13 +29,13 @@
       <option value="cet6">六级词汇</option>
     </select>
 
-    <label>AI 助手权限（操控电脑；「完全权限」含屏幕共享并自动执行、不再逐条确认）</label>
+    <label>AI 助手权限（操控电脑。写文件、运行脚本这类会在下面这几档要求你逐条确认；只有「完全权限」不再确认）</label>
     <select id="assistant">
       <option value="off">关闭</option>
       <option value="read">只读 · 可查看文件/列目录</option>
-      <option value="normal">常规 · 可打开网页/应用/文件</option>
+      <option value="normal">常规 · 打开文件/网页、写文件、运行脚本（都要你确认）</option>
       <option value="web">网页操控 · 自动打开页面/点击/输入/抓取</option>
-      <option value="full">完全权限 · 含屏幕共享，操作自动执行</option>
+      <option value="full">完全权限 · 含屏幕共享/写文件/执行脚本，全部自动执行不再确认</option>
     </select>
     <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
       <input type="checkbox" id="visionOn" style="width:auto"> 启用视觉模型「看画面」（会花 token；不勾就用本地 OCR 读文字，免费）
