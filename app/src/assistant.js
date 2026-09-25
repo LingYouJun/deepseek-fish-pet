@@ -85,11 +85,11 @@ async function run(tool, arg) {
 
   if (tool === 'screen_look') {
     const cap = await captureScreen();
-    const question = arg || '看这张屏幕截图，用简短中文描述画面，并指出主要可点击元素的位置坐标（x,y，基于 1280x720 截图）。';
+    const question = arg || '看这张屏幕截图，用一句话说明画面，并给出主要可点击元素的位置坐标（x,y，基于 1280x720 截图）。不要长篇描述。';
     let text = '';
     let usedVision = false;
     try {
-      text = await vision.describe(config.load(), cap.dataUrl, question);
+      text = await vision.describe(config.load(), cap.dataUrl, question, 'low');
       usedVision = true;
     } catch (e) {
       text = '';
