@@ -1,7 +1,7 @@
 const { app, shell, desktopCapturer, screen } = require('electron');
 const fs = require('fs');
 const path = require('path');
-const { spawnSync } = require('child_process');
+const { spawn } = require('child_process');
 const web = require('./web');
 const screenstream = require('./screenstream');
 const input = require('./input');
@@ -57,23 +57,65 @@ async function captureScreenFallback() {
   let src = sources[0];
   const match = sources.find((s) => s.display_id === String(primary.id));
   if (match) src = match;
-  const png = src.thumbnail.toPNG();
+  /* 关键：整条链路（提示词、input.norm）都约定坐标空间是 1280x720，
+     而回退路径原来返回的是物理分辨率（1920x1080 / 2560x1440）→ 模型按图上的像素报坐标
+     会被 norm() 静默钳到屏幕右下角，点错位置还回"✅ 已点击"。
+     这里直接缩放到 1280x720，让两条路径的坐标空间完全一致。 */
+  const png = src.thumbnail.resize({ width: 1280, height: 720 }).toPNG();
 
   const p = path.join(shotsDir(), 'screen-' + Date.now() + '.png');
   fs.writeFileSync(p, png);
-  return { path: p, width: tw, height: th, dataUrl: 'data:image/png;base64,' + png.toString('base64') };
+  return { path: p, width: 1280, height: 720, dataUrl: 'data:image/png;base64,' + png.toString('base64') };
 }
 
-/* Windows 自带 OCR（离线，支持中英文）。失败返回空串，不影响截图展示。 */
+/* Windows 自带 OCR（离线，支持中英文）。失败返回空串，不影响截图展示。
+ *
+ * 必须**异步**：以前用 spawnSync，主进程事件循环被整个占住——实测单次 420~570ms，
+ * 期间宠物窗和对话窗完全点不动；多步看屏任务会一路卡顿。现在改成 spawn + Promise，
+ * 上限仍是 25 秒，但不再阻塞任何东西。 */
 function ocr(pngPath) {
-  try {
+  return new Promise((resolve) => {
     const script = path.join(__dirname, '..', 'scripts', 'ocr.ps1');
-    const r = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-Path', pngPath],
-      { encoding: 'utf8', timeout: 25000, windowsHide: true });
-    const out = String((r.stdout || '') + '\n' + (r.stderr || '')).trim();
-    // 过滤掉 powershell 报错噪声，只要文字
-    return out || '';
-  } catch { return ''; }
+    let child, done = false, out = '', err = '';
+    const fin = (t) => { if (!done) { done = true; resolve(t || ''); } };
+    try {
+      child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-Path', pngPath],
+        { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch { return fin(''); }
+    const timer = setTimeout(() => { try { child.kill(); } catch {} fin(''); }, 25000);
+    child.stdout.on('data', (d) => { if (out.length < 40000) out += d; });
+    child.stderr.on('data', (d) => { if (err.length < 4000) err += d; });
+    child.on('error', () => { clearTimeout(timer); fin(''); });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      /* 以前把 stdout + stderr 直接拼起来返回，于是 powershell 的报错文本会被当成
+         "屏幕上识别到的文字"喂给模型（第 89 / 115 行）。现在失败一律当"没识别到"，
+         并且把混在 stdout 里的报错行剔掉。 */
+      if (code !== 0) {
+        if (err.trim()) { try { console.error('[ocr] ' + err.slice(0, 300)); } catch {} }
+        return fin('');
+      }
+      const lines = String(out).split(/\r?\n/).filter((l) =>
+        !/^\s*(At line:|\+ |CategoryInfo|FullyQualifiedErrorId|Exception|MethodInvocationException|MissingMethodException)/.test(l));
+      fin(lines.join('\n').trim());
+    });
+  });
+}
+
+/* 只读文件开头 n 个字符（用 fd 定位读，不把整个文件读进内存）。
+   截断时按字符边界收一下，避免最后半个多字节字符变乱码。 */
+function readHead(file, n) {
+  const cap = Math.max(100, Number(n) || 3000);
+  const fd = fs.openSync(file, 'r');
+  try {
+    const buf = Buffer.alloc(cap * 4);            // 按 UTF-8 最坏 4 字节/字符留量
+    const got = fs.readSync(fd, buf, 0, buf.length, 0);
+    let s = buf.slice(0, got).toString('utf8');
+    if (s.length > cap) s = s.slice(0, cap);
+    return s + (got >= buf.length ? '\n…（文件很大，只读了开头）' : '');
+  } finally {
+    try { fs.closeSync(fd); } catch {}
+  }
 }
 
 async function run(tool, arg) {
@@ -84,7 +126,7 @@ async function run(tool, arg) {
 
   if (tool === 'screen_shot') {
     const cap = await captureScreen();
-    const text = ocr(cap.path);
+    const text = await ocr(cap.path);
     const result = '🖥 已截取屏幕（' + cap.width + '×' + cap.height + '）\n'
       + (text ? '屏幕上识别到的文字：\n' + text : '（未识别到文字；截图已展示在对话里，你可以自己看）');
     return { text: result, image: cap.dataUrl, path: cap.path, ocr: text };
@@ -111,7 +153,7 @@ async function run(tool, arg) {
       }
     }
     if (!text) {
-      const t = ocr(cap.path);
+      const t = await ocr(cap.path);
       text = t ? ('屏幕上识别到的文字：\n' + t) : '（未启用视觉模型，且未识别到文字）';
     }
     return { text: (usedVision ? '👁 视觉模型：\n' : '🖥 屏幕文字：\n') + text, image: cap.dataUrl, path: cap.path, action };
@@ -126,6 +168,8 @@ async function run(tool, arg) {
     return `✅ 已打开网页：${arg}`;
   }
   if (tool === 'open_path') {
+    /* 注意：这里用系统默认处理器打开，**等于能运行任意程序**（.exe/.bat/.vbs/.hta 都会被执行），
+       normal 档就能用。proj_run 的"解释器白名单"只约束 proj_run，不代表这一档只能跑白名单内的东西。 */
     const err = await shell.openPath(arg);
     if (err) throw new Error(err);
     return `✅ 已打开：${arg}`;
@@ -135,7 +179,10 @@ async function run(tool, arg) {
     return `📂 ${arg}（${items.length} 项）：\n${items.join('\n')}`;
   }
   if (tool === 'read_file') {
-    const text = fs.readFileSync(arg, 'utf8').slice(0, 3000);
+    /* 只读前 3000 字。以前是 readFileSync 整读再 slice——模型给个大文件路径
+       （C:\Windows\Logs\CBS\CBS.log、视频、hiberfil.sys）主进程就同步卡死+内存暴涨，
+       而且 read 档就能调用，用户很容易点"允许"。 */
+    const text = readHead(arg, 3000);
     return `📄 ${arg}：\n${text}`;
   }
 

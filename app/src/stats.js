@@ -91,14 +91,17 @@ function nudge(key, base, trigger, reason, noCap) {
   const cur = Number(v[key]) || NEUTRAL;
   const ck = key + ':' + (trigger || 'x');
   const n = (Number(v.counts[ck]) || 0) + 1;                      // 第几次
+  /* 递减权重自带 MIN_W 下限，这里**不要再对 delta 兜一次底**：
+     那样会把 inertia 的"×0.5"直接覆盖掉（同一 key 当天第 27 次以上时惯性失效）。 */
   let delta = inertia(key, cur, Number(base) * weight(n));
-  if (Math.abs(delta) < Math.abs(Number(base)) * MIN_W) delta = Math.sign(base) * Math.abs(Number(base)) * MIN_W;
 
   const dayPos = key + ':#day+', dayNeg = key + ':#day-';
   const usedP = Number(v.counts[dayPos]) || 0, usedN = Number(v.counts[dayNeg]) || 0;
   if (!noCap) {
-    if (delta > 0 && usedP >= DAILY_CAP) delta = 0;          // 日上限：正负分开算，防止对冲刷额度
-    if (delta < 0 && usedN >= DAILY_CAP) delta = 0;
+    /* 日上限要**削到剩余额度**，而不是"到点了就整笔归零"：
+       以前判断 usedP >= 1.5 才归零，于是最后一笔可以一次把用量顶到 2.1。 */
+    if (delta > 0) delta = Math.min(delta, Math.max(0, DAILY_CAP - usedP));
+    else if (delta < 0) delta = -Math.min(-delta, Math.max(0, DAILY_CAP - usedN));
   }
 
   const next = clamp(key, round2(cur + delta));

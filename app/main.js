@@ -34,6 +34,8 @@ const loadPersona = () => persona.load();   // 人设现在放在 userData（AI 
 
 /* 记忆系统：依赖注入（记忆层不硬依赖 llm/config/persona，方便以后替换或单测） */
 memory.init({ llm, config, persona: loadPersona, skillCatalog: () => skills.catalog() });
+/* 存储层出错（读坏文件、写失败）必须留痕：以前这些全是静默的，出事了完全查不到 */
+memory.bus.on('store:error', (e) => dbg('[store] ' + ((e && e.msg) || '')));
 
 const VOCAB = {
   high_school: 'high-school level (simple, common words)',
@@ -272,11 +274,21 @@ function scheduleSavePos() {
     savePosition(x, y);
   }, 400);
 }
-/* 拖拽：渲染层 mousemove 只当触发器；坐标由主进程读 getCursorScreenPoint()，
-   那是物理光标的真值，不受窗口移动影响 → 不会漂移。 */
+/* 拖拽：跟随由**主进程定时器**驱动，渲染层只负责"保活"。
+ *
+ * 以前是：渲染层 mousemove → IPC → 主进程读光标 → setPosition，一次一个来回，而且
+ * 完全不节流。鼠标一快，mousemove 事件和 IPC 就排起队，窗口永远落后于光标（跟不上、
+ * 越拖越远）。现在主进程每 8ms 直接读真实光标算位置，不再依赖事件到达速率；
+ * 渲染层只在拖拽期间发心跳，用来判断"是不是已经松手了"。 */
 let dragWin = null, dragAnchor = null, dragLast = null;
+let dragTimer = null, dragSeenAt = 0;
+const DRAG_TICK_MS = 8;
+const DRAG_ALIVE_MS = 700;      // 超过这么久没收到心跳 → 认为松手事件丢了，自己收尾
+const DRAG_HZ_MS = 100;
+
 function dragStep() {
   if (!petWin || petWin.isDestroyed() || !dragWin || !dragAnchor) return;
+  if (Date.now() - dragSeenAt > DRAG_ALIVE_MS) { endDrag(); return; }
   const c = screen.getCursorScreenPoint();
   const tx = Math.round(dragWin.x + (c.x - dragAnchor.x));
   const ty = Math.round(dragWin.y + (c.y - dragAnchor.y));
@@ -284,15 +296,26 @@ function dragStep() {
   dragLast = { x: tx, y: ty };
   petWin.setPosition(tx, ty);
 }
-ipcMain.on('drag-start', () => {
+function beginDrag() {
   if (!petWin || petWin.isDestroyed()) return;
   const [x, y] = petWin.getPosition();
   dragWin = { x, y };
   dragAnchor = screen.getCursorScreenPoint();
   dragLast = null;
-});
-ipcMain.on('drag-tick', () => dragStep());
-ipcMain.on('drag-end', () => { dragWin = null; dragAnchor = null; dragLast = null; scheduleSavePos(); });
+  dragSeenAt = Date.now();
+  clearInterval(dragTimer);
+  dragTimer = setInterval(dragStep, DRAG_TICK_MS);
+  dragStep();
+}
+function endDrag() {
+  clearInterval(dragTimer);
+  dragTimer = null;
+  dragWin = null; dragAnchor = null; dragLast = null;
+  scheduleSavePos();
+}
+ipcMain.on('drag-start', () => beginDrag());
+ipcMain.on('drag-tick', () => { dragSeenAt = Date.now(); });   // 只当心跳
+ipcMain.on('drag-end', () => endDrag());
 ipcMain.on('quit', () => app.quit());
 /* 语音/识别失败等错误写进 debug.log —— 方便远程收集试用者的现场 */
 ipcMain.on('log:error', (_e, m) => dbg('[r] ' + String(m).slice(0, 500)));
@@ -614,7 +637,7 @@ ipcMain.on('pet:hitmask', (_e, info) => {
   } catch { hitInfo = null; }
 });
 ipcMain.on('pet:hold', (_e, on) => { holdInteractive = !!on; if (on) applyIgnore(false); });
-ipcMain.on('pet:setInteractive', (_e, on) => { applyIgnore(!on); });
+ipcMain.on('pet:setInteractive', (_e, on) => { if (holdInteractive) return; applyIgnore(!on); });   // 按住期间不许被穿透打断
 
 function solidAtCursor() {
   if (!hitInfo || !hitInfo.width || !hitInfo.height) return true;   // 还没掩码时保守：接鼠标
@@ -689,9 +712,10 @@ const ARCHIVE_SYS = `你是一个"知识库管理员"。任务：把一条经验
 
 只做归档，不要闲聊、不要解释。`;
 
-/* 解析 WRITE 块（多行内容） */
+/* 解析 WRITE 块（多行内容）
+   结束标记必须单独成行：非贪婪到第一个 `>>>` 会被内容里的 `a >>> 2` 之类提前截断。 */
 function parseWriteBlock(raw) {
-  const m = String(raw || '').match(/WRITE\s*[:：]\s*([^\r\n]+)[\s\S]*?<<<[\r\n]+([\s\S]*?)[\r\n]*>>>/);
+  const m = String(raw || '').match(/WRITE\s*[:：]\s*([^\r\n]+)[\s\S]*?<<<[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*>>>[ \t]*(?=\r?\n|$)/);
   if (!m) return null;
   const p = m[1].trim().replace(/^["'`]|["'`]$/g, '');
   if (!p) return null;
@@ -918,7 +942,12 @@ if (!gotLock) {
         stats.ensureBaseline(loadPersona());   // 首次 / 人设变了 → 按人设给基线
         const st0 = stats.load();
         const awayH = st0.lastSeen ? (Date.now() - st0.lastSeen) / 3600000 : 0;
-        if (awayH > 20) { stats.nudge('dependency', 0.6, 'away', '隔了好久没见，想主人了'); stats.nudge('mood', -0.8, 'away', '有点寂寞'); }
+        if (awayH > 20) {
+          stats.nudge('dependency', 0.6, 'away', '隔了好久没见，想主人了');
+          /* 心情归 mood.js 管，不在 stats.META 里 —— stats.nudge('mood', …) 只会静默 return null，
+             所以这句"有点寂寞"以前永远不生效，也没有任何报错。 */
+          try { mood.adjust({ mood: -0.8 }); } catch {}
+        }
         else if (awayH > 6) { stats.nudge('dependency', 0.3, 'away', '半天没见'); }
         const st1 = stats.load(); st1.lastSeen = Date.now(); stats.save(st1);
         const reg = stats.regress(0.2);

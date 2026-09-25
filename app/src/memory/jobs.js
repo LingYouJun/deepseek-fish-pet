@@ -65,19 +65,38 @@ async function extractFacts(llm, cfg, msgs) {
   return parseFacts(raw);
 }
 
+/* 清掉模型爱加的行首列表符号。
+   **不能**用 /^[-*•\d.、)）\s]+/ 一把梭：那样 "3月要去上海出差" 会被吃成 "月要去上海出差"，
+   "2024年换的工作" 会变成 "年换的工作"。只剥真正的列表符号和编号。 */
+function stripBullet(line) {
+  return String(line == null ? '' : line)
+    .replace(/^\s*[-*•·]\s*/, '')            // - * • ·
+    .replace(/^\s*\d+\s*[.、)）]\s*/, '')     // 1. 2、 3) 这类编号
+    .trim();
+}
+
+/* 权重解析：漏写/写空时 Number('') === 0 而 isFinite(0) 为真，
+   会被 clamp 到下限 1（本来想要 5 / 4）→ 这种要点几乎永远攒不到晋升阈值。
+   所以空串必须当"没给"处理，走 fallback。 */
+function parseWeight(seg, fallback) {
+  const s = String(seg == null ? '' : seg).replace(/[^\d.]/g, '').trim();
+  if (!s) return fallback;
+  const n = Number(s);
+  return Number.isFinite(n) ? Math.max(1, Math.min(10, n)) : fallback;
+}
+
 function parseFacts(raw) {
   const out = [];
   for (const line of String(raw || '').split(/\r?\n/)) {
-    const t = line.trim().replace(/^[-*•\d.、)）\s]+/, '');
+    const t = stripBullet(line);
     if (!t || !t.includes('|')) continue;
     const seg = t.split('|');
     const text = String(seg[0] || '').trim();
     if (!text || text.length < 2) continue;
-    const weight = Number(String(seg[1] || '').replace(/[^\d.]/g, ''));
     const tags = String(seg[2] || '').split(/[,，、]/).map((s) => s.trim()).filter(Boolean);
     out.push({
       text: text.slice(0, 200),
-      weight: Number.isFinite(weight) ? Math.max(1, Math.min(10, weight)) : 5,
+      weight: parseWeight(seg[1], 5),
       tags: tags.slice(0, 4),
     });
   }
@@ -125,17 +144,16 @@ ${cat ? '现有技能（能把经验归到某个技能就写它的 id，否则�
 function parseExperiences(raw) {
   const out = [];
   for (const line of String(raw || '').split(/\r?\n/)) {
-    const t = line.trim().replace(/^[-*•\d.、)）\s]+/, '');
+    const t = stripBullet(line);
     if (!t || !t.includes('|')) continue;
     const seg = t.split('|');
     const text = String(seg[0] || '').trim();
     if (!text || text.length < 4) continue;
-    const weight = Number(String(seg[1] || '').replace(/[^\d.]/g, ''));
     const skill = String(seg[2] || '').trim().toLowerCase();
     const tags = String(seg[3] || '').split(/[,，、]/).map((s) => s.trim()).filter(Boolean);
     out.push({
       text: text.slice(0, 300),
-      weight: Number.isFinite(weight) ? Math.max(1, Math.min(10, weight)) : 4,
+      weight: parseWeight(seg[1], 4),
       skill: (skill && skill !== 'none' && skill !== '无') ? skill : '',
       tags: tags.slice(0, 4),
     });

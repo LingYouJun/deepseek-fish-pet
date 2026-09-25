@@ -31,6 +31,7 @@ let hideTimer = null;
 let listening = true, chatOpen = false, rec = null, busy = false, curUtter = null;
 let clickCount = 0, clickTimer = null, lastMicErr = 0, pokeCount = 0, pokeTimer = null;
 let petting = false, petAccum = 0, lastPetX = 0, patCd = 0, patFired = false, feedCount = 0, feedTimer = null, holding = false;
+let partialTurn = false;   // 声明放前面：endTurn() 会复位它，不能落在 TDZ 里
 
 /* ---------------- 互动特效 ---------------- */
 function fx(emoji, x, y, cls) {
@@ -148,7 +149,7 @@ function showReply(reply, hold) {
     });
   });
   if (reply.noSpeak) { /* 流式里英文已经读过了：只更新气泡，不打断也不重读 */ }
-  else if (reply.silent) { stopSpeech(); busy = false; resumeListening(); }
+  else if (reply.silent) { stopSpeech(); endTurn(); }
   else speak(reply.en);
 }
 
@@ -175,6 +176,28 @@ function stopSpeech() {
   try { if (window.speechSynthesis) window.speechSynthesis.cancel(); } catch {}
 }
 
+/* 一轮对话的收尾统一走这里：清 busy + 复位安全兜底 + 恢复收音。
+   以前安全兜底用的是局部 const safety，而且 clearTimeout 紧跟在 await chatSend
+   之后就执行（finally），可 busy 真正是在朗读结束时才复位的 —— 朗读环节一卡
+   （ttsSpeak 长时间不返回、system voice 的 onend 不触发），busy 就永久为 true，
+   桌宠彻底不再收音、也不再响应，而且没有任何自救路径。现在兜底覆盖**整轮**。 */
+let turnSafety = null;
+function endTurn() {
+  clearTimeout(turnSafety);
+  turnSafety = null;
+  busy = false;
+  partialTurn = false;     // 流式标记必须一起复位：否则请求失败后，下一条回复会被误判成"已经读过"而不朗读
+  resumeListening();
+}
+function armTurnSafety(ms) {
+  clearTimeout(turnSafety);
+  turnSafety = setTimeout(() => {
+    if (!busy) return;
+    try { window.petAPI.logErr('turn safety: 一轮对话超时（' + ms + 'ms），强制复位'); } catch {}
+    endTurn();
+  }, ms || 90000);
+}
+
 function speakFallback(text, seq, done) {
   if (seq !== speakSeq || !window.speechSynthesis) { done(); return; }
   try {
@@ -188,11 +211,11 @@ function speakFallback(text, seq, done) {
 }
 
 async function speak(text) {
-  if (!text) { busy = false; resumeListening(); return; }
+  if (!text) { endTurn(); return; }
   pauseListening();
   stopSpeech();
   const seq = speakSeq;
-  const done = () => { if (seq === speakSeq) { busy = false; resumeListening(); } };
+  const done = () => { if (seq === speakSeq) endTurn(); };
   let ok = false;
   try {
     const cfg = await window.petAPI.configGet();
@@ -219,16 +242,13 @@ async function sendText(text) {
   if (!text || busy) return;
   busy = true;
   pauseListening();
-  const safety = setTimeout(() => { if (busy) { busy = false; resumeListening(); } }, 30000);
+  armTurnSafety(90000);
   try {
     await window.petAPI.chatSend({ text });
-    // 回复通过 onSay 展示，busy 在 speak 结束时清除
+    // 回复通过 onSay 展示，busy 在 speak 结束时清除（兜底在 armTurnSafety 里，覆盖到朗读结束）
   } catch (e) {
     showReply({ en: 'Sorry, something went wrong: ' + e.message, zh: '' }, 6000);
-    busy = false;
-    resumeListening();
-  } finally {
-    clearTimeout(safety);
+    endTurn();
   }
 }
 
@@ -336,6 +356,18 @@ function resumeListening() { if (chatOpen || busy) return; listening = true; sta
    拖拽：mousemove 只当触发器，主进程读真实光标坐标来算目标位置，
    所以窗口移动不会影响坐标（不会漂移）。 */
 let dragging = false, dragMoved = 0;
+let dragHeart = null;
+
+/* 拖拽期间的心跳：真正"跟随光标"由主进程定时器做，这里只负责告诉主进程
+   "我还按着、还在拖"。主进程靠它判断松手事件是不是丢了（失焦/焦点被抢）。 */
+function startDragHeartbeat() {
+  clearInterval(dragHeart);
+  dragHeart = setInterval(() => {
+    if (!dragging) { clearInterval(dragHeart); dragHeart = null; return; }
+    try { window.petAPI.dragTick(); } catch {}
+  }, 100);
+}
+function stopDragHeartbeat() { clearInterval(dragHeart); dragHeart = null; }
 
 pet.addEventListener('mousedown', (e) => {
   holding = true;
@@ -346,6 +378,7 @@ pet.addEventListener('mousedown', (e) => {
   } else {
     dragging = true; dragMoved = 0;                                          // 身体：按住拖窗口
     window.petAPI.dragStart();
+    startDragHeartbeat();
   }
   e.preventDefault();
 });
@@ -358,12 +391,15 @@ window.addEventListener('mousemove', (e) => {
     return;
   }
   if (!dragging) return;
+  /* 只累加位移，用来区分"拖拽"和"点一下"。
+     以前这里每次都发 dragTick → 主进程 setPosition，一次 mousemove 一个来回、
+     完全不节流，鼠标一快就排队 → 窗口跟不上光标。现在跟随交给主进程定时器。 */
   dragMoved += Math.abs(e.movementX) + Math.abs(e.movementY);
-  window.petAPI.dragTick();
 });
 window.addEventListener('mouseup', () => {
   holding = false;
   try { window.petAPI.hold(false); } catch {}
+  stopDragHeartbeat();
   if (petting) {
     petting = false;
     if (!patFired) pokeBody();          // 头部点一下 = 戳
@@ -376,6 +412,23 @@ window.addEventListener('mouseup', () => {
 });
 window.addEventListener('mouseleave', () => { try { updateHit(-1, -1); } catch {} });
 
+/* 失焦/隐藏时把"按住"状态收干净。
+   以前 blur 只复位了 holding/petting：没通知主进程、也没复位 dragging ——
+   主进程的 holdInteractive 永远停在 true，命中轮询不再让窗口穿透，
+   桌宠那块透明矩形从此挡住桌面点击；dragging 残留还会让后续 mousemove 一直调
+   dragTick，窗口跟着光标乱跳。 */
+function releasePointerState(why) {
+  if (!holding && !dragging && !petting) return;
+  const wasDragging = dragging;
+  holding = false; petting = false; dragging = false;
+  stopDragHeartbeat();
+  try { window.petAPI.hold(false); } catch {}
+  if (wasDragging) { try { window.petAPI.dragEnd(); } catch {} }
+  try { window.petAPI.logErr('pointer released by ' + why); } catch {}
+}
+window.addEventListener('blur', () => releasePointerState('blur'));
+document.addEventListener('visibilitychange', () => { if (document.hidden) releasePointerState('hidden'); });
+
 // 连点 15 下才打开对话窗口（避免误触）
 pet.addEventListener('click', () => {
   clickCount++;
@@ -385,7 +438,6 @@ pet.addEventListener('click', () => {
 });
 
 /* ---------------- 跨窗口 ---------------- */
-let partialTurn = false;
 if (window.petAPI.onSayPartial) window.petAPI.onSayPartial((d) => {
   if (!d || !d.en) return;
   partialTurn = true;
@@ -502,10 +554,6 @@ window.addEventListener('wheel', (e) => {
   if (!e.deltaY) return;
   setSize(petSize + (e.deltaY < 0 ? 16 : -16));
 }, { passive: false });
-window.addEventListener('blur', () => {
-  holding = false;
-  if (petting) petting = false;
-});
 
 /* ---------------- 外部立绘热更新（免打包换图） ---------------- */
 let artMtime = -1;

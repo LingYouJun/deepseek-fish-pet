@@ -81,6 +81,18 @@ async function consolidate(mc) {
 async function onAppStart() {
   migrate();
   session.restore();
+  /* 上次收尾做到一半就崩了/被强杀 → 把 pending 捡回来补做，别让那段对话白丢。
+     放后台跑，不拖慢启动。 */
+  try {
+    const pend = store.read(END_NS, null);
+    if (pend && Array.isArray(pend.msgs) && pend.msgs.length >= 2 && !medium.has(pend.id)) {
+      finishEnding(pend)
+        .then((r) => { try { store.write(END_NS, null); } catch {} bus.emit('session:end', Object.assign({ recovered: true }, r)); })
+        .catch(() => {});
+    } else if (pend) {
+      try { store.write(END_NS, null); } catch {}
+    }
+  } catch {}
   const mc = memCfg();
   try { permanent.decay(mc.candDays || 14, mc.candDecay || 0.8, mc.candFloor || 1); } catch {}
   try { skillmem.decay(mc.skillCandDays || 21, mc.candDecay || 0.8, mc.candFloor || 1); } catch {}
@@ -109,12 +121,53 @@ function onAssistant(rawReply, enText) {
   session.push({ role: 'assistant', content: String(rawReply || ''), compact: COMPACT_MARK + String(enText || '') });
 }
 
-/* 会话收尾：写中期摘要 + 抽永久记忆候选 → 清草稿 */
+/* 会话收尾：写中期摘要 + 抽永久记忆候选 → 清草稿
+ *
+ * 两个坑都在这里堵掉：
+ * ① 重入：以前没有"正在收尾"的保护，连点「结束本次会话」或"结束完马上退出"
+ *    会并发跑两次 → 8 次模型调用、同 id 的中期摘要写两条、候选权重记两次提前晋升。
+ * ② 丢回合：以前 session.clear() 排在 4 个并行模型调用**之后**，而那几秒里
+ *    输入框照常可用，用户新说的话会被 push 进旧 state，随后一起被 clear() 丢掉。
+ * 现在改成：先快照 → 立刻把快照交给 pending 命名空间并清空当前会话（新话进新会话）
+ * → 再慢慢做摘要。中途崩溃的话，下次启动会把 pending 捡回来补做。 */
+const END_NS = 'ending';
+let ending = null;
+
 async function onSessionEnd() {
-  const msgs = session.all();
+  if (ending) return ending;                       // 重入：复用同一次收尾
+  ending = doSessionEnd().finally(() => { ending = null; });
+  return ending;
+}
+
+async function doSessionEnd() {
   const info = session.info();
-  if (msgs.length < 2) { session.clear(); return { ok: true, skipped: true }; }
-  if (medium.has(info.id)) { session.clear(); return { ok: true, duplicate: true }; }
+  const msgs = session.all().slice();              // ① 快照（复制，之后新回合不再混进来）
+
+  if (msgs.length < 2) {
+    session.clear();
+    try { store.write(END_NS, null); } catch {}
+    return { ok: true, skipped: true };
+  }
+  if (medium.has(info.id)) {
+    session.clear();
+    try { store.write(END_NS, null); } catch {}
+    return { ok: true, duplicate: true };
+  }
+
+  // ② 先把草稿落到 pending 并清空会话：这几秒里用户新说的话会进**新会话**，不会被丢掉
+  try { store.write(END_NS, { id: info.id, startedAt: info.startedAt, msgs, at: Date.now() }); } catch {}
+  session.clear();
+
+  const r = await finishEnding({ id: info.id, startedAt: info.startedAt, msgs });
+  try { store.write(END_NS, null); } catch {}
+  return r;
+}
+
+/* 真正的收尾工作（也用于启动时补做上次没收完的） */
+async function finishEnding(p) {
+  const msgs = Array.isArray(p && p.msgs) ? p.msgs : [];
+  if (msgs.length < 2) return { ok: true, skipped: true };
+  const info = { id: (p && p.id) || '', startedAt: (p && p.startedAt) || Date.now() };
 
   const mc = memCfg();
   const c = cfg();
@@ -156,6 +209,10 @@ async function onSessionEnd() {
     bus.emit('memory:skillmem', r);
   }
 
+  /* 先把"非今天"的中期摘要熔炼成日记，**再**按条数裁剪。
+     以前 consolidate 只在启动时跑一次，而裁剪每次收尾都跑 —— 不重启连用几天，
+     早期摘要会被 prune 直接删掉，永远进不了日记层。 */
+  try { await consolidate(mc); } catch {}
   applyRetention(mc);
 
   /* 内在数值的变化（长期陪伴向：绝大多数是 0，单次最多 ±2） */
@@ -169,7 +226,6 @@ async function onSessionEnd() {
     bus.emit('stats:judged', statChange);
   }
 
-  session.clear();
   bus.emit('session:end', { id: info.id, extracted, learned, statChange });
   return { ok: true, extracted, learned, statChange };
 }
@@ -209,7 +265,7 @@ function pickHistory(budgetTokens, fullTurns) {
 }
 
 module.exports = {
-  init, onAppStart, onTurn, onAssistant, onSessionEnd, buildContext, pickHistory, judgeStatsNow,
+  init, onAppStart, onTurn, onAssistant, onSessionEnd, finishEnding, buildContext, pickHistory, judgeStatsNow,
   migrate, dayStr,
   session, medium, long, permanent, skillmem, stats, tokens, bus, jobs,
 };

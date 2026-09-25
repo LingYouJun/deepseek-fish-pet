@@ -381,12 +381,28 @@ $('diaryBtn').addEventListener('click', () => { $('diary').classList.remove('hid
 $('diaryClose').addEventListener('click', () => $('diary').classList.add('hidden'));
 
 /* ---------------- 结束本次会话 ---------------- */
+let endBusy = false;
 $('endBtn').addEventListener('click', async () => {
+  if (endBusy) return;                      // 连点保护：每次点击都会跑一遍 4 个模型调用 + 记账
   const ok = confirm('结束本次会话？\n\n我会把这段对话收进记忆（写摘要 + 抽取长期要点），然后关掉对话窗。\n（平时点右上角 × 只会最小化，不会丢会话）');
   if (!ok) return;
+  endBusy = true;
   const btn = $('endBtn');
+  const old = btn.textContent;
+  btn.disabled = true;
   btn.textContent = '⏳';
-  try { await window.petAPI.memoryEndSession(); } catch (e) {}
+  /* 失败必须说出来：以前 catch 是空的、而且 main 那边是 return {ok:false} 而不是抛错，
+     于是"写摘要 + 抽要点"实际没做，窗口照样关掉，用户以为已经保存了。 */
+  const fail = (why) => {
+    endBusy = false; btn.disabled = false; btn.textContent = old;
+    try { alert('收尾失败：' + why + '\n\n这段对话还在，没有丢。可以再试一次。'); } catch {}
+  };
+  try {
+    const r = await window.petAPI.memoryEndSession();
+    if (r && r.ok === false) return fail(r.error || '未知原因');
+  } catch (e) {
+    return fail((e && e.message) || String(e));
+  }
   window.petAPI.chatClose();
 });
 
@@ -433,9 +449,18 @@ function renderCard() {
   const good = $('vGood'); if (good) good.addEventListener('click', () => markReview(true));
   const bad = $('vBad'); if (bad) bad.addEventListener('click', () => markReview(false));
 }
+let reviewBusy = false;
 async function markReview(ok) {
-  await window.petAPI.vocabReview(reviewQueue[reviewIdx].w, ok);
-  reviewIdx++; reviewShown = false; renderCard();
+  /* 连点保护：await 期间按钮既没禁用也没重绘，快速双击会把同一个单词记两次复习、
+     reviewIdx 自增两次，下一张卡直接被跳过。 */
+  if (reviewBusy) return;
+  reviewBusy = true;
+  try {
+    await window.petAPI.vocabReview(reviewQueue[reviewIdx].w, ok);
+    reviewIdx++; reviewShown = false; renderCard();
+  } finally {
+    reviewBusy = false;
+  }
 }
 
 $('vocabBtn').addEventListener('click', () => { $('vocab').classList.remove('hidden'); renderVocab(); });
@@ -734,6 +759,8 @@ $('vSave').addEventListener('click', async () => {
 /* ---------------- 麦克风：点击发送 / 上滑后点任意位置取消 ---------------- */
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 let rec = null, recCanceled = false, recFinal = '', recInterim = '', recStartY = 0, recording = false, cancelMode = false, finalized = false;
+let recStarting = false;   // 正在启动录音（getUserMedia/pushStart 还没返回）
+let recAbort = false;      // 启动期间就被要求停止
 let recMode = '';        // whisper = 本地离线识别 / web = 浏览器在线识别
 let asrBusy = false;     // 正在送本地识别（避免重复触发）
 
@@ -839,29 +866,53 @@ async function asrInfo() {
   try { return await window.petAPI.asrStatus(); } catch { return null; }
 }
 async function startTalk() {
-  if (recording || asrBusy) return;
-  if (window.PetASR && window.PetASR.supported()) {
-    const st = await asrInfo();
-    if (st && st.hasModel && st.binary) {
-      try {
-        await window.PetASR.pushStart();
-        recording = true; recMode = 'whisper'; cancelMode = false; finalized = false;
-        setRecUI(true);
-        $('recHint').textContent = '松开发送 · 本地识别（离线）';
-        return;
-      } catch (e) {
-        try { window.petAPI.logErr('whisper pushStart fail: ' + ((e && e.message) || e)); } catch {}
+  /* 启动中标志：`recording` 只能在 await 之后才置 true，所以两个并发调用
+     （快速连按空格 / 双击 🎤）以前都能穿过守卫，创建两条 MediaStream + AudioContext，
+     被覆盖的那条既不 disconnect 也不 stop → 麦克风常驻、AudioContext 泄漏。 */
+  if (recording || asrBusy || recStarting) return;
+  recStarting = true;
+  recAbort = false;
+  try {
+    if (window.PetASR && window.PetASR.supported()) {
+      const st = await asrInfo();
+      if (recAbort) return;                       // 启动期间已经松手 → 别再开录音
+      if (st && st.hasModel && st.binary) {
+        try {
+          await window.PetASR.pushStart();
+          /* 关键：启动（getUserMedia）期间用户就松手了 → 这里必须自己把录音关掉。
+             以前 stopTalk 会因为 recording 还是 false 直接 return，而紧接着这里把
+             recording 置 true —— 录音就永久开着，而且空格再也停不下来（spaceRec 已消费、
+             keydown 又被 recording 挡住），只能去点 🎤。 */
+          if (recAbort) {
+            // 启动期间就被要求停：把刚开的流关掉，并把 UI 复位干净（别留上一次的提示文字）
+            try { window.PetASR.pushStop(); } catch {}
+            try { setRecUI(false); $('recHint').textContent = ''; } catch {}
+            return;
+          }
+          recording = true; recMode = 'whisper'; cancelMode = false; finalized = false;
+          setRecUI(true);
+          $('recHint').textContent = '松开发送 · 本地识别（离线）';
+          return;
+        } catch (e) {
+          try { window.petAPI.logErr('whisper pushStart fail: ' + ((e && e.message) || e)); } catch {}
+        }
+      } else if (st && st.binary && !st.hasModel) {
+        showMicPerm('');
+        $('micPermMsg').textContent = '本地语音模型还没下载（点「⬇ 下载语音模型」，约 75MB，只需一次）。这次先用在线识别。';
       }
-    } else if (st && st.binary && !st.hasModel) {
-      showMicPerm('');
-      $('micPermMsg').textContent = '本地语音模型还没下载（点「⬇ 下载语音模型」，约 75MB，只需一次）。这次先用在线识别。';
     }
+    if (recAbort) return;
+    recMode = 'web';
+    startRec();
+    if (recording) $('recHint').textContent = '松开发送 · 在线识别';
+  } finally {
+    recStarting = false;
   }
-  recMode = 'web';
-  startRec();
-  if (recording) $('recHint').textContent = '松开发送 · 在线识别';
 }
 async function stopTalk(cancel) {
+  /* 启动还没完成就松手：只打取消标记，由 startTalk 自己收尾（pushStop 关掉刚开的流）。
+     以前这里直接 return，于是"轻点空格"必然把录音留成永久开启。 */
+  if (recStarting) { recAbort = true; return; }
   if (!recording || asrBusy) return;
   if (recMode !== 'whisper') { recCanceled = !!cancel; finalize(); return; }
   let wav = null;
@@ -1038,9 +1089,15 @@ document.addEventListener('keydown', (e) => {
   if (e.code !== 'Space' && e.key !== ' ') return;
   if (e.repeat) return;
   const t = e.target;
-  const typing = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA');
-  if (typing && t.value) return;     // 正在打字 → 空格就是空格
-  if (recording || asrBusy) return;  // 已经在录 / 正在识别
+  const tag = t && t.tagName;
+  const editable = tag === 'INPUT' || tag === 'TEXTAREA' || !!(t && t.isContentEditable);
+  const chatInput = !!(t && t.id === 'input');
+  /* 只有在"没落在输入框"或"落在聊天输入框且没在打字"时，空格才是按住说话。
+     以前是 `if (typing && t.value) return;` —— 只判有没有内容，于是设置/人设/音色/游戏任务
+     那些**空**输入框里按空格会被 preventDefault 吞掉并开始录音，空格打不进去还发出一条消息。 */
+  if (editable && !chatInput) return;
+  if (chatInput && t.value) return;      // 聊天框里正在打字 → 空格就是空格
+  if (recording || asrBusy || recStarting) return;
   e.preventDefault();
   spaceRec = true;
   startTalk();

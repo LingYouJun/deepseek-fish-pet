@@ -27,10 +27,13 @@
       "preload.js",
       "persona.json",
       "src/**/*",
+      "skills/**/*",
+      "scripts/**/*",
       "vendor/**/*",
       "renderer/**/*",
       "assets/**/*",
       "!**/*.md",
+      "skills/**/*.md",
       "!**/shots/**",
       "!**/*.log"
     ],

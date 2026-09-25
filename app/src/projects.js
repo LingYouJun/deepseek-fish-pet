@@ -24,7 +24,31 @@ function safePath(rel) {
   const cleaned = String(rel == null ? '' : rel).replace(/\\/g, '/').replace(/^\/+/, '').trim();
   const full = path.resolve(base, cleaned);
   if (full !== base && !full.startsWith(base + path.sep)) throw new Error('路径越界（只能在项目文件夹里操作）');
+  /* 上面只挡了 ".."、绝对路径、UNC、C:evil 这类字符串花招，挡不住**重解析点**：
+     AI 可以用 proj_run 跑一个 `mklink /J out C:\Users` 的 bat，
+     之后 proj_ls / proj_read / WRITE 块全都会跟着 junction 落到项目目录外。
+     所以这里再把"真实路径"校验一遍。 */
+  const real = realPathOf(full);
+  const realBase = realPathOf(base);
+  if (real && realBase && real !== realBase && !real.startsWith(realBase + path.sep)) {
+    throw new Error('路径越界（解析链接/联结点后落在项目文件夹外）');
+  }
   return full;
+}
+
+/* 取真实路径：从最深的"已存在祖先"开始 realpath，再把后面还不存在的尾巴接回去 */
+function realPathOf(p) {
+  let cur = p, tail = '';
+  for (let i = 0; i < 40; i++) {
+    try { return tail ? path.join(fs.realpathSync(cur), tail) : fs.realpathSync(cur); }
+    catch {
+      const parent = path.dirname(cur);
+      if (parent === cur) return null;
+      tail = tail ? path.join(path.basename(cur), tail) : path.basename(cur);
+      cur = parent;
+    }
+  }
+  return null;
 }
 
 function ls(rel) {
@@ -83,10 +107,13 @@ async function open(rel) {
   return { path: String(rel) };
 }
 
-/* 解析回复里的 WRITE 块（可能多个） */
+/* 解析回复里的 WRITE 块（可能多个）
+   结束标记必须是**单独一行**的 >>>：以前用非贪婪 `([\s\S]*?)…>>>`，
+   内容里只要出现 `>>>`（JS 里 `a >>> 2` 非常常见）就会提前结束，
+   文件被静默截断，工具还回"已写入 N 字节"，模型以为自己写对了。 */
 function parseWriteBlocks(raw) {
   const out = [];
-  const re = /<<<\s*WRITE\s*[:：]\s*([^\r\n]+?)\s*\r?\n([\s\S]*?)\r?\n?\s*>>>/g;
+  const re = /<<<\s*WRITE\s*[:：]\s*([^\r\n]+?)\s*\r?\n([\s\S]*?)\r?\n[ \t]*>>>[ \t]*(?=\r?\n|$)/g;
   let m;
   while ((m = re.exec(String(raw || '')))) {
     const p = String(m[1]).trim().replace(/^["'`]|["'`]$/g, '');
@@ -104,6 +131,22 @@ function openFolder(rel) { return shell.openPath(rel ? safePath(rel) : rootDir()
  *   full 完全权限 → 自动执行、不再确认
  */
 const { spawn } = require('child_process');
+const { StringDecoder } = require('string_decoder');
+
+const MAX_OUT = 200000;   // 累积输出上限（字符）：以前是等进程结束才截断，死循环 print 能把内存顶到 GB 级
+
+/* 杀**整棵**进程树：child.kill() 只杀直接子进程，而 .bat/.ps1 里再起的 python/node
+   会变成孤儿继续跑（占 CPU/端口），应用既回收不了也管不到。 */
+function killTree(child) {
+  try {
+    if (process.platform === 'win32' && child.pid) {
+      spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+    } else {
+      child.kill('SIGKILL');
+    }
+  } catch {}
+  try { child.kill(); } catch {}
+}
 
 const RUNNERS = {
   '.py': [['python', (p) => [p]], ['py', (p) => [p]]],
@@ -134,8 +177,20 @@ function run(rel, timeoutMs) {
     const cwd = path.dirname(p);
     const t0 = Date.now();
     const limit = Math.max(3000, Math.min(300000, Number(timeoutMs) || 60000));
-    let out = '', done = false;
+    let out = '', done = false, cut = false;
     const finish = (v) => { if (!done) { done = true; resolve(v); } };
+    /* 一边收一边就封顶：StringDecoder 保证多字节字符跨块不被切开（以前 out += d
+       是逐块隐式 toString，中文/emoji 在分块边界会变 U+FFFD 乱码）。 */
+    const dec = new StringDecoder('utf8');
+    const take = (d) => {
+      if (cut) return;
+      const s = dec.write(d);
+      if (out.length + s.length > MAX_OUT) {
+        out += s.slice(0, Math.max(0, MAX_OUT - out.length));
+        cut = true;
+      } else out += s;
+    };
+    const tailNote = () => (cut ? '\n（输出过多，已提前停止累积）' : '');
 
     const tryAt = (i) => {
       if (i >= cands.length) return reject(new Error('没找到可用的解释器（试过：' + cands.map((c) => c[0]).join(' / ') + '）'));
@@ -145,20 +200,20 @@ function run(rel, timeoutMs) {
         child = spawn(cmd, mk(p), { cwd, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
       } catch (e) { return tryAt(i + 1); }
       const timer = setTimeout(() => {
-        try { child.kill(); } catch {}
-        finish({ path: String(rel), code: -1, timeout: true, ms: Date.now() - t0, output: clipOut(out) + '\n（超过 ' + Math.round(limit / 1000) + ' 秒，已强制结束）' });
+        killTree(child);
+        finish({ path: String(rel), code: -1, timeout: true, ms: Date.now() - t0, output: clipOut(out) + tailNote() + '\n（超过 ' + Math.round(limit / 1000) + ' 秒，已连子进程一起强制结束）' });
       }, limit);
-      child.stdout.on('data', (d) => { out += d; });
-      child.stderr.on('data', (d) => { out += d; });
+      child.stdout.on('data', take);
+      child.stderr.on('data', take);
       child.on('error', (e) => {
         clearTimeout(timer);
         if (done) return;
-        if (e && e.code === 'ENOENT') { out = ''; return tryAt(i + 1); }   // 解释器不在，换下一个
+        if (e && e.code === 'ENOENT') { out = ''; cut = false; return tryAt(i + 1); }   // 解释器不在，换下一个
         done = true; reject(new Error('启动失败：' + ((e && e.message) || e)));
       });
       child.on('close', (code) => {
         clearTimeout(timer);
-        finish({ path: String(rel), code, timeout: false, ms: Date.now() - t0, output: clipOut(out) || '(程序没有任何输出)' });
+        finish({ path: String(rel), code, timeout: false, ms: Date.now() - t0, output: clipOut(out) + tailNote() || '(程序没有任何输出)' });
       });
     };
     tryAt(0);
