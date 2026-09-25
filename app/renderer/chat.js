@@ -305,6 +305,15 @@ async function runTask(msgEl, action, depth) {
   if (depth > MAX_STEPS) { addSys('⏸ 已达到本任务最大步数（' + MAX_STEPS + '），先停下来'); return; }
   const r = await execAction(action);
   if (!r) return;   // 拒绝 / 失败就中断
+  // 视觉一步到位：工具（如 screen_look）直接给出了下一步动作，就跳过文本模型，直接执行
+  if (r.action) {
+    const box = document.createElement('div');
+    box.className = 'msg sys';
+    box.textContent = '🤖 下一步：' + r.action.tool + (r.action.arg ? ' ' + r.action.arg : '');
+    $('msgs').appendChild(box); scroll();
+    renderAction(box, r.action, () => runTask(box, r.action, depth + 1), () => {});
+    return;
+  }
   let next;
   try {
     next = await window.petAPI.chatContinue({ tool: action.tool, arg: action.arg, result: r.result });

@@ -88,11 +88,17 @@ async function run(tool, arg) {
     const cfg = config.load();
     let text = '';
     let usedVision = false;
+    let action = null;
     if (cfg.visionEnabled) {
-      const question = arg || '看这张屏幕截图，用一句话说明画面，并给出主要可点击元素的位置坐标（x,y，基于 1280x720 截图）。不要长篇描述。';
+      const q = (arg || '看看屏幕') + '\n\n【输出要求】先用一句中文说明你的判断；如果这一步需要操作屏幕，就在回答的最后单独输出一行：ACTION: 工具|参数（坐标基于 1280x720 截图，左上角 0,0；工具可选 click/rclick/dclick/move/drag/scroll/type/key，例如 ACTION: click|640,360）。如果不需要操作就不要写 ACTION 行。';
       try {
-        text = await vision.describe(cfg, cap.dataUrl, question, 'low');
+        text = await vision.describe(cfg, cap.dataUrl, q, 'low');
         usedVision = true;
+        const m = text.match(/ACTION\s*[:：]\s*([a-z_]+)\s*\|\s*(.+)/i);
+        if (m) {
+          const t = m[1].trim().toLowerCase();
+          if (TOOL_TIER[t]) action = { tool: t, arg: m[2].trim() };
+        }
       } catch (e) {
         text = '';
       }
@@ -101,7 +107,7 @@ async function run(tool, arg) {
       const t = ocr(cap.path);
       text = t ? ('屏幕上识别到的文字：\n' + t) : '（未启用视觉模型，且未识别到文字）';
     }
-    return { text: (usedVision ? '👁 视觉模型：\n' : '🖥 屏幕文字：\n') + text, image: cap.dataUrl, path: cap.path };
+    return { text: (usedVision ? '👁 视觉模型：\n' : '🖥 屏幕文字：\n') + text, image: cap.dataUrl, path: cap.path, action };
   }
 
   if (!arg) throw new Error('操作参数为空');

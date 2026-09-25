@@ -586,10 +586,11 @@ ipcMain.handle('assistant:run', async (_e, a) => {
   const r = await assistant.run(a.tool, a.arg);
   const text = (r && typeof r === 'object') ? String(r.text || '') : String(r || '');
   const image = (r && typeof r === 'object') ? r.image : null;
+  const action = (r && typeof r === 'object') ? r.action : null;
   // 工具结果可能很长（列目录 / 抓网页 / 截屏文字），入库前先截断，别把上下文撑爆
   const cut = memory.tokens.clip(text, ((config.load().memory || {}).toolResultChars) || 500);
   memory.session.push({ role: 'user', content: `[系统] 我刚执行了操作 ${a.tool}（${a.arg}），结果如下：\n${cut}` });
-  return { ok: true, result: text, image };
+  return { ok: true, result: text, image, action };
 });
 
 /* 多步任务：执行完一步后，把结果喂回模型，让它决定下一步或收尾 */
