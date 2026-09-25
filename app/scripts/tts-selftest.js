@@ -1,7 +1,8 @@
 /* 本地校验 src/tts.js：绕过 electron 的 app.getPath，跑一次真实合成 + 缓存命中 */
 const Module = require('module');
+const path = require('path');
 const orig = Module._load;
-const tmp = 'C:/deepseek/desktop-pet/app/dist/tts-test';
+const tmp = path.join(__dirname, '..', 'dist', 'tts-test');   // 相对脚本位置，搬到哪都能跑
 Module._load = function (req) {
   if (req === 'electron') return { app: { getPath: () => tmp } };
   return orig.apply(this, arguments);

@@ -6,7 +6,7 @@ const Module = require('module');
 const fs = require('fs');
 const path = require('path');
 const orig = Module._load;
-const TMP = 'C:/deepseek/desktop-pet/app/dist/_memtest';
+const TMP = path.join(__dirname, '..', 'dist', '_memtest');   // 相对脚本位置，搬到哪都能跑
 fs.rmSync(TMP, { recursive: true, force: true });
 Module._load = function (req) {
   if (req === 'electron') return { app: { getPath: () => TMP } };
