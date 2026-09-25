@@ -284,6 +284,7 @@ function addShot(dataUrl) {
   $('msgs').appendChild(d); scroll();
 }
 
+// 执行一个动作：显示结果 + 截图，返回结果对象（失败返回 null）
 async function execAction(action) {
   try {
     const r = await window.petAPI.assistantRun(action);
@@ -293,11 +294,33 @@ async function execAction(action) {
   } catch (e) { addErr('助手执行失败：' + e.message); return null; }
 }
 
-// AI 助手操作请求：允许 / 拒绝；「完全权限」档自动执行、不再逐条确认
-function renderAction(msgEl, action) {
+const MAX_STEPS = 6;
+
+// 多步任务：执行 → 把结果喂回模型 → 看下一步，直到收尾或到步数上限
+async function runTask(msgEl, action, depth) {
+  if (depth > MAX_STEPS) { addSys('⏸ 已达到本任务最大步数（' + MAX_STEPS + '），先停下来'); return; }
+  const r = await execAction(action);
+  if (!r) return;   // 拒绝 / 失败就中断
+  let next;
+  try {
+    next = await window.petAPI.chatContinue({ tool: action.tool, arg: action.arg, result: r.result });
+  } catch (e) { addErr('模型继续失败：' + e.message); return; }
+  if (!next || !next.en) return;
+  const pe = addPet(next.en, next.zh, next.words);
+  renderChoices(next.choices);
+  if (next.action) {
+    // 中间步骤：只显示不朗读，继续下一步
+    renderAction(pe, next.action, () => runTask(pe, next.action, depth + 1), () => {});
+  } else {
+    speak(next.en);   // 最后一句才朗读
+  }
+}
+
+// AI 助手操作请求：允许 / 拒绝；「完全权限」档自动执行
+function renderAction(msgEl, action, onApprove, onDeny) {
   if (cfg.assistant === 'full') {
     addSys('🤖 自动执行：' + action.tool + (action.arg ? ' ' + action.arg : ''));
-    execAction(action);
+    if (onApprove) onApprove(); else execAction(action);
     return;
   }
   const bar = document.createElement('div');
@@ -308,8 +331,8 @@ function renderAction(msgEl, action) {
   bar.appendChild(allow); bar.appendChild(deny);
   msgEl.appendChild(bar);
   scroll();
-  allow.addEventListener('click', async () => { bar.remove(); await execAction(action); });
-  deny.addEventListener('click', () => { bar.remove(); addSys('已拒绝该操作'); });
+  allow.addEventListener('click', () => { bar.remove(); if (onApprove) onApprove(); else execAction(action); });
+  deny.addEventListener('click', () => { bar.remove(); addSys('已拒绝该操作'); if (onDeny) onDeny(); });
 }
 function renderChoices(choices) {
   const box = $('choices');
@@ -350,10 +373,14 @@ async function send(text) {
     const reply = await window.petAPI.chatSend({ text });
     pending.remove(); pendingEl = null;
     const pe = addPet(reply.en, reply.zh, reply.words);
-    if (!partialSpoken) speak(reply.en);   // 流式里已经读过了就别重读
     renderChoices(reply.choices);
     refreshMood();
-    if (reply.action) renderAction(pe, reply.action);
+    if (reply.action) {
+      // 有动作：进入多步任务循环（首句由流式 partial 读，中间只显示，最后一句再读）
+      renderAction(pe, reply.action, () => runTask(pe, reply.action, 1), () => {});
+    } else {
+      if (!partialSpoken) speak(reply.en);
+    }
   } catch (e) {
     pending.remove(); pendingEl = null; addErr(e.message || String(e));
   } finally {

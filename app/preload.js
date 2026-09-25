@@ -57,6 +57,7 @@ contextBridge.exposeInMainWorld('petAPI', {
   moodGet: () => ipcRenderer.invoke('mood:get'),
   moodAdjust: (d) => ipcRenderer.invoke('mood:adjust', d),
   assistantRun: (a) => ipcRenderer.invoke('assistant:run', a),
+  chatContinue: (p) => ipcRenderer.invoke('chat:continue', p),
   dshState: () => ipcRenderer.invoke('dsh:state'),
   vocabList: () => ipcRenderer.invoke('vocab:list'),
   vocabAdd: (w) => ipcRenderer.invoke('vocab:add', w),

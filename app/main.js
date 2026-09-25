@@ -50,7 +50,7 @@ function buildSystemPrompt(cfg) {
       tools += '- screen_shot  (capture the user\'s screen and read any text on it — use this to "see" what is on screen before helping)\n';
     }
     const auto = (tier === 'full') ? 'You are fully trusted: your actions run automatically without asking each time.' : 'The user must approve before it runs.';
-    actionSec = '\n# Computer actions (AI assistant)\nYou may request ONE computer action per reply by adding a final line to your reply:\nACTION: <tool>|<argument>\nTools:\n' + tools + 'Only add the ACTION line when the user explicitly asks you to do something on their computer. ' + auto + ' Otherwise omit the line entirely.\n';
+    actionSec = '\n# Computer actions (AI assistant)\nYou may request ONE computer action per reply by adding a final line to your reply:\nACTION: <tool>|<argument>\nTools:\n' + tools + 'Only add the ACTION line when the user explicitly asks you to do something on their computer. ' + auto + ' Otherwise omit the line entirely.\nYou can do a multi-step task: give ONE action per reply; the system runs it, shows you the result, and asks you to continue until the task is done.\n';
   }
   const memCtx = memory.buildContext();
   return `You are "${p.name || '大肥鱼'}", a desktop pet.
@@ -588,6 +588,19 @@ ipcMain.handle('assistant:run', async (_e, a) => {
   const cut = memory.tokens.clip(text, ((config.load().memory || {}).toolResultChars) || 500);
   memory.session.push({ role: 'user', content: `[系统] 我刚执行了操作 ${a.tool}（${a.arg}），结果如下：\n${cut}` });
   return { ok: true, result: text, image };
+});
+
+/* 多步任务：执行完一步后，把结果喂回模型，让它决定下一步或收尾 */
+ipcMain.handle('chat:continue', async (_e, _payload) => {
+  const cfg = config.load();
+  const messages = [
+    { role: 'system', content: buildSystemPrompt(cfg) },
+    ...memory.pickHistory(),
+    { role: 'user', content: '请继续：如果任务还没完成、还需要操作，就再给一行 ACTION: <工具>|<参数>（并在 EN: 里用一句简短说明）；如果已经完成，直接按正常格式回答（EN/ZH/WORDS/C1/C2），不要带 ACTION。' }
+  ];
+  const { reply, raw } = await genReply(cfg, messages);
+  if (reply.en) memory.onAssistant(raw, reply.en);
+  return reply;
 });
 
 /* ---------------- 生命周期 ---------------- */
