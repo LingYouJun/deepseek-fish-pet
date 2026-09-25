@@ -3,6 +3,8 @@ const $ = (id) => document.getElementById(id);
 let cfg = {};
 let busy = false;
 let ttsOn = true;
+let stepBudget = 6;      // 任务步数上限，由 IQ 决定（隐藏数值真的影响办事效率）
+let taskFailed = false;  // 本次任务里有没有失败过
 
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -61,6 +63,7 @@ async function loadLog() {
     if (!had) greet();      // 有历史记录就别再重复开场白了
   }
   refreshMood();
+  refreshBudget();
 })();
 
 async function refreshMood() {
@@ -425,6 +428,7 @@ async function execAction(action) {
     addSys('🤖 ' + ((r && r.result) ? r.result : '（已执行）'));
     return r;
   } catch (e) {
+    taskFailed = true;
     const msg = '操作 `' + action.tool + '` 失败：' + ((e && e.message) || e);
     addSys('⚠️ ' + msg);
     return {
@@ -434,14 +438,21 @@ async function execAction(action) {
   }
 }
 
-const MAX_STEPS = 6;
+const MAX_STEPS_DEFAULT = 6;
+async function refreshBudget() {
+  try { const s = await window.petAPI.statsGet(); if (s && s.stepBudget) stepBudget = s.stepBudget; } catch {}
+}
+function reportTask() {
+  try { window.petAPI.statsTask({ ok: !taskFailed }); } catch {}
+  refreshBudget();
+}
 
 // 多步任务：执行 → 把结果喂回模型 → 看下一步，直到收尾或到步数上限
 async function runTask(msgEl, action, depth) {
-  if (depth > MAX_STEPS) { addSys('⏸ 已达到本任务最大步数（' + MAX_STEPS + '），先停下来'); return; }
+  if (depth === 1) taskFailed = false;
+  if (depth > stepBudget) { addSys('⏸ 已达到本次任务的步数上限（' + stepBudget + '），先停下来'); reportTask(); return; }
   const r = await execAction(action);
-  if (!r) return;   // 拒绝 / 失败就中断
-  // 视觉一步到位：工具（如 screen_look）直接给出了下一步动作，就跳过文本模型，直接执行
+  if (!r) { reportTask(); return; }   // 视觉一步到位：工具（如 screen_look）直接给出了下一步动作，就跳过文本模型，直接执行
   if (r.action) {
     const box = document.createElement('div');
     box.className = 'msg sys';
@@ -453,8 +464,8 @@ async function runTask(msgEl, action, depth) {
   let next;
   try {
     next = await window.petAPI.chatContinue({ tool: action.tool, arg: action.arg, result: r.result });
-  } catch (e) { addErr('模型继续失败：' + e.message); return; }
-  if (!next || !next.en) return;
+  } catch (e) { addErr('模型继续失败：' + e.message); reportTask(); return; }
+  if (!next || !next.en) { reportTask(); return; }
   const pe = addPet(next.en, next.zh, next.words);
   renderChoices(next.choices);
   if (next.action) {
@@ -462,6 +473,7 @@ async function runTask(msgEl, action, depth) {
     renderAction(pe, next.action, () => runTask(pe, next.action, depth + 1), () => {});
   } else {
     speak(next.en);   // 最后一句才朗读
+    reportTask();
   }
 }
 

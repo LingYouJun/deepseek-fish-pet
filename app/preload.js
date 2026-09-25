@@ -79,6 +79,8 @@ contextBridge.exposeInMainWorld('petAPI', {
   styleGet: () => ipcRenderer.invoke('style:get'),
   styleEnsure: (force) => ipcRenderer.invoke('style:ensure', force),
   projWrite: (files) => ipcRenderer.invoke('proj:write', files),
+  statsTask: (o) => ipcRenderer.invoke('stats:task', o),
+  statsGet: () => ipcRenderer.invoke('stats:get'),
   projOpen: (rel) => ipcRenderer.invoke('proj:open', rel),
   projOpenFolder: (rel) => ipcRenderer.invoke('proj:openFolder', rel),
   artReset: () => ipcRenderer.invoke('art:reset')

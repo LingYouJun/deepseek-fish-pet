@@ -17,6 +17,7 @@ const gameagent = require('./src/gameagent');
 const skills = require('./src/skills');
 const style = require('./src/style');
 const projects = require('./src/projects');
+const stats = require('./src/stats');
 
 const dbg = (msg) => { try { fs.appendFileSync(path.join(app.getPath('userData'), 'debug.log'), new Date().toISOString() + ' ' + msg + '\n'); } catch {} };
 
@@ -59,6 +60,7 @@ function buildSystemPrompt(cfg) {
     actionSec = '\n# Computer actions (AI assistant)\nYou may request ONE computer action per reply by adding a final line to your reply:\nACTION: <tool>|<argument>\nTools:\n' + tools + 'Only add the ACTION line when the user explicitly asks you to do something on their computer. ' + auto + ' Otherwise omit the line entirely.\nYou can do a multi-step task: give ONE action per reply; the system runs it, shows you the result, and asks you to continue until the task is done.\n';
   }
   const memCtx = memory.buildContext();
+  const statSpec = stats.behaviorSpec();   // 隐藏数值 → 行为描述（不含数字）
   // 技能：只常驻一份"短目录"，命中时模型自己用 use_skill 把完整说明 load 进来（渐进式披露）
   let skillSec = '';
   if (tier !== 'off') {
@@ -109,6 +111,9 @@ Never mention, hint at, or allude to this on your own.
 - Affection toward the user: ${mo.affection}/100
 - Your current mood: ${mo.mood}/100
 - Tone guide: high affection = warmer and more honest; low affection = more distant and tsundere. Low mood = a bit sulky/down; high mood = cheerful and playful.
+
+# 你的内在状态（内部参考。绝不要复述这些描述、也绝不要提数字，只要"就是这样"）
+${statSpec}
 ${memCtx}${skillSec}${projSec}${actionSec}
 # Output format — reply with EXACTLY these lines, no markdown, no extra text:
 EN: <your English reply, 1-3 short sentences>
@@ -118,6 +123,7 @@ C1: <a short English reply the user could say next>
 C1ZH: <中文翻译 of C1>
 C2: <another short English reply the user could say next>
 C2ZH: <中文翻译 of C2>
+MOOD: <2-6个字，你现在说这句话时的心情。这一行是隐藏的：用户看不到、也不会被读出来，只留给你下一轮参考自己当时什么情绪>
 
 Rules:
 - Each line must start with its exact label (EN:/ZH:/WORDS:/C1:/C1ZH:/C2:/C2ZH:).
@@ -739,6 +745,20 @@ ipcMain.handle('proj:openFolder', async (_e, rel) => {
   catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
 });
 
+/* ---------------- 隐藏数值：每轮/每任务的小微调 ---------------- */
+ipcMain.handle('stats:task', (_e, o) => {
+  const ok = !!(o && o.ok);
+  const out = [];
+  if (ok) {
+    out.push(stats.nudge('iq', 0.3, 'task-ok', '独立办成了一件事'));
+    out.push(stats.nudge('diligence', 0.3, 'task-ok', '认真办了事'));
+  } else {
+    out.push(stats.nudge('iq', -0.5, 'task-fail', '事情没办成'));
+  }
+  return { ok: true, applied: out.filter((x) => x && !x.skipped) };
+});
+ipcMain.handle('stats:get', () => ({ all: stats.all(), hidden: stats.HIDDEN, log: stats.recentLog(40), stepBudget: stats.stepBudget() }));
+
 /* ---------------- 界面风格（从人设推导 + 记忆微调） ---------------- */
 ipcMain.handle('style:get', () => ({ style: style.load(), spec: style.spec(config.load(), mood.load()) }));
 ipcMain.handle('style:ensure', async (_e, force) => {
@@ -808,6 +828,20 @@ if (!gotLock) {
     });
     mood.startupDecay();
     memory.onAppStart().catch((e) => dbg('[memory] onAppStart err ' + e));
+    // 隐藏数值：时间效应（多久没见）+ 性格慢回归，然后按需补判一次
+    setTimeout(() => {
+      try {
+        stats.ensureBaseline(loadPersona());   // 首次 / 人设变了 → 按人设给基线
+        const st0 = stats.load();
+        const awayH = st0.lastSeen ? (Date.now() - st0.lastSeen) / 3600000 : 0;
+        if (awayH > 20) { stats.nudge('dependency', 0.6, 'away', '隔了好久没见，想主人了'); stats.nudge('mood', -0.8, 'away', '有点寂寞'); }
+        else if (awayH > 6) { stats.nudge('dependency', 0.3, 'away', '半天没见'); }
+        const st1 = stats.load(); st1.lastSeen = Date.now(); stats.save(st1);
+        const reg = stats.regress(0.2);
+        if (awayH > 6 || reg.length) dbg('[stats] away=' + awayH.toFixed(1) + 'h regress=' + reg.length);
+      } catch (e) { dbg('[stats] time effect err ' + e); }
+      memory.judgeStatsNow().then((r) => { if (r) dbg('[stats] catch-up judged: ' + r.reason); }).catch(() => {});
+    }, 9000);
     createPet();
     screenstream.warm().catch(() => {});   // 预热屏幕流，第一次"看屏幕"不卡那一下
     // 启动几秒后，默默把攒够权重的经验归档进技能文件夹（AI 自己整理）

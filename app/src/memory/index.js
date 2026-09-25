@@ -19,6 +19,7 @@ const permanent = require('./permanent');
 const skillmem = require('./skillmem');
 const context = require('./context');
 const jobs = require('./jobs');
+const stats = require('../stats');
 
 let deps = { llm: null, config: null, persona: null, skillCatalog: null };
 function init(d) { deps = Object.assign(deps, d || {}); return deps; }
@@ -151,12 +152,52 @@ async function onSessionEnd() {
   }
 
   applyRetention(mc);
+
+  /* 同一段对话再判一次"内在数值"该怎么变（长期陪伴向：绝大多数是 0，单次最多 ±2） */
+  let statChange = null;
+  if (llm && c.apiKey) {
+    try {
+      const j = await jobs.judgeStats(llm, c, msgs, deps.persona ? deps.persona() : {}, Object.assign({}, require('../mood').load(), stats.all()));
+      if (j && Object.keys(j.deltas).length) {
+        const applied = stats.applyDeltas(j.deltas, j.reason);
+        const st = stats.load();
+        st.lastJudge = Date.now();
+        stats.save(st);
+        statChange = { reason: j.reason, applied, deltas: j.deltas };
+        bus.emit('stats:judged', statChange);
+      }
+    } catch {}
+  }
+
   session.clear();
-  bus.emit('session:end', { id: info.id, extracted, learned });
-  return { ok: true, extracted, learned };
+  bus.emit('session:end', { id: info.id, extracted, learned, statChange });
+  return { ok: true, extracted, learned, statChange };
 }
 
 function buildContext() { return context.build(cfg()); }
+
+/* 补跑数值判断：会话一直没结束时（App 挂着好几天），启动时兜底判一次 */
+async function judgeStatsNow() {
+  const c = cfg();
+  const llm = deps.llm;
+  if (!llm || !c.apiKey) return null;
+  const msgs = session.all();
+  const st = stats.load();
+  if (!msgs || msgs.length < 4) return null;
+  if (Date.now() - (st.lastJudge || 0) < 12 * 3600000) return null;
+  try {
+    const j = await jobs.judgeStats(llm, c, msgs, deps.persona ? deps.persona() : {}, Object.assign({}, require('../mood').load(), stats.all()));
+    const bump = () => { const s2 = stats.load(); s2.lastJudge = Date.now(); stats.save(s2); };
+    if (j && Object.keys(j.deltas).length) {
+      const applied = stats.applyDeltas(j.deltas, '[启动补判] ' + j.reason);
+      bump();
+      bus.emit('stats:judged', { reason: j.reason, applied, deltas: j.deltas, catchUp: true });
+      return { reason: j.reason, applied };
+    }
+    bump();
+  } catch {}
+  return null;
+}
 
 function pickHistory(budgetTokens, fullTurns) {
   const mc = memCfg();
@@ -168,7 +209,7 @@ function pickHistory(budgetTokens, fullTurns) {
 }
 
 module.exports = {
-  init, onAppStart, onTurn, onAssistant, onSessionEnd, buildContext, pickHistory,
+  init, onAppStart, onTurn, onAssistant, onSessionEnd, buildContext, pickHistory, judgeStatsNow,
   migrate, dayStr,
-  session, medium, long, permanent, skillmem, tokens, bus,
+  session, medium, long, permanent, skillmem, stats, tokens, bus,
 };

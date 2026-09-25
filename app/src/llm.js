@@ -109,7 +109,10 @@ function parseReply(text) {
     if (i > 0) action = { tool: actLine.slice(0, i).trim(), arg: actLine.slice(i + 1).trim() };
   }
 
-  return { en: en || raw, zh, words, choices, action };
+  // 可选：隐藏心情行（不显示给用户，只留在历史里给下一轮的自己看）
+  const mood = find(['mood:', 'mood：']);
+
+  return { en: en || raw, zh, words, choices, action, mood: mood || '' };
 }
 
 module.exports = { request, stream, parseReply };
