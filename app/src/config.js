@@ -13,6 +13,7 @@ const MEMORY_DEFAULTS = {
   candDecay: 0.8,        // 衰减系数
   candFloor: 1,          // 权重低于此值从候选池清掉
   skillCandDays: 21,     // 技能经验候选多少天没出现开始衰减
+  skillPoolMax: 200,     // 共有技能经验池最多留多少条（超了按权重低的淘汰）
   skillFileWeight: 4,    // 技能经验权重到多少就归档进技能文件夹
   skillArchiveMax: 5,    // 每次最多归档几条经验
   skillAutoArchive: true,// 启动时自动把攒够权重的经验归档进技能

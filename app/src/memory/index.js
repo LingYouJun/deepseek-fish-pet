@@ -83,6 +83,7 @@ async function onAppStart() {
   const mc = memCfg();
   try { permanent.decay(mc.candDays || 14, mc.candDecay || 0.8, mc.candFloor || 1); } catch {}
   try { skillmem.decay(mc.skillCandDays || 21, mc.candDecay || 0.8, mc.candFloor || 1); } catch {}
+  try { skillmem.prune(mc.skillPoolMax || 200); } catch {}
   try { await consolidate(mc); } catch {}
   try { permanent.promote(mc.promoteWeight || 7); } catch {}
   applyRetention(mc);
@@ -142,9 +143,9 @@ async function onSessionEnd() {
       const cat = deps.skillCatalog ? deps.skillCatalog() : '';
       const exps = await jobs.extractExperiences(llm, c, msgs, cat);
       if (exps.length) {
-        skillmem.merge(exps);
+        const r = skillmem.merge(exps, mc.skillPoolMax || 200);
         learned = exps.length;
-        bus.emit('memory:skillmem', { learned });
+        bus.emit('memory:skillmem', r);
       }
     } catch {}
   }

@@ -46,7 +46,7 @@ function upsert(cand, item, now) {
   return c;
 }
 
-function merge(items) {
+function merge(items, maxCand) {
   const v = load();
   const now = Date.now();
   let n = 0;
@@ -55,7 +55,22 @@ function merge(items) {
     if (upsert(v.cand, it, now)) n++;
   }
   save(v);
-  return { added: n, total: v.cand.length };
+  const pruned = maxCand ? prune(maxCand) : { dropped: 0, left: v.cand.length };
+  return { added: n, total: load().cand.length, pruned: pruned.dropped };
+}
+
+/* 条数上限：超了就按「权重低的优先、其次最久没出现的」淘汰 */
+function prune(maxCand) {
+  const v = load();
+  const cap = Math.max(10, Number(maxCand) || 200);
+  if (v.cand.length <= cap) return { dropped: 0, left: v.cand.length };
+  v.cand.sort((a, b) =>
+    (Number(b.weight) || 0) - (Number(a.weight) || 0) ||
+    (Number(b.lastSeen) || 0) - (Number(a.lastSeen) || 0));
+  const before = v.cand.length;
+  v.cand = v.cand.slice(0, cap);
+  save(v);
+  return { dropped: before - v.cand.length, left: v.cand.length };
 }
 
 /* 衰减：很久没再出现的经验慢慢掉权重，掉到底就清掉 */
@@ -93,4 +108,4 @@ function drop(texts) {
 
 function candidates() { return load().cand; }
 
-module.exports = { load, save, merge, decay, ready, drop, candidates, NS };
+module.exports = { load, save, merge, decay, ready, drop, candidates, prune, NS };
