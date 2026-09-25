@@ -16,6 +16,7 @@ const screenstream = require('./src/screenstream');
 const gameagent = require('./src/gameagent');
 const skills = require('./src/skills');
 const style = require('./src/style');
+const projects = require('./src/projects');
 
 const dbg = (msg) => { try { fs.appendFileSync(path.join(app.getPath('userData'), 'debug.log'), new Date().toISOString() + ' ' + msg + '\n'); } catch {} };
 
@@ -73,6 +74,17 @@ function buildSystemPrompt(cfg) {
         + 'Only write when you actually learned something worth keeping, and keep entries short.\n';
     }
   }
+  // 项目文件夹：她写的小软件落这儿（多行代码用 WRITE 块，前端确认后落盘）
+  let projSec = '';
+  if (tier !== 'off' && assistant.allowed(tier, 'proj_open')) {
+    projSec = '\n# Project folder (where you build small apps)\nYou can write real code files into your project folder; the user can then open and use them.\n'
+      + 'To create files, put one or more blocks anywhere in your reply:\n'
+      + '<<<WRITE: <project>/index.html\n<the complete file content, real line breaks>\n>>>\n'
+      + '(several blocks = several files; nothing is written until the user approves)\n'
+      + 'Tools (paths are relative to the project folder): proj_ls|<path>  proj_read|<path>  proj_rm|<path>  proj_open|<path>\n'
+      + 'proj_open opens a file with the default app — for .html that is the browser, which is how you "run" a web app.\n'
+      + 'Whenever you build an interface, follow your 「界面风格」 skill. Keep apps self-contained: one HTML file when possible, no CDN, no external images.\n';
+  }
   return `You are "${p.name || '大肥鱼'}", a desktop pet.
 
 # World setting
@@ -96,7 +108,7 @@ Never mention, hint at, or allude to this on your own.
 - Affection toward the user: ${mo.affection}/100
 - Your current mood: ${mo.mood}/100
 - Tone guide: high affection = warmer and more honest; low affection = more distant and tsundere. Low mood = a bit sulky/down; high mood = cheerful and playful.
-${memCtx}${skillSec}${actionSec}
+${memCtx}${skillSec}${projSec}${actionSec}
 # Output format — reply with EXACTLY these lines, no markdown, no extra text:
 EN: <your English reply, 1-3 short sentences>
 ZH: <完整中文翻译>
@@ -393,6 +405,13 @@ ipcMain.handle('chat:send', async (e, payload) => {
     mood.adjust({ affection: 1, mood: 2 });
   }
   logTurn(text, reply);
+  // 她如果在回复里写了 WRITE 块（多行代码装不进单行 ACTION），解析出来交给前端确认后落盘
+  try {
+    if (assistant.allowed(cfg.assistant || 'off', 'proj_open')) {
+      const files = projects.parseWriteBlocks(raw);
+      if (files.length) { reply.files = files; dbg('[proj] reply has ' + files.length + ' file block(s)'); }
+    }
+  } catch {}
   // 谁问的谁说话：对话窗发起的 → 对话窗读，桌宠只显示气泡不出声（反之同理）
   if (petWin && !petWin.isDestroyed()) petWin.webContents.send('pet:say', { ...reply, silent: fromChat });
   if (!fromChat) {
@@ -697,6 +716,22 @@ ipcMain.handle('skills:pool', () => ({
   cand: memory.skillmem.candidates().map((c) => ({ text: c.text, weight: c.weight, hits: c.hits || 1, skill: c.skill || '' })),
   ready: memory.skillmem.ready((config.load().memory || {}).skillFileWeight || 4).length,
 }));
+
+/* ---------------- 项目文件夹（她写的小软件落这儿） ---------------- */
+ipcMain.handle('proj:write', (_e, files) => {
+  const tier = config.load().assistant || 'off';
+  if (!assistant.allowed(tier, 'proj_open')) return { ok: false, error: '当前 AI 助手权限不允许写文件' };
+  try { return { ok: true, files: projects.writeMany(files || []) }; }
+  catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+});
+ipcMain.handle('proj:open', async (_e, rel) => {
+  try { await projects.open(rel); return { ok: true }; }
+  catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+});
+ipcMain.handle('proj:openFolder', async (_e, rel) => {
+  try { await projects.openFolder(rel); return { ok: true, dir: projects.rootDir() }; }
+  catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+});
 
 /* ---------------- 界面风格（从人设推导 + 记忆微调） ---------------- */
 ipcMain.handle('style:get', () => ({ style: style.load(), spec: style.spec(config.load(), mood.load()) }));

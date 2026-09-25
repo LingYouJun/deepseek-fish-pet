@@ -163,6 +163,41 @@ $('skillsArchive').addEventListener('click', async () => {
   } catch (e) { $('skillsMsg').textContent = '❌ ' + e.message; }
   finally { btn.disabled = false; }
 });
+$('projOpen').addEventListener('click', async () => {
+  try {
+    const r = await window.petAPI.projOpenFolder();
+    $('skillsMsg').textContent = r && r.ok ? ('已打开项目文件夹：' + r.dir) : ('打开失败：' + ((r && r.error) || ''));
+  } catch (e) { $('skillsMsg').textContent = '打开失败：' + e.message; }
+});
+
+/* ---------------- 📦 她写的小软件：回复里带的代码文件，确认后落盘 ---------------- */
+async function doWriteFiles(files) {
+  try {
+    const r = await window.petAPI.projWrite(files);
+    if (!r || !r.ok) { addErr('写入失败：' + ((r && r.error) || '未知')); return; }
+    addSys('📦 已写进项目文件夹：\n' + r.files.map((f) => '· ' + f.path + '（' + f.bytes + ' 字节）').join('\n'));
+    const html = files.find((f) => /\.html?$/i.test(f.path));
+    if (html) {
+      const o = await window.petAPI.projOpen(html.path);
+      if (o && o.ok) addSys('🌐 已用浏览器打开：' + html.path);
+      else addErr('打开失败：' + ((o && o.error) || ''));
+    }
+  } catch (e) { addErr('写入失败：' + e.message); }
+}
+function renderFiles(msgEl, files) {
+  if (cfg.assistant === 'full') { doWriteFiles(files); return; }   // 完全权限：直接写
+  const bar = document.createElement('div');
+  bar.className = 'actionbar';
+  bar.innerHTML = '<span class="atool">📦 她想写 ' + files.length + ' 个文件</span>'
+    + '<span class="aarg" title="' + esc(files.map((f) => f.path).join('\n')) + '">' + esc(files.map((f) => f.path).join('、')) + '</span>';
+  const allow = document.createElement('button'); allow.textContent = '写入'; allow.className = 'allow';
+  const deny = document.createElement('button'); deny.textContent = '跳过'; deny.className = 'deny';
+  bar.appendChild(allow); bar.appendChild(deny);
+  msgEl.appendChild(bar);
+  scroll();
+  allow.addEventListener('click', () => { bar.remove(); doWriteFiles(files); });
+  deny.addEventListener('click', () => { bar.remove(); addSys('已跳过写入'); });
+}
 
 /* ---------------- 🎮 游戏助手 ---------------- */
 const GAME_PRESET = [
@@ -481,6 +516,7 @@ async function send(text) {
     const pe = addPet(reply.en, reply.zh, reply.words);
     renderChoices(reply.choices);
     refreshMood();
+    if (reply.files && reply.files.length) renderFiles(pe, reply.files);
     if (reply.action) {
       // 有动作：进入多步任务循环（首句由流式 partial 读，中间只显示，最后一句再读）
       renderAction(pe, reply.action, () => runTask(pe, reply.action, 1), () => {});

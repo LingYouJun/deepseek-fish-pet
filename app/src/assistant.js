@@ -9,11 +9,13 @@ const vision = require('./vision');
 const config = require('./config');
 const skills = require('./skills');
 const style = require('./style');
+const projects = require('./projects');
 
 // 每个工具所需的最低权限档
 const TOOL_TIER = {
   list_dir: 'read', read_file: 'read', use_skill: 'read', skill_ls: 'read', skill_read: 'read',
-  open_path: 'normal', open_url: 'normal', skill_write: 'normal', skill_rm: 'normal',
+  proj_ls: 'read', proj_read: 'read',
+  open_path: 'normal', open_url: 'normal', skill_write: 'normal', skill_rm: 'normal', proj_rm: 'normal', proj_open: 'normal',
   web_open: 'web', web_click: 'web', web_type: 'web', web_read: 'web',
   screen_shot: 'full', screen_look: 'full',
   click: 'full', rclick: 'full', dclick: 'full', move: 'full', drag: 'full', scroll: 'full', type: 'full', key: 'full',
@@ -112,8 +114,8 @@ async function run(tool, arg) {
     return { text: (usedVision ? '👁 视觉模型：\n' : '🖥 屏幕文字：\n') + text, image: cap.dataUrl, path: cap.path, action };
   }
 
-  // skill_ls 允许空参数（列出技能根目录），其它需要参数的工具才拦
-  if (!arg && tool !== 'skill_ls') throw new Error('操作参数为空');
+  // skill_ls / proj_ls 允许空参数（列根目录），其它需要参数的工具才拦
+  if (!arg && tool !== 'skill_ls' && tool !== 'proj_ls') throw new Error('操作参数为空');
   if (tool === 'open_url') {
     if (!/^https?:\/\//i.test(arg)) throw new Error('网址需以 http(s):// 开头');
     await shell.openExternal(arg);
@@ -177,6 +179,24 @@ async function run(tool, arg) {
   if (tool === 'skill_rm') {
     const r = skills.remove(arg || '');
     return '🗑 已删除：' + r.path;
+  }
+
+  /* ---------------- 项目文件夹（她写的小软件放这儿） ---------------- */
+  if (tool === 'proj_ls') {
+    const items = projects.ls(arg || '');
+    return '📂 项目目录 ' + (arg || '/') + '（' + items.length + ' 项）：\n' + (items.join('\n') || '(空)');
+  }
+  if (tool === 'proj_read') {
+    const r = projects.readFile(arg || '');
+    return '📄 ' + arg + (r.truncated ? '（只显示前 8000 字，共 ' + r.size + ' 字）' : '') + '：\n' + r.text;
+  }
+  if (tool === 'proj_rm') {
+    const r = projects.remove(arg || '');
+    return '🗑 已删除：' + r.path;
+  }
+  if (tool === 'proj_open') {
+    const r = await projects.open(arg || '');
+    return '🌐 已用默认程序打开：' + r.path;
   }
 
   /* ---------------- OS 级键鼠（坐标是 1280x720 截图空间） ---------------- */
