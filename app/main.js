@@ -42,10 +42,14 @@ function buildSystemPrompt(cfg) {
   let actionSec = '';
   if (tier !== 'off') {
     let tools = '- open_url|https://...  (open a web page in the user\'s browser)\n- open_path|C:\\...  (open a file or app)\n- list_dir|C:\\...  (list a folder)\n- read_file|C:\\...  (read a text file)\n';
-    if (tier === 'web') {
+    if (tier === 'web' || tier === 'full') {
       tools += '- web_open|<url>  (open a page in a controlled browser and read its content)\n- web_click|<CSS selector>  (click an element on the current page)\n- web_type|<selector>||<text>  (type text into an input)\n- web_read  (read the current page content again)\n';
     }
-    actionSec = '\n# Computer actions (AI assistant)\nYou may request ONE computer action by adding a final line to your reply:\nACTION: <tool>|<argument>\nTools:\n' + tools + 'Only add the ACTION line when the user explicitly asks you to do something on their computer. The user must approve before it runs. Otherwise omit the line entirely.\n';
+    if (tier === 'full') {
+      tools += '- screen_shot  (capture the user\'s screen and read any text on it — use this to "see" what is on screen before helping)\n';
+    }
+    const auto = (tier === 'full') ? 'You are fully trusted: your actions run automatically without asking each time.' : 'The user must approve before it runs.';
+    actionSec = '\n# Computer actions (AI assistant)\nYou may request ONE computer action per reply by adding a final line to your reply:\nACTION: <tool>|<argument>\nTools:\n' + tools + 'Only add the ACTION line when the user explicitly asks you to do something on their computer. ' + auto + ' Otherwise omit the line entirely.\n';
   }
   const memCtx = memory.buildContext();
   return `You are "${p.name || '大肥鱼'}", a desktop pet.
@@ -553,11 +557,13 @@ ipcMain.handle('art:reset', () => {
 ipcMain.handle('assistant:run', async (_e, a) => {
   const tier = config.load().assistant || 'off';
   if (!assistant.allowed(tier, a && a.tool)) throw new Error('当前 AI 助手权限不允许该操作');
-  const result = await assistant.run(a.tool, a.arg);
-  // 工具结果可能很长（列目录 / 抓网页），入库前先截断，别把上下文撑爆
-  const cut = memory.tokens.clip(String(result || ''), ((config.load().memory || {}).toolResultChars) || 500);
+  const r = await assistant.run(a.tool, a.arg);
+  const text = (r && typeof r === 'object') ? String(r.text || '') : String(r || '');
+  const image = (r && typeof r === 'object') ? r.image : null;
+  // 工具结果可能很长（列目录 / 抓网页 / 截屏文字），入库前先截断，别把上下文撑爆
+  const cut = memory.tokens.clip(text, ((config.load().memory || {}).toolResultChars) || 500);
   memory.session.push({ role: 'user', content: `[系统] 我刚执行了操作 ${a.tool}（${a.arg}），结果如下：\n${cut}` });
-  return { ok: true, result };
+  return { ok: true, result: text, image };
 });
 
 /* ---------------- 生命周期 ---------------- */

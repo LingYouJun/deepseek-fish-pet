@@ -276,8 +276,30 @@ function addSys(text) {
   $('msgs').appendChild(d); scroll();
 }
 
-// AI 助手操作请求：允许 / 拒绝
+// 共享屏幕：把助手看到的截图直接贴进对话
+function addShot(dataUrl) {
+  const d = document.createElement('div');
+  d.className = 'msg sys';
+  d.innerHTML = `<img class="shot" src="${dataUrl}" alt="屏幕截图">`;
+  $('msgs').appendChild(d); scroll();
+}
+
+async function execAction(action) {
+  try {
+    const r = await window.petAPI.assistantRun(action);
+    if (r && r.image) addShot(r.image);
+    addSys('🤖 ' + ((r && r.result) ? r.result : '（已执行）'));
+    return r;
+  } catch (e) { addErr('助手执行失败：' + e.message); return null; }
+}
+
+// AI 助手操作请求：允许 / 拒绝；「完全权限」档自动执行、不再逐条确认
 function renderAction(msgEl, action) {
+  if (cfg.assistant === 'full') {
+    addSys('🤖 自动执行：' + action.tool + (action.arg ? ' ' + action.arg : ''));
+    execAction(action);
+    return;
+  }
   const bar = document.createElement('div');
   bar.className = 'actionbar';
   bar.innerHTML = `<span class="atool">🤖 ${esc(action.tool)}</span><span class="aarg" title="${esc(action.arg)}">${esc(action.arg)}</span>`;
@@ -286,13 +308,7 @@ function renderAction(msgEl, action) {
   bar.appendChild(allow); bar.appendChild(deny);
   msgEl.appendChild(bar);
   scroll();
-  allow.addEventListener('click', async () => {
-    bar.remove();
-    try {
-      const r = await window.petAPI.assistantRun(action);
-      addSys('🤖 ' + r.result);
-    } catch (e) { addErr('助手执行失败：' + e.message); }
-  });
+  allow.addEventListener('click', async () => { bar.remove(); await execAction(action); });
   deny.addEventListener('click', () => { bar.remove(); addSys('已拒绝该操作'); });
 }
 function renderChoices(choices) {
