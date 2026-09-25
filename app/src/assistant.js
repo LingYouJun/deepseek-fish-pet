@@ -4,6 +4,7 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 const web = require('./web');
 const screenstream = require('./screenstream');
+const input = require('./input');
 
 // 每个工具所需的最低权限档
 const TOOL_TIER = {
@@ -11,6 +12,7 @@ const TOOL_TIER = {
   open_path: 'normal', open_url: 'normal',
   web_open: 'web', web_click: 'web', web_type: 'web', web_read: 'web',
   screen_shot: 'full',
+  click: 'full', rclick: 'full', dclick: 'full', move: 'full', drag: 'full', scroll: 'full', type: 'full', key: 'full',
 };
 const RANK = { off: 0, read: 1, normal: 2, web: 3, full: 4 };
 
@@ -97,6 +99,41 @@ async function run(tool, arg) {
   if (tool === 'read_file') {
     const text = fs.readFileSync(arg, 'utf8').slice(0, 3000);
     return `📄 ${arg}：\n${text}`;
+  }
+
+  /* ---------------- OS 级键鼠（坐标是 1280x720 截图空间） ---------------- */
+  const parseXY = (s) => {
+    const m = String(s || '').trim().match(/^\s*(-?\d+(?:\.\d+)?)\s*[,，]\s*(-?\d+(?:\.\d+)?)\s*$/);
+    if (!m) throw new Error('坐标格式应为 x,y');
+    return [Number(m[1]), Number(m[2])];
+  };
+  if (tool === 'click' || tool === 'rclick' || tool === 'dclick' || tool === 'move') {
+    const [x, y] = parseXY(arg);
+    const label = { click: '左键点击', rclick: '右键点击', dclick: '双击', move: '移动鼠标' }[tool];
+    input[tool](x, y);
+    return `✅ 已${label}：(${x}, ${y})`;
+  }
+  if (tool === 'drag') {
+    const parts = String(arg).split('|');
+    const [x1, y1] = parseXY(parts[0]);
+    const [x2, y2] = parseXY(parts[1]);
+    input.drag(x1, y1, x2, y2);
+    return `✅ 已拖拽：(${x1},${y1}) → (${x2},${y2})`;
+  }
+  if (tool === 'scroll') {
+    const parts = String(arg).split('|');
+    const [x, y] = parseXY(parts[0]);
+    const delta = Number(parts[1]) || 120;
+    input.scroll(x, y, delta);
+    return `✅ 已滚动：(${x},${y}) ${delta > 0 ? '向上' : '向下'}`;
+  }
+  if (tool === 'type') {
+    input.type(arg);
+    return `✅ 已输入文字：${arg.slice(0, 50)}`;
+  }
+  if (tool === 'key') {
+    input.key(arg);
+    return `✅ 已按键：${arg}`;
   }
 }
 

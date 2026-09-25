@@ -37,7 +37,8 @@
     "asarUnpack": [
       "node_modules/playwright/**",
       "node_modules/playwright-core/**",
-      "vendor/whisper/**"
+      "vendor/whisper/**",
+      "vendor/input/**"
     ],
     "extraResources": [
       {
