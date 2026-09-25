@@ -64,7 +64,12 @@ function buildSystemPrompt(cfg) {
     if (cat) {
       skillSec = '\n# Skills (load on demand)\nYou have these skills. Here you only see names + one-line descriptions — you do NOT know their details yet.\n'
         + cat
-        + '\nWhen the current request matches one of them, FIRST load it with a line:\nACTION: use_skill|<skill id>\nand then follow the loaded instructions. If nothing matches, just answer normally without loading anything.\n';
+        + '\nWhen the current request matches one of them, FIRST load it with a line:\nACTION: use_skill|<skill id>\nand then follow the loaded instructions. If nothing matches, just answer normally without loading anything.\n'
+        + '\n# Managing the skill folders yourself\nA skill is a FOLDER under the skills directory. Its SKILL.md is the entry point; you may add sub-folders and files to organise accumulated experience.\n'
+        + 'Keep SKILL.md as a short overview + index, and file detailed experience into sub-folders (e.g. <skill>/<mode>/<level>.md) instead of growing one file forever.\n'
+        + 'Tools (paths are relative to the skills folder, e.g. arknights/集成战略/3-1.md):\n'
+        + '- skill_ls|<path>            list a folder\n- skill_read|<path>          read a file\n- skill_write|<path>||<text> create or overwrite a file (folders are created automatically; write \\n for line breaks)\n- skill_rm|<path>            delete a file\n'
+        + 'Only write when you actually learned something worth keeping, and keep entries short.\n';
     }
   }
   return `You are "${p.name || '大肥鱼'}", a desktop pet.

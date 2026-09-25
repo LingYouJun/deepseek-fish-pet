@@ -11,8 +11,8 @@ const skills = require('./skills');
 
 // 每个工具所需的最低权限档
 const TOOL_TIER = {
-  list_dir: 'read', read_file: 'read', use_skill: 'read',
-  open_path: 'normal', open_url: 'normal',
+  list_dir: 'read', read_file: 'read', use_skill: 'read', skill_ls: 'read', skill_read: 'read',
+  open_path: 'normal', open_url: 'normal', skill_write: 'normal', skill_rm: 'normal',
   web_open: 'web', web_click: 'web', web_type: 'web', web_read: 'web',
   screen_shot: 'full', screen_look: 'full',
   click: 'full', rclick: 'full', dclick: 'full', move: 'full', drag: 'full', scroll: 'full', type: 'full', key: 'full',
@@ -144,6 +144,30 @@ async function run(tool, arg) {
       out += '\n\n【这个技能积累下来的经验】\n' + facts.map((f) => '- ' + f.text).join('\n');
     }
     return out;
+  }
+
+  /* ---------------- 技能目录的自主管理（AI 自己整理经验） ---------------- */
+  if (tool === 'skill_ls') {
+    const items = skills.ls(arg || '');
+    return '📂 技能目录 ' + (arg || '/') + '（' + items.length + ' 项）：\n' + (items.join('\n') || '(空)');
+  }
+  if (tool === 'skill_read') {
+    const r = skills.readFile(arg || '');
+    return '📄 ' + arg + (r.truncated ? '（只显示前 6000 字，共 ' + r.size + ' 字）' : '') + '：\n' + r.text;
+  }
+  if (tool === 'skill_write') {
+    const s = String(arg || '');
+    const i = s.indexOf('||');
+    if (i < 0) throw new Error('格式：skill_write|技能/子路径/文件.md||内容');
+    const rel = s.slice(0, i).trim();
+    // 允许用 \n 写换行（ACTION 只能是一行）
+    const content = s.slice(i + 2).replace(/\\n/g, '\n');
+    const r = skills.writeFile(rel, content);
+    return '💾 已写入技能文件：' + r.path + '（' + r.bytes + ' 字节）';
+  }
+  if (tool === 'skill_rm') {
+    const r = skills.remove(arg || '');
+    return '🗑 已删除：' + r.path;
   }
 
   /* ---------------- OS 级键鼠（坐标是 1280x720 截图空间） ---------------- */

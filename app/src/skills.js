@@ -115,4 +115,56 @@ function read(id) {
 
 function openFolder() { return shell.openPath(userDir()); }
 
-module.exports = { list, catalog, read, memoryFacts, openFolder, userDir, builtinDir, ensureBuiltins, parseFront, NS };
+/* ---------------- AI 自主管理：技能目录内的读写（带路径沙箱） ---------------- */
+
+/* 把相对路径解析成 skills/ 下的绝对路径，禁止越界（..、绝对路径都挡掉） */
+function safePath(rel) {
+  const base = path.resolve(userDir());
+  const cleaned = String(rel == null ? '' : rel).replace(/\\/g, '/').replace(/^\/+/, '').trim();
+  const full = path.resolve(base, cleaned);
+  if (full !== base && !full.startsWith(base + path.sep)) throw new Error('路径越界（只能在技能目录里操作）');
+  return full;
+}
+
+/* 列目录：文件夹带结尾 / */
+function ls(rel) {
+  const p = safePath(rel);
+  const items = fs.readdirSync(p, { withFileTypes: true })
+    .filter((d) => !d.name.startsWith('.'))
+    .map((d) => (d.isDirectory() ? d.name + '/' : d.name))
+    .sort();
+  return items;
+}
+
+/* 读一个文件（限制长度，别把上下文撑爆） */
+function readFile(rel, max) {
+  const p = safePath(rel);
+  const st = fs.statSync(p);
+  if (st.isDirectory()) throw new Error('这是个文件夹，用 skill_ls 看里面');
+  const cap = Math.max(500, Math.min(20000, Number(max) || 6000));
+  const text = fs.readFileSync(p, 'utf8');
+  return { text: text.slice(0, cap), truncated: text.length > cap, size: text.length, path: rel };
+}
+
+/* 写文件（自动建目录），限制单次大小 */
+function writeFile(rel, content) {
+  const p = safePath(rel);
+  if (p === path.resolve(userDir())) throw new Error('不能写技能根目录');
+  const text = String(content == null ? '' : content);
+  if (text.length > 20000) throw new Error('内容太长（上限 20000 字）');
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, text);
+  return { path: rel, bytes: Buffer.byteLength(text) };
+}
+
+/* 删文件（或空文件夹） */
+function remove(rel) {
+  const p = safePath(rel);
+  if (p === path.resolve(userDir())) throw new Error('不能删技能根目录');
+  const st = fs.statSync(p);
+  if (st.isDirectory()) fs.rmdirSync(p);   // 只删空目录，防误删
+  else fs.unlinkSync(p);
+  return { path: rel };
+}
+
+module.exports = { list, catalog, read, memoryFacts, openFolder, userDir, builtinDir, ensureBuiltins, parseFront, safePath, ls, readFile, writeFile, remove, NS };
