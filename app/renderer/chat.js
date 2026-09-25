@@ -134,6 +134,69 @@ $('artReset').addEventListener('click', async () => {
   catch (e) { $('setupMsg').textContent = '失败：' + e.message; }
 });
 
+/* ---------------- 🎮 游戏助手 ---------------- */
+const GAME_PRESET = [
+  '这是《明日方舟》的战斗关卡。请观察屏幕，判断当前该做什么，一步一步帮我把这关打过去。',
+  '',
+  '要点：',
+  '- 右下角是待部署的干员头像：先点一下头像选中，再点地图上可以放置的格子完成部署',
+  '- 底部是已选中干员的技能按钮，需要时点击释放技能',
+  '- 左上角显示剩余敌人数量，注意还有多少没打完',
+  '- 画面上的数字是部署费用，费用不够就先等一等，别硬点',
+  '- 如果战斗已经结束（出现结算 / 继续 / 返回按钮），就输出 DONE',
+].join('\n');
+
+function gLogLine(kind, text) {
+  const box = $('gLog');
+  const d = document.createElement('div');
+  d.className = 'gline ' + (kind || 'info');
+  const t = new Date();
+  const hh = String(t.getHours()).padStart(2, '0'), mm = String(t.getMinutes()).padStart(2, '0'), ss = String(t.getSeconds()).padStart(2, '0');
+  d.textContent = '[' + hh + ':' + mm + ':' + ss + '] ' + text;
+  box.appendChild(d);
+  box.scrollTop = box.scrollHeight;
+  while (box.childElementCount > 400) box.removeChild(box.firstChild);
+}
+
+function setGameRunning(on) {
+  $('gStart').disabled = on;
+  $('gStop').disabled = !on;
+}
+
+$('gameBtn').addEventListener('click', async () => {
+  $('game').classList.remove('hidden');
+  $('gMsg').textContent = '';
+  try {
+    const s = await window.petAPI.gameStatus();
+    setGameRunning(!!(s && s.running));
+  } catch {}
+});
+$('gClose').addEventListener('click', () => $('game').classList.add('hidden'));
+$('gPreset').addEventListener('click', () => { $('gTask').value = GAME_PRESET; });
+$('gStart').addEventListener('click', async () => {
+  $('gMsg').textContent = '';
+  $('gStart').disabled = true;
+  try {
+    const r = await window.petAPI.gameStart({
+      task: $('gTask').value.trim(),
+      intervalMs: Math.round(Number($('gInterval').value || 4) * 1000),
+      maxSteps: Number($('gMax').value || 30),
+      dryRun: $('gDry').checked,
+    });
+    if (r && r.ok) { setGameRunning(true); }
+    else { $('gMsg').textContent = '❌ ' + ((r && r.error) || '启动失败'); setGameRunning(false); }
+  } catch (e) { $('gMsg').textContent = '❌ ' + e.message; setGameRunning(false); }
+});
+$('gStop').addEventListener('click', async () => {
+  try { await window.petAPI.gameStop(); } catch {}
+  setGameRunning(false);
+});
+if (window.petAPI.onGameLog) window.petAPI.onGameLog((e) => {
+  if (!e) return;
+  gLogLine(e.kind, e.text);
+  if (String(e.text).indexOf('已停止') >= 0) setGameRunning(false);
+});
+
 /* ---------------- 人设 ---------------- */
 $('personaBtn').addEventListener('click', async () => {
   const p = await window.petAPI.personaGet();

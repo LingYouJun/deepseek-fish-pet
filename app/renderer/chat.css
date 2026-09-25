@@ -136,3 +136,16 @@ header .tools { margin-left: auto; display: flex; gap: 8px; }
 .micstate[data-state="denied"]  { color: #b4543a; background: #fdece7; }
 .micstate[data-state="error"]   { color: #a86b1a; background: #fdf3e0; }
 .micstate[data-state="unknown"] { color: #6b7490; background: #eef1f8; }
+
+/* 🎮 游戏助手日志 */
+.gamelog {
+  margin-top: 12px; max-height: 260px; overflow-y: auto;
+  background: #0f1420; border-radius: 10px; padding: 10px 12px;
+  font-family: Consolas, Menlo, monospace; font-size: 12px; line-height: 1.55;
+}
+.gamelog .gline { color: #c8d3e8; white-space: pre-wrap; overflow-wrap: break-word; }
+.gamelog .gline.info { color: #7fd8a6; }
+.gamelog .gline.see  { color: #a9c0e8; }
+.gamelog .gline.act  { color: #ffd479; }
+.gamelog .gline.wait { color: #7a8699; }
+.gamelog .gline.err  { color: #ff8d7a; }

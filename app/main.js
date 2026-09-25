@@ -13,6 +13,7 @@ const tts = require('./src/tts');
 const asr = require('./src/asr');
 const chatlog = require('./src/chatlog');
 const screenstream = require('./src/screenstream');
+const gameagent = require('./src/gameagent');
 
 const dbg = (msg) => { try { fs.appendFileSync(path.join(app.getPath('userData'), 'debug.log'), new Date().toISOString() + ' ' + msg + '\n'); } catch {} };
 
@@ -605,6 +606,19 @@ ipcMain.handle('chat:continue', async (_e, _payload) => {
   if (reply.en) memory.onAssistant(raw, reply.en);
   return reply;
 });
+
+/* ---------------- 游戏助手（持续盯屏 + 决策 + 操作） ---------------- */
+gameagent.init({
+  onLog: (e) => { if (chatWin && !chatWin.isDestroyed()) chatWin.webContents.send('game:log', e); },
+  onStop: () => { if (petWin && !petWin.isDestroyed()) petWin.show(); },   // 循环自己结束时把桌宠放回来
+});
+ipcMain.handle('game:start', async (_e, o) => {
+  const r = await gameagent.start(o || {});
+  if (r && r.ok && petWin && !petWin.isDestroyed()) petWin.hide();   // 打游戏先把桌宠收起来，免得挡住点击
+  return r;
+});
+ipcMain.handle('game:stop', () => gameagent.stop());
+ipcMain.handle('game:status', () => gameagent.status());
 
 /* ---------------- 生命周期 ---------------- */
 const gotLock = app.requestSingleInstanceLock();
