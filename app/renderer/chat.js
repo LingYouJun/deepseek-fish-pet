@@ -92,7 +92,7 @@ function showSetup(prefill) {
     $('assistant').value = cfg.assistant || 'off';
     $('visionBase').value = cfg.visionBase || '';
     $('visionKey').value = cfg.visionKey || '';
-    $('visionModel').value = cfg.visionModel || 'qwen-vl-max';
+    $('visionModel').value = cfg.visionModel || 'deepseek-flash';
     $('provider').value = 'custom';
   }
 }

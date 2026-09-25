@@ -35,10 +35,11 @@ const DEFAULTS = {
   ttsPitch: 1.18,
   vocabLevel: 'high_school',
   assistant: 'off',
-  // 视觉模型（可选）：用于"看懂屏幕"。留空 visionKey 就退回 OCR 读文字
-  visionBase: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+  // 视觉模型（可选）：用于"看懂屏幕"。留空就复用主模型的 apiBase/apiKey，
+  // 默认用 DeepSeek 的 deepseek-flash 视觉模型（同一个 Key）。
+  visionBase: '',
   visionKey: '',
-  visionModel: 'qwen-vl-max',
+  visionModel: 'deepseek-flash',
   asrEngine: 'auto',     // auto | whisper | webspeech
   asrModel: 'tiny.en',   // tiny.en | base.en | small.en
   memory: MEMORY_DEFAULTS,

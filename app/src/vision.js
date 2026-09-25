@@ -1,9 +1,10 @@
 // 视觉模型调用：把截图 + 问题发给一个 OpenAI 兼容的多模态模型，让它"看懂"画面。
-// 配置在 config.json 的 visionBase / visionKey / visionModel（默认阿里云百炼的 qwen-vl）。
+// 默认用 DeepSeek 自己的 deepseek-flash（视觉），复用主模型的 apiBase/apiKey。
+// 也可以单独配 visionBase / visionKey / visionModel 换别的多模态模型。
 async function describe(cfg, imageDataUrl, question) {
-  const base = String(cfg.visionBase || '').replace(/\/+$/, '');
-  const key = String(cfg.visionKey || '');
-  const model = cfg.visionModel || 'qwen-vl-max';
+  const base = String(cfg.visionBase || cfg.apiBase || '').replace(/\/+$/, '');
+  const key = String(cfg.visionKey || cfg.apiKey || '');
+  const model = cfg.visionModel || 'deepseek-flash';
   if (!base || !key) throw new Error('未配置视觉模型');
 
   const res = await fetch(base + '/chat/completions', {
