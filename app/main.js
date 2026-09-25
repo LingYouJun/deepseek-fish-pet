@@ -274,47 +274,31 @@ function scheduleSavePos() {
     savePosition(x, y);
   }, 400);
 }
-/* 拖拽：跟随由**主进程定时器**驱动，渲染层只负责"保活"。
+/* 拖拽：**由渲染层的鼠标事件直接驱动**（最早版本 b9f02a0 的做法，最跟手）。
  *
- * 以前是：渲染层 mousemove → IPC → 主进程读光标 → setPosition，一次一个来回，而且
- * 完全不节流。鼠标一快，mousemove 事件和 IPC 就排起队，窗口永远落后于光标（跟不上、
- * 越拖越远）。现在主进程每 8ms 直接读真实光标算位置，不再依赖事件到达速率；
- * 渲染层只在拖拽期间发心跳，用来判断"是不是已经松手了"。 */
-let dragWin = null, dragAnchor = null, dragLast = null;
-let dragTimer = null, dragSeenAt = 0;
-const DRAG_TICK_MS = 8;
-const DRAG_ALIVE_MS = 700;      // 超过这么久没收到心跳 → 认为松手事件丢了，自己收尾
-const DRAG_HZ_MS = 100;
-
-function dragStep() {
-  if (!petWin || petWin.isDestroyed() || !dragWin || !dragAnchor) return;
-  if (Date.now() - dragSeenAt > DRAG_ALIVE_MS) { endDrag(); return; }
-  const c = screen.getCursorScreenPoint();
-  const tx = Math.round(dragWin.x + (c.x - dragAnchor.x));
-  const ty = Math.round(dragWin.y + (c.y - dragAnchor.y));
-  if (dragLast && dragLast.x === tx && dragLast.y === ty) return;
-  dragLast = { x: tx, y: ty };
-  petWin.setPosition(tx, ty);
-}
-function beginDrag() {
-  if (!petWin || petWin.isDestroyed()) return;
-  const [x, y] = petWin.getPosition();
-  dragWin = { x, y };
-  dragAnchor = screen.getCursorScreenPoint();
-  dragLast = null;
-  dragSeenAt = Date.now();
-  clearInterval(dragTimer);
-  dragTimer = setInterval(dragStep, DRAG_TICK_MS);
-  dragStep();
-}
+ * 中间改过两版，都跟不上手：
+ *   1) "渲染层 mousemove 只当触发器，主进程读 getCursorScreenPoint() 算锚点差"
+ *   2) "主进程 8ms 定时器轮询 getCursorScreenPoint()"
+ * 根因：getCursorScreenPoint() 是主进程的**缓存值**，而且 8ms 一个 setPosition 会把
+ * 事件循环占满、缓存更新更滞后 —— 拖得越快、差得越远，就是"跟不上"。
+ * 鼠标事件自带的 e.screenX/e.screenY 才是每一帧最新鲜的光标位置，直接用它算窗口目标。 */
+let dragging = false;
+let dragLast = null;
+function beginDrag() { dragging = true; dragLast = null; }
 function endDrag() {
-  clearInterval(dragTimer);
-  dragTimer = null;
-  dragWin = null; dragAnchor = null; dragLast = null;
+  dragging = false;
+  dragLast = null;
   scheduleSavePos();
 }
 ipcMain.on('drag-start', () => beginDrag());
-ipcMain.on('drag-tick', () => { dragSeenAt = Date.now(); });   // 只当心跳
+ipcMain.on('drag-move', (_e, p) => {
+  if (!dragging || !petWin || petWin.isDestroyed() || !p) return;
+  const x = Math.round(Number(p.x)), y = Math.round(Number(p.y));
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+  if (dragLast && dragLast.x === x && dragLast.y === y) return;   // 目标没变就别再 setPosition
+  dragLast = { x, y };
+  petWin.setPosition(x, y);
+});
 ipcMain.on('drag-end', () => endDrag());
 ipcMain.on('quit', () => app.quit());
 /* 语音/识别失败等错误写进 debug.log —— 方便远程收集试用者的现场 */

@@ -3,7 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('petAPI', {
   // 桌宠窗口（拖拽：渲染层只当触发器，主进程读真实光标坐标）
   dragStart: () => ipcRenderer.send('drag-start'),
-  dragTick: () => ipcRenderer.send('drag-tick'),
+  dragMove: (p) => ipcRenderer.send('drag-move', p),
   dragEnd: () => ipcRenderer.send('drag-end'),
   quit: () => ipcRenderer.send('quit'),
   onSay: (cb) => ipcRenderer.on('pet:say', (_e, data) => cb(data)),

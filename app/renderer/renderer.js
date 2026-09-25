@@ -355,19 +355,7 @@ function resumeListening() { if (chatOpen || busy) return; listening = true; sta
 /* ---------------- 拖拽 / 摸头 / 戳（全区域） ----------------
    拖拽：mousemove 只当触发器，主进程读真实光标坐标来算目标位置，
    所以窗口移动不会影响坐标（不会漂移）。 */
-let dragging = false, dragMoved = 0;
-let dragHeart = null;
-
-/* 拖拽期间的心跳：真正"跟随光标"由主进程定时器做，这里只负责告诉主进程
-   "我还按着、还在拖"。主进程靠它判断松手事件是不是丢了（失焦/焦点被抢）。 */
-function startDragHeartbeat() {
-  clearInterval(dragHeart);
-  dragHeart = setInterval(() => {
-    if (!dragging) { clearInterval(dragHeart); dragHeart = null; return; }
-    try { window.petAPI.dragTick(); } catch {}
-  }, 100);
-}
-function stopDragHeartbeat() { clearInterval(dragHeart); dragHeart = null; }
+let dragging = false, dragMoved = 0, dragOffX = 0, dragOffY = 0;
 
 pet.addEventListener('mousedown', (e) => {
   holding = true;
@@ -376,9 +364,9 @@ pet.addEventListener('mousedown', (e) => {
   if ((e.clientY - r.top) / Math.max(1, r.height) < 0.42) {
     petting = true; petAccum = 0; lastPetX = e.clientX; patFired = false;   // 头部：左右滑 = 摸头
   } else {
-    dragging = true; dragMoved = 0;                                          // 身体：按住拖窗口
+    dragging = true; dragMoved = 0;
+    dragOffX = e.clientX; dragOffY = e.clientY;    // 抓点相对窗口左上角的偏移
     window.petAPI.dragStart();
-    startDragHeartbeat();
   }
   e.preventDefault();
 });
@@ -391,15 +379,16 @@ window.addEventListener('mousemove', (e) => {
     return;
   }
   if (!dragging) return;
-  /* 只累加位移，用来区分"拖拽"和"点一下"。
-     以前这里每次都发 dragTick → 主进程 setPosition，一次 mousemove 一个来回、
-     完全不节流，鼠标一快就排队 → 窗口跟不上光标。现在跟随交给主进程定时器。 */
+  /* 松手事件丢了（在窗口外松手 + 没触发 mouseup）的兜底：buttons==0 说明键已松开。 */
+  if (!(e.buttons & 1)) { releasePointerState('buttons-up'); return; }
   dragMoved += Math.abs(e.movementX) + Math.abs(e.movementY);
+  /* 关键：用鼠标事件自带的最新屏幕坐标**直接算窗口目标**，主进程只负责 setPosition。
+     中间那版让主进程读 getCursorScreenPoint()（缓存值、还带 8ms 轮询）会跟不上手。 */
+  window.petAPI.dragMove({ x: e.screenX - dragOffX, y: e.screenY - dragOffY });
 });
 window.addEventListener('mouseup', () => {
   holding = false;
   try { window.petAPI.hold(false); } catch {}
-  stopDragHeartbeat();
   if (petting) {
     petting = false;
     if (!patFired) pokeBody();          // 头部点一下 = 戳
@@ -415,13 +404,11 @@ window.addEventListener('mouseleave', () => { try { updateHit(-1, -1); } catch {
 /* 失焦/隐藏时把"按住"状态收干净。
    以前 blur 只复位了 holding/petting：没通知主进程、也没复位 dragging ——
    主进程的 holdInteractive 永远停在 true，命中轮询不再让窗口穿透，
-   桌宠那块透明矩形从此挡住桌面点击；dragging 残留还会让后续 mousemove 一直调
-   dragTick，窗口跟着光标乱跳。 */
+   桌宠那块透明矩形从此挡住桌面点击；dragging 残留还会让后续 mousemove 一直拖窗口。 */
 function releasePointerState(why) {
   if (!holding && !dragging && !petting) return;
   const wasDragging = dragging;
   holding = false; petting = false; dragging = false;
-  stopDragHeartbeat();
   try { window.petAPI.hold(false); } catch {}
   if (wasDragging) { try { window.petAPI.dragEnd(); } catch {} }
   try { window.petAPI.logErr('pointer released by ' + why); } catch {}
