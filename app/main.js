@@ -767,7 +767,7 @@ ipcMain.handle('chat:continue', async (_e, _payload) => {
   const messages = [
     { role: 'system', content: buildSystemPrompt(cfg) },
     ...memory.pickHistory(),
-    { role: 'user', content: '请继续：如果任务还没完成、还需要操作，就再给一行 ACTION: <工具>|<参数>（并在 EN: 里用一句简短说明）；如果已经完成，直接按正常格式回答（EN/ZH/WORDS/C1/C2），不要带 ACTION。' }
+    { role: 'user', content: '请继续。规则：\n① 如果上一步**失败或报错**了：先自己分析原因（参数/路径写错？环境缺东西？没权限？），能换个做法解决就再给一行 ACTION: <工具>|<参数> 重试（并确认同一条路不要重复撞两次以上）；确实解决不了，就用正常格式（EN/ZH/WORDS/C1/C2）明确告诉主人——卡在哪、什么原因、需要他做什么。\n② 如果还没做完、还需要操作，就再给一行 ACTION: <工具>|<参数>（并在 EN: 里用一句简短说明）。\n③ 如果已经完成，直接按正常格式回答（EN/ZH/WORDS/C1/C2），不要带 ACTION。' }
   ];
   const { reply, raw } = await genReply(cfg, messages);
   if (reply.en) memory.onAssistant(raw, reply.en);

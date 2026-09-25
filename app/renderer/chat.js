@@ -416,14 +416,22 @@ function addShot(dataUrl) {
   $('msgs').appendChild(d); scroll();
 }
 
-// 执行一个动作：显示结果 + 截图，返回结果对象（失败返回 null）
+// 执行一个动作：显示结果 + 截图，返回结果对象。
+// 关键：工具抛异常时**不中断任务**，而是把报错当成"结果"交回给她，让她自己分析、自己修、修不了再上报。
 async function execAction(action) {
   try {
     const r = await window.petAPI.assistantRun(action);
     if (r && r.image) addShot(r.image);
     addSys('🤖 ' + ((r && r.result) ? r.result : '（已执行）'));
     return r;
-  } catch (e) { addErr('助手执行失败：' + e.message); return null; }
+  } catch (e) {
+    const msg = '操作 `' + action.tool + '` 失败：' + ((e && e.message) || e);
+    addSys('⚠️ ' + msg);
+    return {
+      ok: false,
+      result: msg + '\n（请你自己分析原因：是参数/路径写错了，还是环境缺东西、没权限？能自己换做法解决就重试；解决不了就用正常格式告诉主人问题在哪、需要他做什么。）',
+    };
+  }
 }
 
 const MAX_STEPS = 6;
