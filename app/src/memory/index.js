@@ -92,18 +92,21 @@ async function onAppStart() {
   return session.info();
 }
 
-/* 一轮对话入库（compact 是给"老回合压缩"用的精简版） */
+/* 一轮对话入库（compact 是给"老回合压缩"用的精简版）
+   注意：compact **绝不能长得像一条正常回复** —— 否则历史里堆满"只有一行 EN:"的范例，
+   模型会跟着学，回复就丢掉 ZH/WORDS 了。所以这里加一个明确的历史标记。 */
+const COMPACT_MARK = '(earlier reply, abridged) ';
 function onTurn(userText, rawReply, enText) {
   session.push(
     { role: 'user', content: String(userText || '') },
-    { role: 'assistant', content: String(rawReply || ''), compact: 'EN: ' + String(enText || '') }
+    { role: 'assistant', content: String(rawReply || ''), compact: COMPACT_MARK + String(enText || '') }
   );
   bus.emit('session:turn', session.info());
 }
 
 /* 只记助手侧（开场白之类） */
 function onAssistant(rawReply, enText) {
-  session.push({ role: 'assistant', content: String(rawReply || ''), compact: 'EN: ' + String(enText || '') });
+  session.push({ role: 'assistant', content: String(rawReply || ''), compact: COMPACT_MARK + String(enText || '') });
 }
 
 /* 会话收尾：写中期摘要 + 抽永久记忆候选 → 清草稿 */

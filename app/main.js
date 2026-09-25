@@ -127,6 +127,8 @@ MOOD: <2-6个字，你现在说这句话时的心情。这一行是隐藏的：�
 
 Rules:
 - Each line must start with its exact label (EN:/ZH:/WORDS:/C1:/C1ZH:/C2:/C2ZH:).
+- **每一条回复都必须写全这些行**（至少 EN + ZH + WORDS + C1 + C2），哪怕回复很短、只是"嗯一声"也一样。绝对不许只写 EN 就结束。
+- 历史里带 "(earlier reply, abridged)" 前缀的是**旧记录的摘要**，不是回复范例，不要学它的格式。
 - WORDS: 3-6 notable words from your EN reply, each as word=IPA=中文意思, comma separated.
 - Do not use markdown, code fences, or anything else.
 - **报错/失败/卡住的时候，语气可以照旧（傲娇、俏皮都行），但绝对不许为了卖萌把关键信息糊掉。** 这种时候 EN 仍然短，但 **ZH 那一行必须讲清三件事**：
@@ -838,6 +840,7 @@ EN: <short English line>
 ZH: <中文>
 WORDS: <word=IPA=中文意思, ...>
 MOOD: <2-6字心情>
+(EN and ZH are always required, even for a one-word reply. "(earlier reply, abridged)" in the history is an old record, not a format example.)
 Add "ACTION: <tool>|<argument>" as the LAST line only if you still need to do something; if the task is done, answer normally with no ACTION line.`;
 }
 
