@@ -648,7 +648,10 @@ function startHitLoop() {
   clearInterval(hitTimer);
   hitTimer = setInterval(() => {
     if (!petWin || petWin.isDestroyed()) { clearInterval(hitTimer); hitTimer = null; return; }
-    if (holdInteractive) { applyIgnore(false); return; }
+    /* 拖拽中 / 按住中：一律保持窗口可交互，绝不让点穿把鼠标事件吃掉。
+       （以前只靠 renderer 的 hold IPC 置 holdInteractive，会有竞态；现在主进程自己也
+         知道 dragging，双保险。） */
+    if (dragging || holdInteractive) { applyIgnore(false); return; }
     applyIgnore(!solidAtCursor());
   }, 30);
 }

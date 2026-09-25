@@ -379,11 +379,11 @@ window.addEventListener('mousemove', (e) => {
     return;
   }
   if (!dragging) return;
-  /* 松手事件丢了（在窗口外松手 + 没触发 mouseup）的兜底：buttons==0 说明键已松开。 */
-  if (!(e.buttons & 1)) { releasePointerState('buttons-up'); return; }
   dragMoved += Math.abs(e.movementX) + Math.abs(e.movementY);
   /* 关键：用鼠标事件自带的最新屏幕坐标**直接算窗口目标**，主进程只负责 setPosition。
-     中间那版让主进程读 getCursorScreenPoint()（缓存值、还带 8ms 轮询）会跟不上手。 */
+     中间那版让主进程读 getCursorScreenPoint()（缓存值、还带 8ms 轮询）会跟不上手。
+     注意：不要在这里检查 e.buttons —— 窗口被 setPosition 移动时 Chromium 会合成一批
+     buttons=0 的 mousemove，一查就把拖拽当场杀掉（表现为"有时不拖动"）。 */
   window.petAPI.dragMove({ x: e.screenX - dragOffX, y: e.screenY - dragOffY });
 });
 window.addEventListener('mouseup', () => {
