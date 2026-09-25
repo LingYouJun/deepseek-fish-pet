@@ -18,14 +18,14 @@ const MEMORY_DEFAULTS = {
   skillArchiveMax: 5,    // 每次最多归档几条经验
   skillAutoArchive: true,// 启动时自动把攒够权重的经验归档进技能
   projRunTimeout: 60000,  // 执行脚本的超时（毫秒），到点强制结束
-  historyTokens: 6000,   // 历史按 token 预算保留（不是按条数）
+  historyTokens: 3000,   // 历史按 token 预算保留（省 token：老回合本来就会压缩成 EN: 一行，砍短体感无损）
   fullTurns: 3,          // 最近几轮助手回复保留完整格式（格式锚）
   toolResultChars: 500,  // AI 助手执行结果入库时的截断长度
   inject: {              // 每轮注入上下文的数量/长度
-    permanentFacts: 40,
+    permanentFacts: 20,
     longDays: 3,
-    mediumCount: 6,
-    longChars: 300,
+    mediumCount: 4,
+    longChars: 200,
     mediumChars: 200,
   },
 };
