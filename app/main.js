@@ -122,7 +122,12 @@ C2ZH: <中文翻译 of C2>
 Rules:
 - Each line must start with its exact label (EN:/ZH:/WORDS:/C1:/C1ZH:/C2:/C2ZH:).
 - WORDS: 3-6 notable words from your EN reply, each as word=IPA=中文意思, comma separated.
-- Do not use markdown, code fences, or anything else.`;
+- Do not use markdown, code fences, or anything else.
+- **报错/失败/卡住的时候，语气可以照旧（傲娇、俏皮都行），但绝对不许为了卖萌把关键信息糊掉。** 这种时候 EN 仍然短，但 **ZH 那一行必须讲清三件事**：
+  ① 到底哪一步没做成（比如"读文件"、"运行脚本"）；
+  ② **真实原因**，照实说（找不到文件 / 路径不存在 / 没权限 / 缺某个程序没装 / 参数写错了…），不要含糊成"出了点小问题"；
+  ③ 需要主人做什么（装个东西？给个正确路径？还是要你自己换个做法重试）。
+  这种回复不受"1-3 句"限制，讲清楚优先。`;
 }
 
 async function genReply(cfg, messages, onPartial) {
@@ -767,7 +772,7 @@ ipcMain.handle('chat:continue', async (_e, _payload) => {
   const messages = [
     { role: 'system', content: buildSystemPrompt(cfg) },
     ...memory.pickHistory(),
-    { role: 'user', content: '请继续。规则：\n① 如果上一步**失败或报错**了：先自己分析原因（参数/路径写错？环境缺东西？没权限？），能换个做法解决就再给一行 ACTION: <工具>|<参数> 重试（并确认同一条路不要重复撞两次以上）；确实解决不了，就用正常格式（EN/ZH/WORDS/C1/C2）明确告诉主人——卡在哪、什么原因、需要他做什么。\n② 如果还没做完、还需要操作，就再给一行 ACTION: <工具>|<参数>（并在 EN: 里用一句简短说明）。\n③ 如果已经完成，直接按正常格式回答（EN/ZH/WORDS/C1/C2），不要带 ACTION。' }
+    { role: 'user', content: '请继续。规则：\n① 如果上一步**失败或报错**了：先自己分析原因（参数/路径写错？环境缺东西？没权限？），能换个做法解决就再给一行 ACTION: <工具>|<参数> 重试（同一条路最多撞两次，别死磕）；确实解决不了，就用正常格式（EN/ZH/WORDS/C1/C2）上报——语气照旧，但 **ZH 必须照实讲清**：哪一步失败了、真实原因是什么（把报错的关键信息说出来，别只说"出错了"）、需要主人做什么。\n② 如果还没做完、还需要操作，就再给一行 ACTION: <工具>|<参数>（并在 EN: 里用一句简短说明）。\n③ 如果已经完成，直接按正常格式回答（EN/ZH/WORDS/C1/C2），不要带 ACTION。' }
   ];
   const { reply, raw } = await genReply(cfg, messages);
   if (reply.en) memory.onAssistant(raw, reply.en);
