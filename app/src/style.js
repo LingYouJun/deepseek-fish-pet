@@ -93,15 +93,28 @@ function writeSkillFile() {
   } catch { return null; }
 }
 
-/* 生成或复用 */
+/* 人设指纹：用来判断人设有没有变过（变了就重新推导风格，避免风格被固定住） */
+function personaSig(p) {
+  p = p || {};
+  const s = [p.name, p.world_setting, p.character_setting, p.personality, p.catchphrase].map((x) => String(x || '')).join('|');
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+  return String(h);
+}
+
+/* 生成或复用：人设没变就复用；人设变了（或 force）就按新人设重新推导 */
 async function ensure(llm, cfg, persona, force) {
   const cur = load();
-  if (cur && !force) { writeSkillFile(); return cur; }
+  const sig = personaSig(persona);
+  if (cur && !force && cur.sig === sig) { writeSkillFile(); return cur; }
   let out;
   try {
-    if (llm && cfg && cfg.apiKey) out = save(await derive(llm, cfg, persona));
+    if (llm && cfg && cfg.apiKey) out = await derive(llm, cfg, persona);
   } catch (e) { /* 落到兜底 */ }
-  if (!out) out = save(fallback(persona));
+  if (!out) out = fallback(persona);
+  out.sig = sig;
+  out.personaChanged = !!(cur && cur.sig !== sig);
+  save(out);
   writeSkillFile();
   return out;
 }
@@ -141,4 +154,4 @@ function spec(cfg, mood, includeMood) {
   return lines.filter(Boolean).join('\n');
 }
 
-module.exports = { load, save, derive, ensure, spec, moodHint, fallback, writeSkillFile, SKILL_ID, NS };
+module.exports = { load, save, derive, ensure, spec, moodHint, fallback, writeSkillFile, personaSig, SKILL_ID, NS };

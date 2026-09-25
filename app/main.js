@@ -773,6 +773,12 @@ if (!gotLock) {
     if ((config.load().memory || {}).skillAutoArchive !== false) {
       setTimeout(() => { archiveSkills().catch((e) => dbg('[skills] auto archive err ' + e)); }, 8000);
     }
+    // 界面风格：没有就按人设生成一次；人设改过就按新人设重推（都在后台，不打扰用户）
+    setTimeout(() => {
+      style.ensure(llm, config.load(), loadPersona())
+        .then((s) => { if (s && s.personaChanged) dbg('[style] 人设变了 -> 已重推风格：' + s.name); })
+        .catch((e) => dbg('[style] ensure err ' + e));
+    }, 5000);
     if (!config.load().apiKey) createChat();
   });
 
