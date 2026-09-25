@@ -72,5 +72,7 @@ contextBridge.exposeInMainWorld('petAPI', {
   ttsSpeak: (payload) => ipcRenderer.invoke('tts:speak', payload),
   artGet: () => ipcRenderer.invoke('art:get'),
   artOpen: () => ipcRenderer.invoke('art:open'),
+  skillsOpen: () => ipcRenderer.invoke('skills:open'),
+  skillsList: () => ipcRenderer.invoke('skills:list'),
   artReset: () => ipcRenderer.invoke('art:reset')
 });

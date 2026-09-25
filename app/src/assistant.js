@@ -7,10 +7,11 @@ const screenstream = require('./screenstream');
 const input = require('./input');
 const vision = require('./vision');
 const config = require('./config');
+const skills = require('./skills');
 
 // 每个工具所需的最低权限档
 const TOOL_TIER = {
-  list_dir: 'read', read_file: 'read',
+  list_dir: 'read', read_file: 'read', use_skill: 'read',
   open_path: 'normal', open_url: 'normal',
   web_open: 'web', web_click: 'web', web_type: 'web', web_read: 'web',
   screen_shot: 'full', screen_look: 'full',
@@ -128,6 +129,21 @@ async function run(tool, arg) {
   if (tool === 'read_file') {
     const text = fs.readFileSync(arg, 'utf8').slice(0, 3000);
     return `📄 ${arg}：\n${text}`;
+  }
+
+  /* ---------------- 技能：按需加载完整说明 ---------------- */
+  if (tool === 'use_skill') {
+    const s = skills.read(arg);
+    if (!s) {
+      const ids = skills.list().map((x) => x.id).join('、') || '(暂无)';
+      throw new Error('没有这个技能：' + arg + '。可用技能：' + ids);
+    }
+    let out = '📘 技能「' + s.name + '」\n' + s.body;
+    if (s.memory && s.memory.length) {
+      const facts = s.memory.slice().sort((a, b) => (Number(b.weight) || 0) - (Number(a.weight) || 0)).slice(0, 10);
+      out += '\n\n【这个技能积累下来的经验】\n' + facts.map((f) => '- ' + f.text).join('\n');
+    }
+    return out;
   }
 
   /* ---------------- OS 级键鼠（坐标是 1280x720 截图空间） ---------------- */

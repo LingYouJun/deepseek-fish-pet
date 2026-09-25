@@ -14,6 +14,7 @@ const asr = require('./src/asr');
 const chatlog = require('./src/chatlog');
 const screenstream = require('./src/screenstream');
 const gameagent = require('./src/gameagent');
+const skills = require('./src/skills');
 
 const dbg = (msg) => { try { fs.appendFileSync(path.join(app.getPath('userData'), 'debug.log'), new Date().toISOString() + ' ' + msg + '\n'); } catch {} };
 
@@ -43,7 +44,7 @@ function buildSystemPrompt(cfg) {
   const tier = cfg.assistant || 'off';
   let actionSec = '';
   if (tier !== 'off') {
-    let tools = '- open_url|https://...  (open a web page in the user\'s browser)\n- open_path|C:\\...  (open a file or app)\n- list_dir|C:\\...  (list a folder)\n- read_file|C:\\...  (read a text file)\n';
+    let tools = '- open_url|https://...  (open a web page in the user\'s browser)\n- open_path|C:\\...  (open a file or app)\n- list_dir|C:\\...  (list a folder)\n- read_file|C:\\...  (read a text file)\n- use_skill|<skill id>  (load a skill\'s full instructions before doing the task)\n';
     if (tier === 'web' || tier === 'full') {
       tools += '- web_open|<url>  (open a page in a controlled browser and read its content)\n- web_click|<CSS selector>  (click an element on the current page)\n- web_type|<selector>||<text>  (type text into an input)\n- web_read  (read the current page content again)\n';
     }
@@ -56,6 +57,16 @@ function buildSystemPrompt(cfg) {
     actionSec = '\n# Computer actions (AI assistant)\nYou may request ONE computer action per reply by adding a final line to your reply:\nACTION: <tool>|<argument>\nTools:\n' + tools + 'Only add the ACTION line when the user explicitly asks you to do something on their computer. ' + auto + ' Otherwise omit the line entirely.\nYou can do a multi-step task: give ONE action per reply; the system runs it, shows you the result, and asks you to continue until the task is done.\n';
   }
   const memCtx = memory.buildContext();
+  // 技能：只常驻一份"短目录"，命中时模型自己用 use_skill 把完整说明 load 进来（渐进式披露）
+  let skillSec = '';
+  if (tier !== 'off') {
+    const cat = skills.catalog();
+    if (cat) {
+      skillSec = '\n# Skills (load on demand)\nYou have these skills. Here you only see names + one-line descriptions — you do NOT know their details yet.\n'
+        + cat
+        + '\nWhen the current request matches one of them, FIRST load it with a line:\nACTION: use_skill|<skill id>\nand then follow the loaded instructions. If nothing matches, just answer normally without loading anything.\n';
+    }
+  }
   return `You are "${p.name || '大肥鱼'}", a desktop pet.
 
 # World setting
@@ -79,7 +90,7 @@ Never mention, hint at, or allude to this on your own.
 - Affection toward the user: ${mo.affection}/100
 - Your current mood: ${mo.mood}/100
 - Tone guide: high affection = warmer and more honest; low affection = more distant and tsundere. Low mood = a bit sulky/down; high mood = cheerful and playful.
-${memCtx}${actionSec}
+${memCtx}${skillSec}${actionSec}
 # Output format — reply with EXACTLY these lines, no markdown, no extra text:
 EN: <your English reply, 1-3 short sentences>
 ZH: <完整中文翻译>
@@ -577,6 +588,13 @@ ipcMain.handle('art:open', async () => {
   await shell.openPath(d);
   return d;
 });
+/* 技能：打开技能文件夹 / 列出技能 */
+ipcMain.handle('skills:open', async () => {
+  skills.ensureBuiltins();
+  const d = await skills.openFolder();
+  return d || skills.userDir();
+});
+ipcMain.handle('skills:list', () => skills.list().map((s) => ({ id: s.id, name: s.name, description: s.description })));
 ipcMain.handle('art:reset', () => {
   try { fs.unlinkSync(path.join(artDir(), 'pet-character.png')); } catch {}
   return true;

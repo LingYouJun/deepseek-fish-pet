@@ -134,6 +134,20 @@ $('artReset').addEventListener('click', async () => {
   catch (e) { $('setupMsg').textContent = '失败：' + e.message; }
 });
 
+/* ---------------- 📘 技能文件夹 ---------------- */
+$('skillsOpen').addEventListener('click', async () => {
+  try { const d = await window.petAPI.skillsOpen(); $('skillsMsg').textContent = '已打开：' + d; }
+  catch (e) { $('skillsMsg').textContent = '打开失败：' + e.message; }
+});
+$('skillsRefresh').addEventListener('click', async () => {
+  try {
+    const list = await window.petAPI.skillsList();
+    $('skillsMsg').textContent = (list && list.length)
+      ? ('已装 ' + list.length + ' 个技能：' + list.map((s) => s.id).join('、'))
+      : '还没有技能，点「打开技能文件夹」丢一个进去';
+  } catch (e) { $('skillsMsg').textContent = '读取失败：' + e.message; }
+});
+
 /* ---------------- 🎮 游戏助手 ---------------- */
 const GAME_PRESET = [
   '这是《明日方舟》的战斗关卡。请观察屏幕，判断当前该做什么，一步一步帮我把这关打过去。',
