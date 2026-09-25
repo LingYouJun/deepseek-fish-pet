@@ -35,6 +35,10 @@ const DEFAULTS = {
   ttsPitch: 1.18,
   vocabLevel: 'high_school',
   assistant: 'off',
+  // 视觉模型（可选）：用于"看懂屏幕"。留空 visionKey 就退回 OCR 读文字
+  visionBase: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+  visionKey: '',
+  visionModel: 'qwen-vl-max',
   asrEngine: 'auto',     // auto | whisper | webspeech
   asrModel: 'tiny.en',   // tiny.en | base.en | small.en
   memory: MEMORY_DEFAULTS,

@@ -90,6 +90,9 @@ function showSetup(prefill) {
     $('model').value = cfg.model || 'deepseek-chat';
     $('vocabLevel').value = cfg.vocabLevel || 'high_school';
     $('assistant').value = cfg.assistant || 'off';
+    $('visionBase').value = cfg.visionBase || '';
+    $('visionKey').value = cfg.visionKey || '';
+    $('visionModel').value = cfg.visionModel || 'qwen-vl-max';
     $('provider').value = 'custom';
   }
 }
@@ -111,7 +114,7 @@ $('save').addEventListener('click', async () => {
   $('save').disabled = true; $('setupMsg').textContent = '正在测试连接…';
   try {
     await window.petAPI.configTest({ apiBase, apiKey, model });
-    cfg = await window.petAPI.configSet({ apiBase, apiKey, model, vocabLevel: $('vocabLevel').value, assistant: $('assistant').value });
+    cfg = await window.petAPI.configSet({ apiBase, apiKey, model, vocabLevel: $('vocabLevel').value, assistant: $('assistant').value, visionBase: $('visionBase').value.trim(), visionKey: $('visionKey').value.trim(), visionModel: $('visionModel').value.trim() });
     $('setupMsg').textContent = '';
     showMain(); greet();
   } catch (e) { $('setupMsg').textContent = '连接失败：' + e.message; }

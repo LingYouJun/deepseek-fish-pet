@@ -37,6 +37,11 @@
       <option value="web">网页操控 · 自动打开页面/点击/输入/抓取</option>
       <option value="full">完全权限 · 含屏幕共享，操作自动执行</option>
     </select>
+    <label>视觉模型（可选，用于"看懂屏幕"；不填 Key 就退回读文字）</label>
+    <input id="visionBase" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1">
+    <input id="visionKey" type="password" placeholder="视觉模型 API Key（可选）">
+    <input id="visionModel" placeholder="qwen-vl-max">
+
     <label>立绘（免打包更换）</label>
     <div class="row" style="margin-top:6px">
       <button id="artOpen" class="ghost">打开立绘文件夹</button>

@@ -5,13 +5,15 @@ const { spawnSync } = require('child_process');
 const web = require('./web');
 const screenstream = require('./screenstream');
 const input = require('./input');
+const vision = require('./vision');
+const config = require('./config');
 
 // 每个工具所需的最低权限档
 const TOOL_TIER = {
   list_dir: 'read', read_file: 'read',
   open_path: 'normal', open_url: 'normal',
   web_open: 'web', web_click: 'web', web_type: 'web', web_read: 'web',
-  screen_shot: 'full',
+  screen_shot: 'full', screen_look: 'full',
   click: 'full', rclick: 'full', dclick: 'full', move: 'full', drag: 'full', scroll: 'full', type: 'full', key: 'full',
 };
 const RANK = { off: 0, read: 1, normal: 2, web: 3, full: 4 };
@@ -79,6 +81,24 @@ async function run(tool, arg) {
     const result = '🖥 已截取屏幕（' + cap.width + '×' + cap.height + '）\n'
       + (text ? '屏幕上识别到的文字：\n' + text : '（未识别到文字；截图已展示在对话里，你可以自己看）');
     return { text: result, image: cap.dataUrl, path: cap.path, ocr: text };
+  }
+
+  if (tool === 'screen_look') {
+    const cap = await captureScreen();
+    const question = arg || '看这张屏幕截图，用简短中文描述画面，并指出主要可点击元素的位置坐标（x,y，基于 1280x720 截图）。';
+    let text = '';
+    let usedVision = false;
+    try {
+      text = await vision.describe(config.load(), cap.dataUrl, question);
+      usedVision = true;
+    } catch (e) {
+      text = '';
+    }
+    if (!text) {
+      const t = ocr(cap.path);
+      text = t ? ('屏幕上识别到的文字：\n' + t) : '（未配置视觉模型，且未识别到文字）';
+    }
+    return { text: (usedVision ? '👁 视觉模型：\n' : '🖥 屏幕文字：\n') + text, image: cap.dataUrl, path: cap.path };
   }
 
   if (!arg) throw new Error('操作参数为空');
