@@ -395,6 +395,10 @@ if (window.petAPI.onSay) window.petAPI.onSay((reply) => {
   if (!reply || !reply.en) return;
   if (partialTurn) { partialTurn = false; reply = { ...reply, noSpeak: true }; }   // 已经读过一遍，最终版别重读
   showReply(reply);
+  // 她若答应要操作电脑（ACTION），桌宠窗口自己执行不了 —— 自动把对话窗叫出来接着做
+  if (reply.action && reply.action.tool && window.petAPI.runPetAction) {
+    try { window.petAPI.runPetAction(reply.action); } catch {}
+  }
 });
 if (window.petAPI.onChatState) window.petAPI.onChatState((open) => { chatOpen = open; if (open) pauseListening(); else resumeListening(); });
 if (window.petAPI.onFeed) window.petAPI.onFeed(() => feedFish());

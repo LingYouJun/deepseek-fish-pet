@@ -8,6 +8,8 @@ contextBridge.exposeInMainWorld('petAPI', {
   quit: () => ipcRenderer.send('quit'),
   onSay: (cb) => ipcRenderer.on('pet:say', (_e, data) => cb(data)),
   onSayPartial: (cb) => ipcRenderer.on('pet:say-partial', (_e, data) => cb(data)),
+  runPetAction: (a) => ipcRenderer.send('pet:action', a),
+  onRunAction: (cb) => ipcRenderer.on('chat:runAction', (_e, d) => cb(d)),
   onChatPartial: (cb) => ipcRenderer.on('chat:partial', (_e, data) => cb(data)),
   onChatState: (cb) => {
     ipcRenderer.on('chat:opened', () => cb(true));

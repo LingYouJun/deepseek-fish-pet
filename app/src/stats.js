@@ -94,11 +94,11 @@ function nudge(key, base, trigger, reason, noCap) {
   let delta = inertia(key, cur, Number(base) * weight(n));
   if (Math.abs(delta) < Math.abs(Number(base)) * MIN_W) delta = Math.sign(base) * Math.abs(Number(base)) * MIN_W;
 
-  const dayKey = key + ':#day';
-  const used = Number(v.counts[dayKey]) || 0;
+  const dayPos = key + ':#day+', dayNeg = key + ':#day-';
+  const usedP = Number(v.counts[dayPos]) || 0, usedN = Number(v.counts[dayNeg]) || 0;
   if (!noCap) {
-    if (delta > 0 && used >= DAILY_CAP) delta = 0;                // 日上限：软保险
-    if (delta < 0 && used <= -DAILY_CAP) delta = 0;
+    if (delta > 0 && usedP >= DAILY_CAP) delta = 0;          // 日上限：正负分开算，防止对冲刷额度
+    if (delta < 0 && usedN >= DAILY_CAP) delta = 0;
   }
 
   const next = clamp(key, round2(cur + delta));
@@ -107,7 +107,10 @@ function nudge(key, base, trigger, reason, noCap) {
 
   v[key] = next;
   v.counts[ck] = n;
-  if (!noCap) v.counts[dayKey] = round2(used + real);
+  if (!noCap) {
+    if (real > 0) v.counts[dayPos] = round2(usedP + real);
+    else v.counts[dayNeg] = round2(usedN - real);
+  }
   save(v);
   logChange({ key, from: cur, to: next, delta: real, trigger: trigger || '', reason: String(reason || '').slice(0, 120), n });
   return { key, from: cur, to: next, delta: real, n };
@@ -131,9 +134,13 @@ function applyDeltas(deltas, reason) {
   return out;
 }
 
-/* 慢回归：性格层每会话往中间靠一点（IQ/认真度/关系层不回归） */
+/* 慢回归：性格层往中间靠一点。**按时间限流**（默认 6 小时最多一次），
+   否则一天重启十次就漂两点了，根本不是"极慢"。IQ/认真度/关系层不回归。 */
 function regress(maxStep) {
   const v = load();
+  const now = Date.now();
+  const MIN_GAP = 6 * 3600000;
+  if (v.lastRegress && now - v.lastRegress < MIN_GAP) return [];
   const step = Math.max(0, Math.min(0.5, Number(maxStep) || 0.2));
   const out = [];
   for (const k of KEYS) {

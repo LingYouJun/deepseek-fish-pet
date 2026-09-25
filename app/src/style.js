@@ -106,17 +106,17 @@ function personaSig(p) {
 async function ensure(llm, cfg, persona, force) {
   const cur = load();
   const sig = personaSig(persona);
-  if (cur && !force && cur.sig === sig) { writeSkillFile(); return cur; }
+  if (cur && !force && cur.sig === sig) { cur.personaChanged = false; return cur; }
+  const changed = !!(cur && cur.sig !== sig);
   let out;
   try {
     if (llm && cfg && cfg.apiKey) out = await derive(llm, cfg, persona);
   } catch (e) { /* 落到兜底 */ }
   if (!out) out = fallback(persona);
   out.sig = sig;
-  out.personaChanged = !!(cur && cur.sig !== sig);
-  save(out);
+  save(out);          // 注意：personaChanged 是临时标记，不落盘（否则下次启动会误报）
   writeSkillFile();
-  return out;
+  return Object.assign({}, out, { personaChanged: changed });
 }
 
 /* 记忆联动：好感度/心情 → 冷暖微调（确定性，不花 token） */

@@ -704,6 +704,7 @@ async function archiveSkills(limit) {
   if (!items.length) return { ok: true, filed: 0, total: 0, log: [] };
   const log = [];
   let filed = 0;
+  let budget = Math.max(2, Math.min(40, Number(mc.skillArchiveCalls) || 10));   // 总调用硬上限
   for (const it of items) {
     try {
       const messages = [
@@ -711,7 +712,8 @@ async function archiveSkills(limit) {
         { role: 'user', content: '要归档的经验（权重 ' + it.weight + '，出现过 ' + (it.hits || 1) + ' 次）：\n' + it.text + (it.skill ? '\n（可能属于技能：' + it.skill + '）' : '') }
       ];
       let wrote = false;
-      for (let i = 0; i < 8; i++) {
+      for (let i = 0; i < 8 && budget > 0; i++) {
+        budget--;
         const raw = await llm.request(cfg, messages);
         // ① 写入块（支持多行内容）
         const w = parseWriteBlock(raw);
@@ -747,8 +749,8 @@ async function archiveSkills(limit) {
       log.push('❌ ' + it.text.slice(0, 40) + '：' + ((e && e.message) || e));
     }
   }
-  dbg('[skills] archive filed=' + filed + '/' + items.length);
-  return { ok: true, filed, total: items.length, log };
+  dbg('[skills] archive filed=' + filed + '/' + items.length + ' 剩余调用预算=' + budget);
+  return { ok: true, filed, total: items.length, log, budgetLeft: budget };
 }
 ipcMain.handle('skills:archive', () => archiveSkills());
 ipcMain.handle('skills:pool', () => ({
@@ -813,16 +815,45 @@ ipcMain.handle('assistant:run', async (_e, a) => {
   return { ok: true, result: text, image, action };
 });
 
+/* 多步任务的"续跑"专用精简提示词：
+   续跑时不需要人设全文/记忆/技能目录/项目说明 —— 那些首轮已经给过了，
+   每步都重发一遍纯属浪费（这是单次最贵的开销）。这里只留：短人设 + 工具 + 输出格式。 */
+function buildContinuePrompt(cfg) {
+  const p = loadPersona();
+  const tier = cfg.assistant || 'off';
+  let tools = '- open_url|https://...   - open_path|C:\\...   - list_dir|C:\\...   - read_file|C:\\...   - use_skill|<skill id>\n';
+  tools += '- skill_ls|<path>   - skill_read|<path>   - skill_write|<path>||<text>   - skill_rm|<path>\n';
+  tools += '- proj_ls|<path>   - proj_read|<path>   - proj_rm|<path>   - proj_open|<path>   - proj_run|<path>\n';
+  if (tier === 'web' || tier === 'full') tools += '- web_open|<url>   - web_click|<css selector>   - web_type|<selector>||<text>   - web_read\n';
+  if (tier === 'full') tools += '- screen_shot   - screen_look|<question>   - click|x,y   - rclick|x,y   - dclick|x,y   - move|x,y   - drag|x1,y1|x2,y2   - scroll|x,y|delta   - type|<text>   - key|<name>\n';
+  return `You are "${p.name || '大肥鱼'}", a desktop pet (${p.personality || '傲娇、温柔、嘴硬'}). Stay in character.
+You are IN THE MIDDLE of a multi-step task the user asked for. Keep every line short.
+
+# Computer actions
+Add a final line: ACTION: <tool>|<argument>
+Tools:
+${tools}
+# Output format
+EN: <short English line>
+ZH: <中文>
+WORDS: <word=IPA=中文意思, ...>
+MOOD: <2-6字心情>
+Add "ACTION: <tool>|<argument>" as the LAST line only if you still need to do something; if the task is done, answer normally with no ACTION line.`;
+}
+
 /* 多步任务：执行完一步后，把结果喂回模型，让它决定下一步或收尾 */
-ipcMain.handle('chat:continue', async (_e, _payload) => {
+ipcMain.handle('chat:continue', async (e, _payload) => {
   const cfg = config.load();
   const messages = [
-    { role: 'system', content: buildSystemPrompt(cfg) },
+    { role: 'system', content: buildContinuePrompt(cfg) },
     ...memory.pickHistory(),
     { role: 'user', content: '请继续。规则：\n① 如果上一步**失败或报错**了：先自己分析原因（参数/路径写错？环境缺东西？没权限？），能换个做法解决就再给一行 ACTION: <工具>|<参数> 重试（同一条路最多撞两次，别死磕）；确实解决不了，就用正常格式（EN/ZH/WORDS/C1/C2）上报——语气照旧，但 **ZH 必须照实讲清**：哪一步失败了、真实原因是什么（把报错的关键信息说出来，别只说"出错了"）、需要主人做什么。\n② 如果还没做完、还需要操作，就再给一行 ACTION: <工具>|<参数>（并在 EN: 里用一句简短说明）。\n③ 如果已经完成，直接按正常格式回答（EN/ZH/WORDS/C1/C2），不要带 ACTION。' }
   ];
   const { reply, raw } = await genReply(cfg, messages);
   if (reply.en) memory.onAssistant(raw, reply.en);
+  logTurn('', reply);   // 中间/最终回复也要进聊天记录，否则重开窗口看不到任务结果
+  // 注意：续跑几乎都是从对话窗发起的，对话窗自己会渲染 —— 再 relayToChat 就会画两遍
+  if (!isFromChat(e)) relayToChat({ who: 'pet', en: reply.en, zh: reply.zh, words: reply.words, choices: reply.choices });
   return reply;
 });
 
@@ -838,6 +869,16 @@ ipcMain.handle('game:start', async (_e, o) => {
 });
 ipcMain.handle('game:stop', () => gameagent.stop());
 ipcMain.handle('game:status', () => gameagent.status());
+
+/* 桌宠窗口用语音接受了任务（带 ACTION）→ 把对话窗叫出来执行，别让她的承诺落空 */
+ipcMain.on('pet:action', (_e, action) => {
+  if (!action || !action.tool) return;
+  dbg('[pet] 语音任务转交对话窗：' + action.tool + ' ' + (action.arg || ''));
+  createChat();
+  const send = () => { if (chatWin && !chatWin.isDestroyed()) chatWin.webContents.send('chat:runAction', action); };
+  setTimeout(send, 1000);
+  setTimeout(send, 2500);   // 兜底：窗口加载慢时再送一次（渲染层会去重）
+});
 
 /* ---------------- 生命周期 ---------------- */
 const gotLock = app.requestSingleInstanceLock();
@@ -870,7 +911,8 @@ if (!gotLock) {
       memory.judgeStatsNow().then((r) => { if (r) dbg('[stats] catch-up judged: ' + r.reason); }).catch(() => {});
     }, 9000);
     createPet();
-    screenstream.warm().catch(() => {});   // 预热屏幕流，第一次"看屏幕"不卡那一下
+    // 预热屏幕流：首帧更快。不想让系统一直显示"正在捕获"就把 memory.screenWarm 设 false
+    if ((config.load().memory || {}).screenWarm !== false) screenstream.warm().catch(() => {});
     // 启动几秒后，默默把攒够权重的经验归档进技能文件夹（AI 自己整理）
     if ((config.load().memory || {}).skillAutoArchive !== false) {
       setTimeout(() => { archiveSkills().catch((e) => dbg('[skills] auto archive err ' + e)); }, 8000);

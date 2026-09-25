@@ -211,6 +211,20 @@ if (window.petAPI.onPersonaChanged) window.petAPI.onPersonaChanged((d) => {
   } catch {}
 });
 
+/* 桌宠那边用语音交代的任务转过来执行（主进程会兜底重发一次，这里做去重） */
+let lastRunAt = 0, lastRunKey = '';
+if (window.petAPI.onRunAction) window.petAPI.onRunAction((a) => {
+  if (!a || !a.tool) return;
+  const key = a.tool + '|' + (a.arg || '');
+  if (key === lastRunKey && Date.now() - lastRunAt < 8000) return;
+  lastRunKey = key; lastRunAt = Date.now();
+  const box = document.createElement('div');
+  box.className = 'msg sys';
+  box.textContent = '🎤 你刚才用语音交代的事：' + a.tool + (a.arg ? ' ' + a.arg : '');
+  $('msgs').appendChild(box); scroll();
+  renderAction(box, a, () => runTask(box, a, 1), () => {});
+});
+
 /* ---------------- 🎮 游戏助手 ---------------- */
 const GAME_PRESET = [
   '这是《明日方舟》的战斗关卡。请观察屏幕，判断当前该做什么，一步一步帮我把这关打过去。',
@@ -460,12 +474,13 @@ async function execAction(action) {
     const r = await window.petAPI.assistantRun(action);
     if (r && r.image) addShot(r.image);
     addSys('🤖 ' + ((r && r.result) ? r.result : '（已执行）'));
+    // 工具没抛异常、但结果本身是失败（脚本退出码非 0、超时、被拒绝…）也算这一趟没办成
+    if (r && /^(❌|⏱|⚠️)|失败|出错|超时|不被允许/.test(String(r.result || ''))) taskFailed = true;
     return r;
   } catch (e) {
     taskFailed = true;
     const msg = '操作 `' + action.tool + '` 失败：' + ((e && e.message) || e);
-    addSys('⚠️ ' + msg);
-    return {
+    addSys('⚠️ ' + msg);    return {
       ok: false,
       result: msg + '\n（请你自己分析原因：是参数/路径写错了，还是环境缺东西、没权限？能自己换做法解决就重试；解决不了就用正常格式告诉主人问题在哪、需要他做什么。）',
     };

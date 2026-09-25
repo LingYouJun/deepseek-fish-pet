@@ -26,12 +26,17 @@ const LABELS = {
 const builtinFile = () => path.join(__dirname, '..', 'persona.json');   // 随包发布的默认
 const file = () => path.join(app.getPath('userData'), 'persona.json');  // 实际使用的（可写）
 
-/* 首次运行把默认人设拷进 userData（之后用户/AI 都改这份） */
+/* 首次运行把默认人设拷进 userData（之后用户/AI 都改这份）
+   逐文件读写而不是 copyFileSync —— 打包后默认人设在 asar 里，copyFileSync 不一定读得到 */
 function ensure() {
   const f = file();
   if (!fs.existsSync(f)) {
-    try { fs.copyFileSync(builtinFile(), f); }
-    catch { try { fs.writeFileSync(f, JSON.stringify({ name: '大肥鱼' }, null, 2)); } catch {} }
+    try {
+      fs.mkdirSync(path.dirname(f), { recursive: true });
+      fs.writeFileSync(f, fs.readFileSync(builtinFile()));
+    } catch {
+      try { fs.writeFileSync(f, JSON.stringify({ name: '大肥鱼' }, null, 2)); } catch {}
+    }
   }
   return f;
 }

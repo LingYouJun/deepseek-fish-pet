@@ -118,55 +118,52 @@ async function onSessionEnd() {
   const llm = deps.llm;
   const entry = { id: info.id, date: dayStr(info.startedAt), turns: msgs.length, ts: Date.now(), summary: '' };
 
-  if (llm && c.apiKey) {
-    try { entry.summary = await jobs.summarize(llm, c, msgs); } catch {}
-  }
+  /* 四件事互相独立（都只是"读同一段对话、产出各自的结果"）→ **并行跑**。
+     同样的 token，会话结束的等待时间从"4 次串行"砍到"1 次的时间"，而且各自失败互不影响。 */
+  const useLLM = !!(llm && c.apiKey);
+  const cat = deps.skillCatalog ? deps.skillCatalog() : '';
+  const curAll = Object.assign({}, require('../mood').load(), stats.all());
+  const [summary, factItems, expItems, judged] = useLLM
+    ? await Promise.all([
+      jobs.summarize(llm, c, msgs).catch(() => ''),
+      jobs.extractFacts(llm, c, msgs).catch(() => []),
+      jobs.extractExperiences(llm, c, msgs, cat).catch(() => []),
+      jobs.judgeStats(llm, c, msgs, deps.persona ? deps.persona() : {}, curAll).catch(() => null),
+    ])
+    : ['', [], [], null];
+
+  if (summary) entry.summary = summary;
   if (!entry.summary) entry.summary = tokens.clip(msgs.slice(-6).map((m) => m.content).join(' / '), 300);
   medium.add(entry);
 
+  /* 永久记忆候选 */
   let extracted = 0;
-  if (llm && c.apiKey) {
-    try {
-      const items = await jobs.extractFacts(llm, c, msgs);
-      if (items.length) {
-        permanent.merge(items);
-        const r = permanent.promote(mc.promoteWeight || 7);
-        extracted = items.length;
-        bus.emit('memory:permanent', r);
-      }
-    } catch {}
+  if (factItems && factItems.length) {
+    permanent.merge(factItems);
+    const r = permanent.promote(mc.promoteWeight || 7);
+    extracted = factItems.length;
+    bus.emit('memory:permanent', r);
   }
 
-  /* 同一段对话里再抽一次"做事的经验" → 进共有的技能长期记忆库（权重够了再归档进技能文件夹） */
+  /* 做事的经验 → 共有的技能长期记忆库（权重够了再归档进技能文件夹） */
   let learned = 0;
-  if (llm && c.apiKey) {
-    try {
-      const cat = deps.skillCatalog ? deps.skillCatalog() : '';
-      const exps = await jobs.extractExperiences(llm, c, msgs, cat);
-      if (exps.length) {
-        const r = skillmem.merge(exps, mc.skillPoolMax || 200);
-        learned = exps.length;
-        bus.emit('memory:skillmem', r);
-      }
-    } catch {}
+  if (expItems && expItems.length) {
+    const r = skillmem.merge(expItems, mc.skillPoolMax || 200);
+    learned = expItems.length;
+    bus.emit('memory:skillmem', r);
   }
 
   applyRetention(mc);
 
-  /* 同一段对话再判一次"内在数值"该怎么变（长期陪伴向：绝大多数是 0，单次最多 ±2） */
+  /* 内在数值的变化（长期陪伴向：绝大多数是 0，单次最多 ±2） */
   let statChange = null;
-  if (llm && c.apiKey) {
-    try {
-      const j = await jobs.judgeStats(llm, c, msgs, deps.persona ? deps.persona() : {}, Object.assign({}, require('../mood').load(), stats.all()));
-      if (j && Object.keys(j.deltas).length) {
-        const applied = stats.applyDeltas(j.deltas, j.reason);
-        const st = stats.load();
-        st.lastJudge = Date.now();
-        stats.save(st);
-        statChange = { reason: j.reason, applied, deltas: j.deltas };
-        bus.emit('stats:judged', statChange);
-      }
-    } catch {}
+  if (judged && Object.keys(judged.deltas).length) {
+    const applied = stats.applyDeltas(judged.deltas, judged.reason);
+    const st = stats.load();
+    st.lastJudge = Date.now();
+    stats.save(st);
+    statChange = { reason: judged.reason, applied, deltas: judged.deltas };
+    bus.emit('stats:judged', statChange);
   }
 
   session.clear();
