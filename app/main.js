@@ -182,7 +182,9 @@ function createPet() {
   petWin.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   petWin.on('moved', scheduleSavePos);
   hitInfo = null; hitIgnoring = null; holdInteractive = false;
-  startHitLoop();
+  /* 点穿系统已禁用（见 applyIgnore 的注释）—— 它依赖的 getCursorScreenPoint() 是缓存值，
+     和拖拽跟手是同一个根因，会把"光标在身体上"误判成"在透明区"，导致窗口穿透、拖不动。
+     当年能跟手的 b9f02a0 本来就没有这套点穿。 */
 
   petWin.webContents.on('context-menu', () => {
     Menu.buildFromTemplate([
@@ -639,9 +641,14 @@ function solidAtCursor() {
 
 function applyIgnore(ignore) {
   if (!petWin || petWin.isDestroyed()) return;
-  if (hitIgnoring === ignore) return;
-  hitIgnoring = ignore;
-  try { petWin.setIgnoreMouseEvents(ignore, { forward: true }); } catch {}
+  /* 点穿暂时整体关掉：setIgnoreMouseEvents(true) 会让窗口吃不到 mousedown/mousemove，
+     而它依赖的 getCursorScreenPoint() 又是缓存值（和拖拽跟手同一个坑），会把
+     "光标在身体上"误判成"在透明区" → 拖不动 / 拖一下断。
+     所以这里只允许"恢复可交互"，绝不再主动穿透。以后要做点穿得先解决光标实时性。 */
+  if (ignore) return;
+  if (hitIgnoring === false) return;
+  hitIgnoring = false;
+  try { petWin.setIgnoreMouseEvents(false, { forward: true }); } catch {}
 }
 
 function startHitLoop() {
