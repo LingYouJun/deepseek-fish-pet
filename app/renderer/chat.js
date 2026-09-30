@@ -1176,6 +1176,21 @@ if (window.petAPI.onAsrProgress) window.petAPI.onAsrProgress((p) => {
   } catch {}
 });
 
+/* VAD（静音检测）模型：可选，但实测免幻觉 + 快 53% */
+$('micPermVad') && $('micPermVad').addEventListener('click', async () => {
+  const btn = $('micPermVad');
+  btn.disabled = true;
+  $('micPermMsg').textContent = '正在下载 VAD 静音检测模型 …（约 0.9MB，很快）';
+  try {
+    const r = await window.petAPI.asrDownload('vad');
+    $('micPermMsg').textContent = (r && r.ok)
+      ? '✅ VAD 已就绪：以后识别只处理语音段 —— 静音段不再产生幻觉词，而且快一半。'
+      : ('❌ VAD 下载失败：' + ((r && r.error) || '未知') + '\n→ 三个源都试过了；网络恢复后再点一次即可，不影响现有识别。');
+  } catch (e) {
+    $('micPermMsg').textContent = '❌ VAD 下载失败：' + ((e && e.message) || e);
+  } finally { btn.disabled = false; }
+});
+
 /* 语音自检：不需要说话，直接判定问题出在哪一环 */
 async function runAsrSelfTest(render) {
   const say = (t) => { try { render(t); } catch {} };

@@ -394,6 +394,7 @@ ipcMain.on('chat:close', () => closeChatForReal());
 ipcMain.handle('asr:status', () => asr.status(config.load().asrModel));
 ipcMain.handle('asr:download', async (_e, name) => {
   const model = String(name || config.load().asrModel || 'tiny.en');
+  const isVad = (model === 'vad');        // VAD 模型不能当成 asrModel 存进去
   const push = (p) => {
     const msg = 'asr:progress';
     if (petWin && !petWin.isDestroyed()) petWin.webContents.send(msg, p);
@@ -401,9 +402,11 @@ ipcMain.handle('asr:download', async (_e, name) => {
   };
   try {
     await asr.downloadModel(model, push);
-    if (model !== config.load().asrModel) config.save({ asrModel: model });
-    return { ok: true, status: asr.status(model) };
+    if (!isVad && model !== config.load().asrModel) config.save({ asrModel: model });
+    dbg('[asr] 模型下载完成 ' + model + (isVad ? '（VAD）' : ''));
+    return { ok: true, status: asr.status(config.load().asrModel) };
   } catch (e) {
+    dbg('[asr] 下载失败 ' + model + ' : ' + String((e && e.message) || e));
     return { ok: false, error: String((e && e.message) || e) };
   }
 });
@@ -433,7 +436,10 @@ ipcMain.handle('asr:transcribe', async (_e, buf) => {
   try {
     const b = Buffer.isBuffer(buf) ? buf : Buffer.from(buf);
     if (!b || b.length < 1000) return { ok: true, text: '' };
-    const r = await asr.transcribeDetailed(b, cfg.asrModel || 'base.en');
+    const r = await asr.transcribeDetailed(b, cfg.asrModel || 'base.en', {
+      vad: cfg.asrVad !== false,
+      vadThreshold: cfg.asrVadThreshold,
+    });
     const text = r.text;
     // 只有非语音标注（哼唱/音乐/静音）没有实际内容的话直接丢掉，别白花一次对话
     if (!/[a-z]{2}/i.test(text)) return { ok: true, text: '' };
@@ -455,6 +461,7 @@ ipcMain.handle('asr:transcribe', async (_e, buf) => {
     }
     speak.logScore({ overall: score.overall, band: score.band, n: score.words.length, poor: (score.counts || {}).poor || 0 });
     dbg('[asr] words=' + score.words.length + ' overall=' + score.overall + ' band=' + score.band
+      + ' vad=' + (r.vad ? 'on' : 'off')
       + ' ipa命中=' + Object.keys(ipa).length + '/' + score.words.length);
     return { ok: true, text, score, ipa, autoAdded };
   } catch (e) {

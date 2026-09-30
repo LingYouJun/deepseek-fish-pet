@@ -54,6 +54,8 @@ const DEFAULTS = {
   visionModel: 'deepseek-flash',
   asrEngine: 'auto',     // auto | whisper | webspeech
   asrModel: 'base.en',   // tiny.en | base.en | small.en（默认 base.en：tiny 太不准，口语练习会误判）
+  asrVad: true,          // 装了就启用 VAD 只处理语音段：实测免幻觉 + 快 53%（模型缺自动跳过）
+  asrVadThreshold: 0.5,  // VAD 灵敏度 0~1，越高越严格（说话轻就调低）
   speakGoodP: 0.8,       // 口语打分：p ≥ 此值 = 绿（读得清楚）
   speakOkP: 0.55,        // p ≥ 此值 = 黄（一般），再低 = 红（含糊）
   speakPosBias: true,    // 句首偏差补偿（第 1~2 个词天然偏低，给一点点补偿）
