@@ -19,6 +19,9 @@ const style = require('./src/style');
 const projects = require('./src/projects');
 const stats = require('./src/stats');
 const persona = require('./src/persona');
+const personatags = require('./src/personatags');
+const petactions = require('./src/petactions');
+const speak = require('./src/speak');
 
 const dbg = (msg) => { try { fs.appendFileSync(path.join(app.getPath('userData'), 'debug.log'), new Date().toISOString() + ' ' + msg + '\n'); } catch {} };
 
@@ -47,9 +50,16 @@ function buildSystemPrompt(cfg) {
   const p = loadPersona();
   const mo = mood.load();
   const tier = cfg.assistant || 'off';
+  /* 语气倾向：由「核心人格」词条给出（傲娇/病娇/雌小鬼…各有一套味道）。
+     以前这里是写死的 "You are tsundere…"，人设换成别的她还照着傲娇演，所以挪进词条表。 */
+  let toneSec = '';
+  try {
+    const tone = personatags.toneOf(p);
+    if (tone) toneSec = '\n# 你的人格基调（核心人格，每一句都要贴住这个味道）\n' + tone + '\n';
+  } catch {}
   let actionSec = '';
   if (tier !== 'off') {
-    let tools = '- open_url|https://...  (open a web page in the user\'s browser)\n- open_path|C:\\...  (open a file or app)\n- list_dir|C:\\...  (list a folder)\n- read_file|C:\\...  (read a text file)\n- use_skill|<skill id>  (load a skill\'s full instructions before doing the task)\n';
+    let tools = '- open_url|https://...  (open a web page in the user\'s browser)\n- open_path|C:\\...  (open a file or app)\n- list_dir|C:\\...  (list a folder)\n- read_file|C:\\...  (read a text file)\n- use_skill|<skill id>  (load a skill\'s full instructions before doing the task)\n- tag_list  (看到你的人格词汇表：tier1 核心人格决定你的立绘)\n- tag_set|{"id":"yandere","label":"病娇","tier":1,"moodDir":1,"words":["病娇","偏执"]}  (补/改人格词条；tier1=核心人格)\n- tag_rm|<id>\n';
     if (tier === 'web' || tier === 'full') {
       tools += '- web_open|<url>  (open a page in a controlled browser and read its content)\n- web_click|<CSS selector>  (click an element on the current page)\n- web_type|<selector>||<text>  (type text into an input)\n- web_read  (read the current page content again)\n';
     }
@@ -100,7 +110,7 @@ ${p.world_setting || '现代都市，主人是普通人，你是住在主人电�
 ${p.character_setting || '蓝发鲸鱼女仆，傲娇、温柔、嘴硬。'}
 - Personality: ${p.personality || '傲娇、温柔、嘴硬'}
 - Catchphrase: ${p.catchphrase || 'I am NOT a freeloader fat fish!'}
-- You are tsundere: proud and prickly on the surface, but warm and caring underneath.
+${toneSec}
 
 # STRICT HIDDEN SETTING — NEVER REVEAL UNLESS THE USER BRINGS IT UP FIRST
 ${p.hidden_setting || ''}
@@ -185,7 +195,25 @@ function createPet() {
   startHitLoop();
 
   petWin.webContents.on('context-menu', () => {
+    const isChat = config.load().petMode === 'chat';
     Menu.buildFromTemplate([
+      { label: isChat ? '✋ 切到交互模式（点部位出动作）' : '💬 切到聊天模式（可拖拽/可戳）', click: () => {
+        const mode = isChat ? 'interact' : 'chat';
+        config.save({ petMode: mode });
+        dbg('[pet] mode -> ' + mode + ' (menu)');
+        if (petWin && !petWin.isDestroyed()) { try { petWin.webContents.send('pet:mode', { mode }); } catch {} }
+      } },
+      { label: '📁 打开立绘姿态文件夹（丢 PNG 进去即生效）', click: () => {
+        const d = petactions.posesDir();
+        try { fs.mkdirSync(d, { recursive: true }); } catch {}
+        shell.openPath(d).catch(() => {});
+      } },
+      { label: '🎭 让她重写交互台词（全量）', click: () => {
+        refreshPetLines(loadPersona(), true)
+          .then((r) => dbg('[petlines] 手动全量重写 -> ' + JSON.stringify(r)))
+          .catch((e) => dbg('[petlines] 手动重写失败 ' + ((e && e.message) || e)));
+      } },
+      { type: 'separator' },
       { label: '🐟 投喂小鱼干', click: () => petWin.webContents.send('pet:feed') },
       { label: '🖐 摸摸头', click: () => petWin.webContents.send('pet:pat') },
       { label: '🎤 麦克风检测', click: () => petWin.webContents.send('pet:miccheck') },
@@ -379,19 +407,101 @@ ipcMain.handle('asr:download', async (_e, name) => {
     return { ok: false, error: String((e && e.message) || e) };
   }
 });
+/* 音标补齐：给一批词问模型要音标，写进缓存后推给窗口。
+   同一批词给过一次就永远命中缓存 —— 所以只有用户真正说过的"新词"才会花这一次调用。 */
+async function fillIpa(words) {
+  const cfg = config.load();
+  const miss = speak.ipaMissing(words);
+  if (!cfg.apiKey || !miss.length) return null;
+  const raw = await llm.request(cfg, [
+    { role: 'system', content: speak.buildIpaPrompt(miss.slice(0, 40)) },
+    { role: 'user', content: '请输出 JSON。' },
+  ]);
+  const o = speak.parseJson(raw);
+  if (!o) return null;
+  const n = speak.ipaPut(o);
+  if (n) dbg('[speak] 音标补齐 ' + n + ' 条（本次新词：' + miss.slice(0, 8).join(',') + '）');
+  const payload = { ipa: speak.ipaGet(words) };
+  for (const w of [petWin, chatWin]) {
+    if (w && !w.isDestroyed()) { try { w.webContents.send('speak:ipa', payload); } catch {} }
+  }
+  return n;
+}
+
 ipcMain.handle('asr:transcribe', async (_e, buf) => {
   const cfg = config.load();
   try {
     const b = Buffer.isBuffer(buf) ? buf : Buffer.from(buf);
     if (!b || b.length < 1000) return { ok: true, text: '' };
-    const text = await asr.transcribe(b, cfg.asrModel || 'tiny.en');
+    const r = await asr.transcribeDetailed(b, cfg.asrModel || 'base.en');
+    const text = r.text;
     // 只有非语音标注（哼唱/音乐/静音）没有实际内容的话直接丢掉，别白花一次对话
     if (!/[a-z]{2}/i.test(text)) return { ok: true, text: '' };
-    return { ok: true, text };
+    /* 逐词清晰度：whisper token 概率的代理，**不是音素级发音评测**（见 speak.js 注释） */
+    const score = speak.scoreWords(r.words, cfg);
+    const ipa = speak.ipaGet(score.words.map((x) => x.w));
+    fillIpa(score.words.map((x) => x.w)).catch(() => {});     // 后台补，不拖慢识别
+    /* 自动收生词：读得含糊(poor)的词直接进生词本（config.vocabAutoAdd=false 可关） */
+    let autoAdded = [];
+    if (cfg.vocabAutoAdd !== false) {
+      autoAdded = score.words.filter((x) => x.band === 'poor').map((x) => x.w);
+      if (autoAdded.length) {
+        for (const w of autoAdded) {
+          const i = ipa[speak.keyOf(w)] || {};
+          try { vocab.add({ w, ipa: i.ipa || '', zh: i.zh || '' }); } catch {}
+        }
+        dbg('[speak] 自动收生词：' + autoAdded.join(', '));
+      }
+    }
+    speak.logScore({ overall: score.overall, band: score.band, n: score.words.length, poor: (score.counts || {}).poor || 0 });
+    dbg('[asr] words=' + score.words.length + ' overall=' + score.overall + ' band=' + score.band
+      + ' ipa命中=' + Object.keys(ipa).length + '/' + score.words.length);
+    return { ok: true, text, score, ipa, autoAdded };
   } catch (e) {
     dbg('[asr] ' + String((e && e.message) || e));
     return { ok: false, error: String((e && e.message) || e) };
   }
+});
+
+/* 翻译器：主人不知道怎么说 → 给 1~3 种地道英文 + 音标 */
+ipcMain.handle('speak:translate', async (_e, payload) => {
+  const cfg = config.load();
+  const zh = String((payload && payload.text) || '').trim();
+  if (!zh) return { ok: false, error: '还没输入内容' };
+  if (!cfg.apiKey) return { ok: false, error: '未配置 API Key' };
+  try {
+    const p = loadPersona();
+    const raw = await llm.request(cfg, [
+      { role: 'system', content: speak.buildTranslatePrompt(zh, { scene: '和桌宠「' + (p.name || '大肥鱼') + '」练英语口语' }) },
+      { role: 'user', content: '请输出 JSON。' },
+    ]);
+    const o = speak.parseJson(raw);
+    if (!o || !Array.isArray(o.options) || !o.options.length) return { ok: false, error: '模型没给出可用结果' };
+    const map = {};
+    for (const opt of o.options) for (const w of (opt.words || [])) if (w && w.w) map[w.w] = { ipa: w.ipa, zh: w.zh };
+    speak.ipaPut(map);                                        // 顺手把音标收进缓存
+    dbg('[speak] 翻译「' + zh.slice(0, 20) + '」→ ' + o.options.length + ' 种说法');
+    return { ok: true, options: o.options.slice(0, 3) };
+  } catch (e) {
+    dbg('[speak] translate err ' + String((e && e.message) || e));
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+});
+
+/* 查一批词的音标（缓存优先；缺的只在后台补，立即返回已有的） */
+ipcMain.handle('speak:ipa', (_e, words) => {
+  const list = Array.isArray(words) ? words : [];
+  const cached = speak.ipaGet(list);
+  fillIpa(list).catch(() => {});
+  return { ok: true, ipa: cached, missing: speak.ipaMissing(list) };
+});
+
+/* 进步曲线 + 自动收生词开关 */
+ipcMain.handle('speak:trend', (_e, days) => speak.trend(days));
+ipcMain.handle('speak:autoAdd', (_e, on) => {
+  const v = (on === undefined) ? (config.load().vocabAutoAdd !== false) : !!on;
+  if (on !== undefined) config.save({ vocabAutoAdd: v });
+  return { on: v };
 });
 
 /* ---------------- 麦克风权限 ---------------- */
@@ -532,7 +642,21 @@ ipcMain.handle('chat:greet', async () => {
 });
 
 ipcMain.handle('persona:get', () => ({ ...loadPersona(), locks: persona.locks(), aiFields: persona.FIELDS, userOnly: persona.USER_ONLY, labels: persona.LABELS }));
-ipcMain.handle('persona:set', (_e, patch) => persona.patch(patch || {}));   // 用户改：所有字段都能改
+ipcMain.handle('persona:set', (_e, patch) => {   // 用户改：所有字段都能改
+  const before = persona.load();
+  const p = persona.patch(patch || {});
+  /* 用户改了人设 → **重新评估一次隐藏数值**：按新基线的变化量整段平移（累积不清零）。
+     人设只动了口头禅这类没改关键词时，基线不变 → 数值原地不动。 */
+  try {
+    const r = stats.rebaseline(persona.load());
+    dbg('[stats] rebaseline ' + (r.changed
+      ? 'applied=' + (r.applied.map((a) => a.key + (a.delta > 0 ? '+' : '') + a.delta).join(',') || '(基线未变，数值不动)')
+      : 'skip: ' + r.reason));
+  } catch (e) { dbg('[stats] rebaseline err ' + e); }
+  /* 顺带：按概率让 AI 重写交互台词（关键人格换了就大改） */
+  maybeRefreshPetLines(before, p).catch((e) => dbg('[petlines] err ' + ((e && e.message) || e)));
+  return p;
+});
 ipcMain.handle('persona:lock', (_e, o) => {
   persona.setLock(o && o.field, !!(o && o.locked));
   return { locks: persona.locks() };
@@ -549,10 +673,22 @@ async function evolvePersonaOnce() {
   const mo = mood.load();
   const j = await memory.jobs.evolvePersona(llm, cfg, {
     persona: p, diary: rec, facts, lockNote, affection: mo.affection, mood: mo.mood,
+    vocab: personatags.vocabulary(),
   });
   if (!j || !j.changed || !Object.keys(j.fields || {}).length) { dbg('[persona] 这次不需要改'); return null; }
   const r = persona.applyAI(j.fields);
   dbg('[persona] 演化 applied=[' + r.applied.join(',') + '] skipped=[' + r.skipped.join(',') + '] 因为：' + j.reason);
+  /* 她自己改了人设 → 同样重新评估一次隐藏数值（与用户手改走同一条路） */
+  if (r.applied.length) {
+    try {
+      const rb = stats.rebaseline(persona.load());
+      if (rb.changed && rb.applied.length) {
+        dbg('[stats] rebaseline(by AI) applied=' + rb.applied.map((a) => a.key + (a.delta > 0 ? '+' : '') + a.delta).join(','));
+      }
+    } catch (e) { dbg('[stats] rebaseline(AI) err ' + e); }
+    /* 她自己改了人设（包括核心人格）→ 同样按概率触发台词重写 */
+    maybeRefreshPetLines(p, persona.load()).catch((e) => dbg('[petlines] err(AI) ' + ((e && e.message) || e)));
+  }
   if (r.applied.length && petWin && !petWin.isDestroyed()) {
     petWin.webContents.send('persona:changed', { applied: r.applied, reason: j.reason });
   }
@@ -564,6 +700,90 @@ memory.bus.on('memory:permanent', (r) => {
   setTimeout(() => { evolvePersonaOnce().catch((e) => dbg('[persona] evolve err ' + e)); }, 2000);
 });
 ipcMain.handle('persona:evolve', () => evolvePersonaOnce());
+
+/* ---------------- 交互台词：改设定时按概率让 AI 重写 ----------------
+ * 关键人格（tier1）换了 → 大概率 + **全量**重写（"大改"）；
+ * 只是小修小补       → 小概率 + 只改几句（"小改"）。
+ * 结果写进覆盖层 pet-actions-ai.json，**手写底稿 pet-actions.json 不动**。
+ * 概率/条数都能在 config.json 里覆盖。
+ */
+const PET_LINES_MAJOR_P = 0.85;   // 关键人格变了：重写概率
+const PET_LINES_MINOR_P = 0.20;   // 只是微调：重写概率
+const PET_LINES_MINOR_N = 6;      // 小改时最多改几个部位
+
+function petRegionList() {
+  try {
+    const j = (regionsCache && regionsCache.regions) ? regionsCache
+      : JSON.parse(fs.readFileSync(path.join(__dirname, 'assets', 'pet-regions.json'), 'utf8'));
+    return (j.regions || []).map((r) => ({ id: r.id, name: r.name || r.id }));
+  } catch { return []; }
+}
+
+async function refreshPetLines(persona, major) {
+  const cfg = config.load();
+  if (!cfg.apiKey) return { ok: false, error: '未配置 API Key' };
+  const p = persona || loadPersona();
+  const arch = personatags.analyze(p).primary || {};
+  const table = petactions.loadTable();
+  const all = petRegionList().filter((r) => table.regions[r.id]);      // 只改表里有的热区
+  if (!all.length) return { ok: false, error: '没有可改的热区' };
+
+  const prev = petactions.activeOverlay(arch.id);
+  const targets = major ? all : all.slice().sort(() => Math.random() - 0.5).slice(0, PET_LINES_MINOR_N);
+
+  const rows = targets.map((r) => {
+    const cur = petactions.resolve({ id: r.id, group: table.regions[r.id].group }, p, cfg.petSkin) || {};
+    const s = cur.say || {};
+    return { id: r.id, name: r.name, en: s.en || '', zh: s.zh || '' };
+  });
+  const sys = petactions.buildRewritePrompt(p, arch, rows);
+
+  const raw = await llm.request(cfg, [{ role: 'system', content: sys }, { role: 'user', content: '请输出 JSON。' }]);
+  const t = String(raw || '').replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
+  const i = t.indexOf('{'), j = t.lastIndexOf('}');
+  if (i < 0 || j < 0) return { ok: false, error: '模型没给出 JSON' };
+  let o;
+  try { o = JSON.parse(t.slice(i, j + 1)); } catch (e) { return { ok: false, error: 'JSON 解析失败' }; }
+
+  const limit = major ? targets.length : PET_LINES_MINOR_N;
+  const merged = major ? {} : Object.assign({}, (prev && prev.lines) || {});   // 小改要保留上次改的
+  let n = 0;
+  for (const [k, v] of Object.entries(o || {})) {
+    if (n >= limit) break;
+    if (!table.regions[k]) continue;
+    const line = petactions.takesLine(v);
+    if (!line) continue;
+    merged[k] = line;
+    n++;
+  }
+  if (!n) return { ok: false, error: '模型没给出可用台词' };
+  petactions.saveOverlay({ sig: personatags.sigOf(p), arch: arch.id || '', lines: merged });
+  dbg('[petlines] ' + (major ? '大改' : '小改') + ' arch=' + (arch.id || '?') + ' 写入 ' + n + ' 条');
+  if (petWin && !petWin.isDestroyed()) { try { petWin.webContents.send('pet:linesChanged', { major, count: n, arch: arch.id }); } catch {} }
+  return { ok: true, major, count: n, arch: arch.id };
+}
+
+/* 改完设定调一次：先看"关键人格有没有换"，再掷骰子 */
+async function maybeRefreshPetLines(before, after) {
+  const cfg = config.load();
+  if (!cfg.apiKey) return null;
+  const a0 = (personatags.analyze(before || {}).primary || {}).id || '';
+  const a1 = (personatags.analyze(after || {}).primary || {}).id || '';
+  const major = a0 !== a1;
+  const pick = (v, d) => (Number.isFinite(Number(v)) ? Math.max(0, Math.min(1, Number(v))) : d);
+  const prob = major ? pick(cfg.petLinesMajorP, PET_LINES_MAJOR_P) : pick(cfg.petLinesMinorP, PET_LINES_MINOR_P);
+  if (Math.random() > prob) {
+    dbg('[petlines] skip（关键人格' + (major ? '变了→大改' : '没变→小改') + '，掷骰子没过 p=' + prob + '）');
+    return null;
+  }
+  return refreshPetLines(after, major);
+}
+
+ipcMain.handle('pet:refreshLines', (_e, force) => refreshPetLines(loadPersona(), force !== false));
+ipcMain.handle('pet:linesInfo', () => {
+  const ov = petactions.loadOverlay();
+  return { file: petactions.overlayFile(), arch: ov.arch, at: ov.at, count: Object.keys(ov.lines || {}).length, lines: ov.lines };
+});
 
 /* 📖 日记面板只暴露「长期记忆」；中期记忆对用户隐藏 */
 ipcMain.handle('memory:get', () => ({ long: memory.long.list(), session: memory.session.info() }));
@@ -652,6 +872,79 @@ ipcMain.handle('art:regions', () => {
   }
   regionsCache = { version: 1, regions: [] };
   return regionsCache;
+});
+
+/* ---------------- 交互系统（交互模式 / 聊天模式） ----------------
+ * 交互模式：点立绘不同部位出不同动作，动作按**核心人格**变（pet-actions.json）。
+ *           这个模式**不拖拽、不戳**，摸头也挪到这里。
+ * 聊天模式：原来的行为（可拖拽、可戳）。
+ * 立绘姿态槽：动作可以带一个 pose 名，渲染层按名字来取图；
+ *           图放 %APPDATA%/dayu-pet/art/poses/<pose>.png 就自动生效，不用改代码。
+ */
+const poseCache = new Map();
+ipcMain.handle('art:pose', (_e, pose) => {
+  const name = String(pose || '').trim();
+  if (!name) return { ok: false, pose: name, reason: 'empty' };
+  const f = petactions.poseFile(name, config.load().petSkin);
+  if (!f) return { ok: false, pose: name, reason: 'no-image' };   // 没图不是错误，渲染层只用 CSS
+  try {
+    const mtime = fs.statSync(f).mtimeMs;
+    const hit = poseCache.get(f);
+    if (hit && hit.mtime === mtime) return { ok: true, pose: name, path: f, dataUrl: hit.dataUrl };
+    const dataUrl = 'data:image/png;base64,' + fs.readFileSync(f).toString('base64');
+    poseCache.set(f, { mtime, dataUrl });
+    return { ok: true, pose: name, path: f, dataUrl };
+  } catch (e) { return { ok: false, pose: name, reason: String((e && e.message) || e) }; }
+});
+ipcMain.handle('art:poses', () => ({ dir: petactions.posesDir(), poses: petactions.poseReport(config.load().petSkin) }));
+
+ipcMain.handle('pet:getMode', () => {
+  const m = config.load().petMode;
+  return { mode: (m === 'chat') ? 'chat' : 'interact' };
+});
+ipcMain.handle('pet:setMode', (_e, m) => {
+  const mode = (m === 'chat') ? 'chat' : 'interact';
+  config.save({ petMode: mode });
+  dbg('[pet] mode -> ' + mode);
+  if (petWin && !petWin.isDestroyed()) {
+    try { petWin.webContents.send('pet:mode', { mode }); } catch {}
+  }
+  return { mode };
+});
+
+/* 点了一个热区 → 解析出动作。
+ * preset 部位：直接返回预置台词（零延迟、零成本），点下去立刻有反应。
+ * key 部位（脸/眼/鳍耳/手/围裙鲸鱼/尾）：**不阻塞**——先返回动作让形变/特效立刻播，
+ *   模型的个性化台词在后台生成好再推 pet:say 顶上来（所以这两类部位先不给预置台词，免得闪一下）。 */
+async function interactLLM(act) {
+  const cfg = config.load();
+  const messages = [
+    { role: 'system', content: buildSystemPrompt(cfg) },
+    ...memory.pickHistory(1200),
+    { role: 'user', content: `（场景：主人用手点了你的「${act.regionName}」。请完全按你当前的人设，用英语说一句即时的反应，只要 1 句，不要旁白、不要解释。同时给出中文翻译、音标，以及 2 个预制回复。）` },
+  ];
+  const { reply } = await genReply(cfg, messages);
+  if (!reply.en) return;
+  logTurn('', reply);
+  if (act.mood) { try { mood.adjust(act.mood); } catch {} }
+  if (petWin && !petWin.isDestroyed()) petWin.webContents.send('pet:say', { ...reply, silent: false });
+}
+
+ipcMain.handle('pet:interact', (_e, payload) => {
+  const cfg = config.load();
+  const act = petactions.resolve(payload && payload.region, loadPersona(), cfg.petSkin);
+  if (!act) return { ok: false };
+  const willLLM = act.mode === 'llm' && act.key && !!cfg.apiKey;
+  const out = { ok: true, ...act, reply: null, fromLLM: willLLM };
+  delete out.poseFile;                                  // 路径不外泄，渲染层按 pose 名自己取
+  if (willLLM) {
+    out.say = '';
+    interactLLM(act).catch((e) => dbg('[pet] interact llm fail，回落预置台词: ' + String((e && e.message) || e)));
+  } else if (act.mood) {
+    try { mood.adjust(act.mood); } catch {}
+  }
+  dbg('[pet] interact region=' + act.region + ' arch=' + act.arch + ' ' + (willLLM ? 'llm' : 'preset'));
+  return out;
 });
 
 /* ---------------- 命中判定 / 透明区点穿 ----------------

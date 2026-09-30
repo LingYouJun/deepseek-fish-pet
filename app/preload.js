@@ -37,6 +37,23 @@ contextBridge.exposeInMainWorld('petAPI', {
   hitMask: (info) => ipcRenderer.send('pet:hitmask', info),
   hold: (on) => ipcRenderer.send('pet:hold', !!on),
   artRegions: () => ipcRenderer.invoke('art:regions'),
+  // 交互系统：交互模式（点热区出动作）/ 聊天模式（可拖可戳）
+  petGetMode: () => ipcRenderer.invoke('pet:getMode'),
+  petSetMode: (m) => ipcRenderer.invoke('pet:setMode', m),
+  onPetMode: (cb) => ipcRenderer.on('pet:mode', (_e, d) => cb(d)),
+  petInteract: (region) => ipcRenderer.invoke('pet:interact', { region }),
+  artPose: (pose) => ipcRenderer.invoke('art:pose', pose),
+  artPoses: () => ipcRenderer.invoke('art:poses'),
+  // 交互台词：按概率让 AI 重写（覆盖层，不动手写底稿）
+  petRefreshLines: (force) => ipcRenderer.invoke('pet:refreshLines', force),
+  petLinesInfo: () => ipcRenderer.invoke('pet:linesInfo'),
+  onPetLines: (cb) => ipcRenderer.on('pet:linesChanged', (_e, d) => cb(d)),
+  // 口语练习：逐词清晰度 / 音标 / 翻译器
+  speakTranslate: (text) => ipcRenderer.invoke('speak:translate', { text }),
+  speakIpa: (words) => ipcRenderer.invoke('speak:ipa', words),
+  onSpeakIpa: (cb) => ipcRenderer.on('speak:ipa', (_e, d) => cb(d)),
+  speakTrend: (days) => ipcRenderer.invoke('speak:trend', days),
+  speakAutoAdd: (on) => ipcRenderer.invoke('speak:autoAdd', on),
   shot: () => ipcRenderer.send('pet:shot'),
   chatShot: () => ipcRenderer.send('chat:shot'),
   // 配置
