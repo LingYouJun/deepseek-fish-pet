@@ -10,12 +10,14 @@ const config = require('./config');
 const skills = require('./skills');
 const style = require('./style');
 const projects = require('./projects');
+const personatags = require('./personatags');
 
 // 每个工具所需的最低权限档
 const TOOL_TIER = {
   list_dir: 'read', read_file: 'read', use_skill: 'read', skill_ls: 'read', skill_read: 'read',
-  proj_ls: 'read', proj_read: 'read',
+  proj_ls: 'read', proj_read: 'read', tag_list: 'read',
   open_path: 'normal', open_url: 'normal', skill_write: 'normal', skill_rm: 'normal', proj_rm: 'normal', proj_open: 'normal', proj_run: 'normal',
+  tag_set: 'normal', tag_rm: 'normal',
   web_open: 'web', web_click: 'web', web_type: 'web', web_read: 'web',
   screen_shot: 'full', screen_look: 'full',
   click: 'full', rclick: 'full', dclick: 'full', move: 'full', drag: 'full', scroll: 'full', type: 'full', key: 'full',
@@ -230,6 +232,28 @@ async function run(tool, arg) {
   if (tool === 'skill_rm') {
     const r = skills.remove(arg || '');
     return '🗑 已删除：' + r.path;
+  }
+
+  /* ---------------- 人格词条（她自己的"人格词典"，也是将来换立绘的 key） ---------------- */
+  if (tool === 'tag_list') {
+    return '🏷 当前人格词条表（tier1 核心人格 = 立绘 key）：\n' + personatags.vocabulary();
+  }
+  if (tool === 'tag_set') {
+    const s = String(arg || '');
+    const i = s.indexOf('{');
+    if (i < 0) throw new Error('格式：tag_set|{"id":"yandere","label":"病娇","tier":1,"moodDir":1,"words":["病娇","偏执"]}');
+    let o;
+    try { o = JSON.parse(s.slice(i)); } catch { throw new Error('JSON 解析失败（检查引号、逗号、不要换行）'); }
+    const r = personatags.setTag(o);
+    if (!r.ok) throw new Error(r.error);
+    return '🏷 已' + (r.action === 'added' ? '新增' : '更新') + '词条「' + r.tag.label + '」(' + r.tag.id
+      + '，tier' + r.tag.tier + '，词：' + r.tag.words.join('/') + ')，词条表共 ' + r.total + ' 条。'
+      + (r.tag.tier === 1 ? '（tier1 = 核心人格，会影响立绘与行为方向）' : '');
+  }
+  if (tool === 'tag_rm') {
+    const r = personatags.removeTag(arg);
+    if (!r.ok) throw new Error(r.error);
+    return '🗑 已删除词条「' + r.removed.label + '」(' + r.removed.id + ')，词表剩 ' + r.total + ' 条。';
   }
 
   /* ---------------- 项目文件夹（她写的小软件放这儿） ---------------- */

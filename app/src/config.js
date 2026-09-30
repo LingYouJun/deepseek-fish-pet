@@ -35,7 +35,7 @@ const MEMORY_DEFAULTS = {
 const DEFAULTS = {
   apiBase: 'https://api.deepseek.com/v1',
   apiKey: '',
-  model: 'deepseek-chat',
+  model: 'deepseek-flash',   // DeepSeek-V4.1-Flash（旧名 deepseek-chat 请勿再用：不在现价目表内）
   ttsEnabled: true,
   ttsVoice: '',
   ttsStyle: 'tsundere',
@@ -43,13 +43,21 @@ const DEFAULTS = {
   ttsPitch: 1.18,
   vocabLevel: 'high_school',
   assistant: 'off',
+  petMode: 'interact',   // interact = 交互模式（点热区出动作，不拖不戳）| chat = 聊天模式（可拖可戳）
+  petLinesMajorP: 0.85,  // 关键人格换了 → 让 AI 全量重写交互台词的概率
+  petLinesMinorP: 0.2,   // 只是微调人设 → 小概率顺手改几句
+  petLinesMinorN: 6,     // 小改时最多改几个部位
   // 视觉模型（可选）：用于"看懂屏幕"，会花 token。默认关闭，关闭时退回本地 OCR（免费）。
   visionEnabled: false,
   visionBase: '',
   visionKey: '',
   visionModel: 'deepseek-flash',
   asrEngine: 'auto',     // auto | whisper | webspeech
-  asrModel: 'tiny.en',   // tiny.en | base.en | small.en
+  asrModel: 'base.en',   // tiny.en | base.en | small.en（默认 base.en：tiny 太不准，口语练习会误判）
+  speakGoodP: 0.8,       // 口语打分：p ≥ 此值 = 绿（读得清楚）
+  speakOkP: 0.55,        // p ≥ 此值 = 黄（一般），再低 = 红（含糊）
+  speakPosBias: true,    // 句首偏差补偿（第 1~2 个词天然偏低，给一点点补偿）
+  vocabAutoAdd: true,    // 读得含糊的词自动进生词本
   memory: MEMORY_DEFAULTS,
 };
 
