@@ -12,7 +12,7 @@
     <p class="sub">先绑定模型接口，我才能开口说话</p>
     <label>模型 Provider</label>
     <select id="provider">
-      <option value="https://api.deepseek.com/v1|deepseek-chat">DeepSeek</option>
+      <option value="https://api.deepseek.com/v1|deepseek-flash">DeepSeek（V4.1-Flash）</option>
       <option value="https://api.openai.com/v1|gpt-4o-mini">OpenAI</option>
       <option value="custom">自定义…</option>
     </select>
@@ -21,7 +21,7 @@
     <label>API Key</label>
     <input id="apiKey" type="password" placeholder="sk-...">
     <label>模型名</label>
-    <input id="model" placeholder="deepseek-chat">
+    <input id="model" placeholder="deepseek-flash">
     <label>预制回复词汇等级</label>
     <select id="vocabLevel">
       <option value="high_school">高中词汇（最低档）</option>
@@ -68,6 +68,21 @@
   </div>
 </div>
 
+<div id="translator" class="overlay hidden">
+  <div class="panel">
+    <h1>🈶 翻译器</h1>
+    <p class="sub">想说什么但不知道英文怎么讲？用中文写下来，我给你几种<b>地道口语</b>说法。
+      点英文句子可以朗读，点句子里带下划线的词听单词发音。</p>
+    <textarea id="trInput" rows="2" placeholder="例如：我今天好累，不想动"></textarea>
+    <div class="row" style="margin-top:8px">
+      <button id="trGo">翻译</button>
+      <button id="trCancel" class="ghost">关闭</button>
+    </div>
+    <div id="trMsg" class="msgline"></div>
+    <div id="trOut"></div>
+  </div>
+</div>
+
 <div id="persona" class="overlay hidden">
   <div class="panel">
     <h1>👤 人设</h1>
@@ -103,13 +118,17 @@
 
 <div id="vocab" class="overlay hidden">
   <div class="panel">
-    <h1>📒 生词本</h1>
-    <p class="sub">点对话里带虚线的单词即可收藏；跟读读错的词也能点一下加入</p>
+    <h1>📒 生词本 & 进步曲线</h1>
+    <p class="sub">点对话里的单词 = <b>朗读</b>；<b>Shift+点</b> = 收藏进生词本。读得含糊（🟥）的词会自动收进来。</p>
+    <div id="vocabTrend" class="trendbox"></div>
     <div id="vocabBody"></div>
     <div class="row">
       <button id="vocabReview" class="primary">开始复习</button>
       <button id="vocabClose" class="ghost">关闭</button>
     </div>
+    <label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-size:12px;cursor:pointer">
+      <input type="checkbox" id="vocabAuto" style="width:auto"> 读得含糊的词自动收进生词本
+    </label>
   </div>
 </div>
 
@@ -187,15 +206,20 @@
     <div id="dshBar" class="dshbar"></div>
     <div id="micState" class="micstate" title="麦克风状态 —— 点一下重新检测">🎤 未检测</div>
     <div class="tools">
-      <span id="vocabBtn" class="tool" title="生词本">📒</span>
-      <span id="diaryBtn" class="tool" title="记忆日记">📖</span>
-      <span id="personaBtn" class="tool" title="人设">👤</span>
-      <span id="ttsBtn" class="tool on" title="朗读开关">🔊</span>
-      <span id="voiceBtn" class="tool" title="音色">🎙</span>
-      <!-- 🎮 游戏助手入口：暂时隐藏。要用就把 style="display:none" 去掉（引擎和面板都还在） -->
-      <span id="gameBtn" class="tool" title="游戏助手" style="display:none">🎮</span>
-      <span id="endBtn" class="tool" title="结束本次会话">⏹</span>
+      <span id="transBtn" class="tool" title="翻译器：不知道英文怎么说就查这里">🈶</span>
+      <span id="vocabBtn" class="tool" title="生词本 + 进步曲线">📒</span>
+      <span id="ttsBtn" class="tool on" title="朗读：点一下切 常速 → 慢速 → 关闭">🔊</span>
       <span id="settingsBtn" class="tool" title="设置">⚙️</span>
+      <span id="moreBtn" class="tool" title="更多">⋯</span>
+      <!-- 收进来的：元素和 id 都还在，原来的绑定照旧生效，只是不再占顶栏 -->
+      <div id="moreMenu" class="moremenu hidden">
+        <span id="personaBtn" class="mi">👤 人设</span>
+        <span id="diaryBtn" class="mi">📖 记忆日记</span>
+        <span id="voiceBtn" class="mi">🎙 音色</span>
+        <span id="gameBtn" class="mi" style="display:none">🎮 游戏助手</span>
+        <div class="msep"></div>
+        <span id="endBtn" class="mi danger">⏹ 结束本次会话</span>
+      </div>
     </div>
   </header>
   <div id="msgs"></div>

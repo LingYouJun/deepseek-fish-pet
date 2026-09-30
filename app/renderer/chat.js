@@ -3,6 +3,17 @@ const $ = (id) => document.getElementById(id);
 let cfg = {};
 let busy = false;
 let ttsOn = true;
+let slowPlay = false;      // 慢速朗读（init 阶段就要用，必须声明在顶部）
+/* 🔊 一个按钮三态：常速 → 慢速 → 关闭 */
+function paintTtsBtn() {
+  const b = $('ttsBtn');
+  if (!b) return;
+  b.textContent = ttsOn ? (slowPlay ? '🐢' : '🔊') : '🔇';
+  b.classList.toggle('on', ttsOn);
+  b.title = ttsOn
+    ? (slowPlay ? '朗读：慢速（点一下关闭）' : '朗读：常速（点一下切慢速）')
+    : '朗读：已关闭（点一下开常速）';
+}
 let stepBudget = 6;      // 任务步数上限，由 IQ 决定（隐藏数值真的影响办事效率）
 let taskFailed = false;  // 本次任务里有没有失败过
 
@@ -55,7 +66,7 @@ async function loadLog() {
 (async function init() {
   cfg = await window.petAPI.configGet();
   ttsOn = cfg.ttsEnabled !== false;
-  $('ttsBtn').classList.toggle('on', ttsOn);
+  paintTtsBtn();
   if (!cfg.apiKey) showSetup(true);
   else {
     showMain();
@@ -90,7 +101,7 @@ function showSetup(prefill) {
   if (prefill) {
     $('apiBase').value = cfg.apiBase || 'https://api.deepseek.com/v1';
     $('apiKey').value = cfg.apiKey || '';
-    $('model').value = cfg.model || 'deepseek-chat';
+    $('model').value = cfg.model || 'deepseek-flash';
     $('vocabLevel').value = cfg.vocabLevel || 'high_school';
     $('assistant').value = cfg.assistant || 'off';
     $('visionOn').checked = !!cfg.visionEnabled;
@@ -406,10 +417,30 @@ $('endBtn').addEventListener('click', async () => {
   window.petAPI.chatClose();
 });
 
-/* ---------------- 生词本 ---------------- */
+/* ---------------- 生词本 + 进步曲线 ---------------- */
 let vocabData = [];
+async function renderTrend() {
+  const box = $('vocabTrend');
+  if (!box) return;
+  try {
+    const t = await window.petAPI.speakTrend(14);
+    if (!t || !t.total) { box.innerHTML = '<div class="trendline">还没有练习记录 —— 对着麦克风说几句英语就会记下来。</div>'; return; }
+    const max = Math.max.apply(null, t.days.map((d) => d.avg).concat([0.01]));
+    box.innerHTML = '<div class="trendline">近 14 天：练了 <b>' + t.total + '</b> 次　平均 <b>'
+      + Math.round(t.avg * 100) + '</b>　最好 <b>' + Math.round(t.best * 100) + '</b></div>'
+      + t.days.map((d) => '<div class="tbar"><span class="tday">' + d.date.slice(5) + '</span>'
+        + '<span class="tfill s-' + (d.avg >= 0.8 ? 'good' : d.avg >= 0.55 ? 'ok' : 'poor')
+        + '" style="width:' + Math.max(3, Math.round(d.avg / max * 100)) + '%"></span>'
+        + '<span class="tval">' + Math.round(d.avg * 100) + ' ×' + d.n + '</span></div>').join('');
+  } catch {}
+}
 async function renderVocab() {
   vocabData = await window.petAPI.vocabList();
+  renderTrend();
+  try {
+    const a = await window.petAPI.speakAutoAdd();
+    if (a && $('vocabAuto')) $('vocabAuto').checked = a.on !== false;
+  } catch {}
   const body = $('vocabBody');
   if (!vocabData.length) {
     body.innerHTML = '<div class="dempty">生词本还是空的。点对话里带虚线的单词，或跟读时读错的红词，就能收藏进来。</div>';
@@ -466,30 +497,126 @@ async function markReview(ok) {
 $('vocabBtn').addEventListener('click', () => { $('vocab').classList.remove('hidden'); renderVocab(); });
 $('vocabClose').addEventListener('click', () => $('vocab').classList.add('hidden'));
 $('vocabReview').addEventListener('click', startReview);
+if ($('vocabAuto')) $('vocabAuto').addEventListener('change', async (e) => {
+  const r = await window.petAPI.speakAutoAdd(e.target.checked);
+  addSys((r && r.on) ? '📒 已开启：读得含糊的词自动收进生词本' : '📒 已关闭自动收录');
+});
+/* 🐢 慢速朗读已经并进 🔊 的三态里了，原来单独的按钮不再需要 */
 
-// 点对话里的单词 → 收藏进生词本
+// 单词 Shift+点 → 收藏进生词本（普通点击是朗读，见上面的处理器）
 document.addEventListener('click', async (e) => {
   const el = e.target.closest('#msgs .w');
-  if (!el) return;
+  if (!el || !e.shiftKey) return;
   const w = el.textContent.trim();
   if (!w) return;
   await window.petAPI.vocabAdd({ w, ipa: el.dataset.ipa || '', zh: el.dataset.zh || '' });
-  addSys(`📒 已加入生词本：${w}`);
+  addSys(`📒 已加入生词本：${w}　（直接点=朗读，Shift+点=收藏）`);
 });
 
 /* ---------------- 消息渲染 ---------------- */
 function scroll() { const m = $('msgs'); m.scrollTop = m.scrollHeight; }
-function addUser(text) {
-  const d = document.createElement('div');
-  d.className = 'msg user'; d.textContent = text;
-  $('msgs').appendChild(d); scroll();
+const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z']/g, '');
+
+/* 用户说过的英文：逐词上色（清晰度）+ 悬停音标 + 点击朗读
+   颜色含义 = "这个词读得清不清楚"（whisper token 概率的代理），**不是语法评分**。 */
+function renderScored(text, score, ipaMap) {
+  const words = (score && score.words) || [];
+  const map = ipaMap || {};
+  let wi = 0;
+  return String(text || '').split(/(\s+)/).map((tok) => {
+    const m = tok.match(/^([A-Za-z']+)([^A-Za-z']*)$/);
+    if (!m) return esc(tok);
+    /* 同一次识别结果，顺序必然一致 → 优先按序对上；对不上再全局找一次 */
+    let sw = null;
+    if (wi < words.length && norm(words[wi].w) === norm(m[1])) { sw = words[wi]; wi++; }
+    else sw = words.find((x) => norm(x.w) === norm(m[1])) || null;
+    if (!sw) return esc(tok);
+    const info = map[norm(sw.w)] || {};
+    return '<span class="w s-' + sw.band + '" data-w="' + esc(sw.w) + '" data-p="' + sw.p + '"'
+      + (info.ipa ? ' data-ipa="' + esc(info.ipa) + '"' : '')
+      + (info.zh ? ' data-zh="' + esc(info.zh) + '"' : '')
+      + ' title="清晰度 ' + Math.round(sw.p * 100) + '｜点一下听发音">' + esc(m[1]) + '</span>' + esc(m[2]);
+  }).join('');
 }
+function addUser(text, opts) {
+  const d = document.createElement('div');
+  d.className = 'msg user';
+  const score = opts && opts.score;
+  if (score && score.words && score.words.length) {
+    d.innerHTML = renderScored(text, score, (opts && opts.ipa) || {});
+    d.dataset.words = JSON.stringify(score.words.map((x) => x.w));
+    const head = document.createElement('div');
+    head.className = 'scoreline';
+    const n = score.counts || {};
+    head.innerHTML = '清晰度 <b class="s-' + score.band + '">' + Math.round(score.overall * 100) + '</b>'
+      + '<span class="hint">🟩清晰 ' + (n.good || 0) + ' · 🟨一般 ' + (n.ok || 0) + ' · 🟥含糊 ' + (n.poor || 0)
+      + '　（颜色=读得清不清楚，不是语法评分）</span>'
+      + ((opts && opts.autoAdded && opts.autoAdded.length)
+        ? '<span class="hint">📒 已自动收录：' + opts.autoAdded.map((w) => esc(w)).join(', ') + '</span>' : '');
+    d.insertBefore(head, d.firstChild);
+  } else {
+    d.textContent = text;
+  }
+  $('msgs').appendChild(d); scroll();
+  return d;
+}
+
+/* 点用户消息 / 翻译器里的单词 → 朗读这个词（慢速模式会放慢）
+   注意：slowPlay 声明在文件顶部（init 阶段就要用，放这里会踩 TDZ） */
+const playRate = () => (slowPlay ? 0.62 : undefined);
+document.addEventListener('click', async (e) => {
+  const el = e.target.closest('#msgs .w, .tropt .w');
+  if (!el) return;
+  if (e.shiftKey) return;                      // Shift+点是"收藏生词"，交给下面的处理器
+  const w = el.dataset.w || el.textContent;
+  if (!w) return;
+  el.classList.add('playing');
+  setTimeout(() => el.classList.remove('playing'), 1200);
+  try { await window.petAPI.ttsSpeak({ text: String(w).replace(/[^A-Za-z'\- ]/g, ''), force: true, rate: playRate() }); } catch {}
+});
 function addPet(en, zh, words) {
   const d = document.createElement('div');
   d.className = 'msg pet';
   d.innerHTML = `<div class="en">${renderEn(en, words)}</div>` + (zh ? `<div class="zh">${esc(zh)}</div>` : '');
+  /* 跟读入口：她说了完整一句就挂个按钮（省略号是"正在说"的占位，不给） */
+  if (en && en !== '…' && /[A-Za-z]{3}/.test(en)) {
+    const acts = document.createElement('div');
+    acts.className = 'petacts';
+    const b = document.createElement('button');
+    b.className = 'ghost';
+    b.textContent = '🎤 跟读这句';
+    b.addEventListener('click', () => startRepeat(en));
+    acts.appendChild(b);
+    d.appendChild(acts);
+  }
   $('msgs').appendChild(d); scroll();
   return d;
+}
+
+/* ---------------- 跟读：她说一句 → 你读一遍 → 对比打分 ----------------
+ * 跟读时 ASR 结果**不进对话**，只做对比：目标词覆盖率 + 逐词清晰度。 */
+let repeatTarget = '';
+function startRepeat(en) {
+  repeatTarget = String(en || '').trim();
+  addSys('🎤 跟读模式：照着她那句话读一遍，说完自动对比（不想跟读就再说一句别的）');
+  try { if (!recording) startTalk(); } catch { addSys('麦克风没起来？点输入框左边的 🎤 手动开始'); }
+}
+function showRepeat(target, text, score) {
+  const tw = (target.toLowerCase().match(/[a-z']+/g) || []);
+  const uw = (text.toLowerCase().match(/[a-z']+/g) || []);
+  const uset = new Set(uw);
+  const missing = tw.filter((w) => !uset.has(w));
+  const cover = tw.length ? Math.round(((tw.length - missing.length) / tw.length) * 100) : 0;
+  const d = document.createElement('div');
+  d.className = 'msg user repeat';
+  d.innerHTML = '<div class="scoreline">跟读对比　覆盖 <b>' + cover + '%</b>　清晰度 <b class="s-'
+    + (score ? score.band : 'ok') + '">' + (score ? Math.round(score.overall * 100) : '--') + '</b></div>'
+    + '<div class="rline"><span class="rlab">她说的</span>' + esc(target) + '</div>'
+    + '<div class="rline"><span class="rlab">你说的</span>' + (score ? renderScored(text, score, {}) : esc(text)) + '</div>'
+    + (missing.length
+      ? '<div class="rmiss">没听到或没读清：' + missing.map((w) => esc(w)).join(', ') + '</div>'
+      : '<div class="rok">整句都对上了 👍</div>');
+  $('msgs').appendChild(d); scroll();
 }
 function addErr(text) {
   const key = String(text);
@@ -618,13 +745,61 @@ document.addEventListener('mouseover', (e) => {
 });
 document.addEventListener('mousemove', (e) => { if (tip && tip.classList.contains('show')) positionTip(e); });
 
+/* 音标是后台补的（缓存里没有的新词才会去问模型）：到了就把用户消息里的词补上，
+   之后鼠标悬停就能看到音标。不阻塞识别，也不用等。 */
+if (window.petAPI.onSpeakIpa) window.petAPI.onSpeakIpa((d) => {
+  const map = (d && d.ipa) || {};
+  document.querySelectorAll('#msgs .msg.user .w, .tropt .w').forEach((el) => {
+    const info = map[norm(el.dataset.w || el.textContent)];
+    if (!info) return;
+    if (info.ipa && !el.dataset.ipa) el.dataset.ipa = info.ipa;
+    if (info.zh && !el.dataset.zh) el.dataset.zh = info.zh;
+  });
+});
+
+/* ---------------- 翻译器：想说什么但不知道英文怎么讲 ---------------- */
+$('transBtn').addEventListener('click', () => {
+  $('trMsg').textContent = '';
+  $('translator').classList.remove('hidden');
+  setTimeout(() => { try { $('trInput').focus(); } catch {} }, 50);
+});
+$('trCancel').addEventListener('click', () => $('translator').classList.add('hidden'));
+async function doTranslate() {
+  const text = $('trInput').value.trim();
+  if (!text) { $('trMsg').textContent = '先写点中文吧'; return; }
+  $('trGo').disabled = true; $('trMsg').textContent = '翻译中…'; $('trOut').innerHTML = '';
+  try {
+    const r = await window.petAPI.speakTranslate(text);
+    if (!r || !r.ok) { $('trMsg').textContent = '失败：' + ((r && r.error) || '?'); return; }
+    $('trMsg').textContent = '';
+    $('trOut').innerHTML = r.options.map((o, i) =>
+      '<div class="tropt" data-i="' + i + '">'
+      + '<div class="en">' + renderEn(o.en, o.words || []) + '</div>'
+      + (o.zh ? '<div class="zh">' + esc(o.zh) + '</div>' : '')
+      + (o.note ? '<div class="note">' + esc(o.note) + '</div>' : '')
+      + '<div class="acts"><button class="ghost play">🔊 整句朗读</button><button class="ghost use">用它回答</button></div>'
+      + '</div>').join('');
+    $('trOut').querySelectorAll('.tropt').forEach((box) => {
+      const o = r.options[+box.dataset.i];
+      box.querySelector('.play').addEventListener('click', () => { try { window.petAPI.ttsSpeak({ text: o.en, force: true }); } catch {} });
+      box.querySelector('.use').addEventListener('click', () => {
+        $('translator').classList.add('hidden');
+        try { send(o.en); } catch {}
+      });
+    });
+  } catch (e) { $('trMsg').textContent = '失败：' + ((e && e.message) || e); }
+  finally { $('trGo').disabled = false; }
+}
+$('trGo').addEventListener('click', doTranslate);
+$('trInput').addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); doTranslate(); } });
+
 /* ---------------- 对话 ---------------- */
-async function send(text) {
+async function send(text, opts) {
   text = String(text || '').trim();
   if (!text || busy) return;
   busy = true;
   $('input').value = ''; $('choices').innerHTML = '';
-  addUser(text);
+  addUser(text, opts);
   const pending = addPet('…', '', []);
   pendingEl = pending; partialSpoken = false;
   try {
@@ -700,10 +875,25 @@ async function speak(text) {
   } catch {}
 }
 $('ttsBtn').addEventListener('click', async () => {
-  ttsOn = !ttsOn;
-  $('ttsBtn').classList.toggle('on', ttsOn);
-  if (!ttsOn) stopSpeech();
+  /* 一个按钮三态：常速 → 慢速 → 关闭（原来 🔊 和 🐢 两个图标太占地方） */
+  if (!ttsOn) { ttsOn = true; slowPlay = false; }
+  else if (!slowPlay) { slowPlay = true; }
+  else { ttsOn = false; slowPlay = false; stopSpeech(); }
+  paintTtsBtn();
   await window.petAPI.configSet({ ttsEnabled: ttsOn });
+});
+/* ⋯ 更多：把不常用的收进下拉。元素没删、id 还在，原来的绑定照旧生效 */
+const moreMenu = $('moreMenu');
+function closeMore() { if (moreMenu) moreMenu.classList.add('hidden'); }
+if ($('moreBtn')) $('moreBtn').addEventListener('click', (e) => {
+  e.stopPropagation();
+  moreMenu.classList.toggle('hidden');
+});
+if (moreMenu) moreMenu.addEventListener('click', () => closeMore());
+document.addEventListener('click', (e) => {
+  if (!moreMenu || moreMenu.classList.contains('hidden')) return;
+  if (e.target.closest('#moreMenu') || e.target.closest('#moreBtn')) return;
+  closeMore();
 });
 
 /* ---------------- 音色选择 ---------------- */
@@ -751,7 +941,7 @@ $('vSave').addEventListener('click', async () => {
     ttsVoice: $('vVoice').value, ttsStyle: $('vStyle').value,
     ttsRate: Number($('vRate').value), ttsPitch: Number($('vPitch').value), ttsEnabled: true,
   });
-  ttsOn = true; $('ttsBtn').classList.add('on');
+  ttsOn = true; paintTtsBtn();
   $('vMsg').textContent = '已保存 ✅ 试试跟我说话';
   setTimeout(() => $('voice').classList.add('hidden'), 700);
 });
@@ -926,8 +1116,11 @@ async function stopTalk(cancel) {
   setRecUI(false);
   $('recHint').textContent = '';
   if (r && r.ok) {
-    if (r.text) send(r.text);
-    else addErr('没听清，再说一次？');
+    /* 跟读中 → 不进对话，只做对比；否则带上逐词清晰度 + 音标发出去 */
+    if (r.text) {
+      if (repeatTarget) { const t = repeatTarget; repeatTarget = ''; showRepeat(t, r.text, r.score); }
+      else send(r.text, { score: r.score, ipa: r.ipa, autoAdded: r.autoAdded });
+    } else addErr('没听清，再说一次？');
   } else {
     recFailed('whisper:' + ((r && r.error) || '?'));
   }

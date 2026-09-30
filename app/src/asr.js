@@ -21,7 +21,11 @@ const MODELS = {
   'base.en': { file: 'ggml-base.en.bin', size: 142 * 1024 * 1024, label: 'Base（更准，约 142MB）' },
   'small.en': { file: 'ggml-small.en.bin', size: 466 * 1024 * 1024, label: 'Small（最准，约 466MB）' },
 };
+/* 顺序 = 尝试顺序。**国内源放第一顺位**：实测 hf-mirror / huggingface 经常整站连不上
+   （hf-mirror 还会 302 跳到 xethub CDN，长连接必卡死），
+   而 ai.gitcode.com（国内 GitHub 镜像）稳定可达、支持 Range 断点续传。 */
 const MIRRORS = [
+  'https://ai.gitcode.com/hf_mirrors/ai-gitcode/whisper.cpp/resolve/main/',
   'https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/',
   'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/',
 ];
@@ -54,6 +58,14 @@ function modelPath(name) {
   return local;
 }
 const hasModel = (name) => { try { return fs.statSync(modelPath(name)).size > 1024 * 1024; } catch { return false; } };
+
+/* 配的模型还没下 → 退到已下载里最好的那档，别让识别直接失败（用户可能还没点下载） */
+function pickModel(cfgModel) {
+  const want = MODELS[cfgModel] ? cfgModel : 'base.en';
+  if (hasModel(want)) return want;
+  for (const n of ['small.en', 'base.en', 'tiny.en']) if (hasModel(n)) return n;
+  return want;
+}
 
 function status(cfgModel) {
   const name = MODELS[cfgModel] ? cfgModel : 'tiny.en';
@@ -145,18 +157,114 @@ function downloadModel(name, onProgress) {
   });
 }
 
-/* 16kHz 单声道 WAV（Buffer）→ 文本。失败抛错，调用方决定是否回退 */
-function transcribe(wavBuf, cfgModel) {
+/* whisper 的 token 流 → 单词（带概率）
+ * 分组规则：**前导空格** = 新词开始；没有前导空格的 token 是上一个词的碎片（BPE 续接）。
+ * 纯标点/符号的 token 直接跳过 —— 它们的 p 没有意义（实测句号的 p 只有 0.48，
+ * 把它算进 "there." 会把一个好词拖成"含糊"）。
+ * p 的含义：模型有多确信"这段音频对应这个词"。**不是音素级发音评测**，
+ * 常见的词读糊了也可能高分（语言模型会补）。当"读清楚了没"的代理用。 */
+function groupTokens(tokens) {
+  const words = [];
+  let cur = null;
+  for (const tk of (tokens || [])) {
+    const raw = String(tk && tk.text != null ? tk.text : '');
+    const t = raw.trim();
+    if (!t) continue;
+    if (!/[a-zA-Z0-9]/.test(t)) continue;                 // 纯标点/符号
+    if (/^\[.*\]$/.test(t) || /^<\|.*\|>$/.test(t)) continue;   // [BLANK_AUDIO] 之类
+    const p = Number(tk && tk.p);
+    const startsWord = /^\s/.test(raw) || !cur;
+    if (startsWord) { cur = { w: t, ps: [], from: null, to: null }; words.push(cur); }
+    else cur.w += t;
+    if (Number.isFinite(p)) cur.ps.push(p);
+    const off = tk && tk.offsets;
+    if (off) { if (cur.from == null) cur.from = off.from; cur.to = off.to; }
+  }
+  return words
+    .map((x) => {
+      const ps = x.ps;
+      const mean = ps.length ? ps.reduce((a, b) => a + b, 0) / ps.length : null;
+      return {
+        w: x.w.replace(/^[^\w']+|[^\w']+$/g, ''),
+        p: mean == null ? null : Math.round(mean * 1000) / 1000,
+        pMin: ps.length ? Math.round(Math.min.apply(null, ps) * 1000) / 1000 : null,
+        from: x.from, to: x.to,
+      };
+    })
+    .filter((x) => x.w && x.p != null);
+}
+
+/* 静音裁剪：whisper 对首尾长静音很敏感（会把静音也解码出幻觉词，还会拖慢）。
+ * **纯能量法，不需要额外模型**（whisper 自带的 VAD 要另下一个 silero 模型，网络不通时用不了）。
+ * 按 20ms 窗算 RMS，掐掉首尾低于"峰值 8%"的部分，前后各留 100ms 缓冲。 */
+function trimSilence(wavBuf) {
+  try {
+    const b = wavBuf;
+    if (!Buffer.isBuffer(b) || b.length < 44) return wavBuf;
+    let off = 12, dataOff = -1, dataLen = 0, fmtOff = -1;
+    while (off + 8 <= b.length) {
+      const id = b.toString('ascii', off, off + 4);
+      const sz = b.readUInt32LE(off + 4);
+      if (id === 'fmt ') fmtOff = off + 8;
+      if (id === 'data') { dataOff = off + 8; dataLen = sz; break; }
+      off += 8 + sz + (sz % 2);
+    }
+    if (dataOff < 0 || dataLen < 6400) return wavBuf;
+    const channels = fmtOff >= 0 ? b.readUInt16LE(fmtOff + 2) : 1;
+    const rate = fmtOff >= 0 ? b.readUInt32LE(fmtOff + 4) : 16000;
+    const bits = fmtOff >= 0 ? b.readUInt16LE(fmtOff + 14) : 16;
+    if (bits !== 16 || !rate) return wavBuf;
+    const frame = 2 * channels;
+    const win = Math.floor(rate * 0.02) * frame;                 // 20ms
+    const total = Math.min(dataLen, b.length - dataOff);
+    const nWin = Math.floor(total / win);
+    if (nWin < 3) return wavBuf;
+    const rms = [];
+    let peak = 0;
+    for (let w = 0; w < nWin; w++) {
+      let sum = 0;
+      for (let i = 0; i + frame <= win; i += frame) {
+        const s = b.readInt16LE(dataOff + w * win + i);
+        sum += s * s;
+      }
+      const r = Math.sqrt(sum / (win / frame));
+      rms.push(r);
+      if (r > peak) peak = r;
+    }
+    const th = Math.max(120, peak * 0.08);
+    let a = 0, z = nWin - 1;
+    while (a < nWin && rms[a] < th) a++;
+    while (z > a && rms[z] < th) z--;
+    if (a === 0 && z === nWin - 1) return wavBuf;                // 本来就没静音
+    /* 头部缓冲要留够：实测只留 100ms 时，句首词的 p 会从 0.84 掉到 0.77
+       （切得太贴，模型少了起音的那点余量）。尾部 100ms 够用。 */
+    const padIn = Math.floor(rate * 0.28) * frame;
+    const padOut = Math.floor(rate * 0.1) * frame;
+    const start = Math.max(0, a * win - padIn);
+    const end = Math.min(total, (z + 1) * win + padOut);
+    if (end - start < 6400) return wavBuf;
+    const out = Buffer.concat([b.slice(0, dataOff), b.slice(dataOff + start, dataOff + end)]);
+    out.writeUInt32LE(end - start, dataOff - 4);                 // data 大小
+    out.writeUInt32LE(out.length - 8, 4);                        // RIFF 大小
+    return out;
+  } catch { return wavBuf; }
+}
+
+/* 16kHz 单声道 WAV → { text, words }。失败抛错，调用方决定是否回退 */
+function transcribeDetailed(wavBuf, cfgModel) {
   return new Promise((resolve, reject) => {
     if (!fs.existsSync(binPath())) return reject(new Error('缺少 whisper-cli.exe'));
-    const name = MODELS[cfgModel] ? cfgModel : 'tiny.en';
-    if (!hasModel(name)) return reject(new Error('语音模型还没下载'));
+    const name = pickModel(cfgModel);
+    if (!hasModel(name)) return reject(new Error('语音模型还没下载（设置里点「下载语音模型」）'));
     const mp = modelPath(name);
     const base = path.join(os.tmpdir(), 'dayu-asr-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7));
     const wav = base + '.wav';
-    try { fs.writeFileSync(wav, wavBuf); } catch (e) { return reject(e); }
+    const trimmed = trimSilence(wavBuf);                 // 先掐掉首尾静音（省时间、少幻觉）
+    try { fs.writeFileSync(wav, trimmed); } catch (e) { return reject(e); }
 
-    const args = ['-m', mp, '-f', wav, '-l', 'en', '-nt', '-otxt', '-of', base, '-np'];
+    /* -ojf: 输出含 token 概率的完整 JSON（逐词打分的唯一依据）
+       -nt:  不要时间戳前缀（纯文本更好用） */
+    const args = ['-m', mp, '-f', wav, '-l', 'en', '-nt', '-ojf', '-of', base, '-np'];
     let child;
     try { child = spawn(binPath(), args, { cwd: binDir(), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }); }
     catch (e) { try { fs.unlinkSync(wav); } catch {} return reject(e); }
@@ -169,11 +277,17 @@ function transcribe(wavBuf, cfgModel) {
     child.on('close', () => {
       clearTimeout(timer);
       let text = '';
-      try { text = fs.readFileSync(base + '.txt', 'utf8'); } catch {}
+      let words = [];
+      try {
+        const j = JSON.parse(fs.readFileSync(base + '.json', 'utf8'));
+        const tr = (j && j.transcription && j.transcription[0]) || null;
+        if (tr) { text = String(tr.text || ''); words = groupTokens(tr.tokens); }
+      } catch {}
       try { fs.unlinkSync(wav); } catch {}
+      try { fs.unlinkSync(base + '.json'); } catch {}
       try { fs.unlinkSync(base + '.txt'); } catch {}
       if (!text) {
-        // 没写成 txt 就从 stdout 兜底解析
+        // 没写成 json 就从 stdout 兜底解析
         text = out.split(/\r?\n/)
           .filter((l) => l && !/^\[/.test(l.trim()) && !/load_backend|read_audio_data|whisper_|ggml_|main:/.test(l))
           .join(' ');
@@ -185,9 +299,15 @@ function transcribe(wavBuf, cfgModel) {
         .replace(/^\s*\d{2}:\d{2}:\d{2}[.,]\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}[.,]\d{3}\s*/gm, '')
         .replace(/\s+/g, ' ')
         .trim();
-      resolve(text);
+      resolve({ text, words });
     });
   });
 }
 
-module.exports = { status, downloadModel, transcribe, modelPath, binPath, MODELS, hasModel };
+/* 只取文本（老接口，保留） */
+async function transcribe(wavBuf, cfgModel) {
+  const r = await transcribeDetailed(wavBuf, cfgModel);
+  return r.text;
+}
+
+module.exports = { status, downloadModel, transcribe, transcribeDetailed, groupTokens, trimSilence, pickModel, modelPath, binPath, MODELS, hasModel };

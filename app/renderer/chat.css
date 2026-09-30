@@ -173,3 +173,73 @@ header .tools { margin-left: auto; display: flex; gap: 8px; }
 .locksym:hover { opacity: 1; }
 .locksym.locked { opacity: 1; }
 .locksym.fixed { cursor: help; opacity: .9; }
+
+/* ---------------- 口语练习：逐词清晰度配色 ----------------
+   颜色只代表"这个词读得清不清楚"（whisper 概率代理），不是语法/表达评分。
+   悬停出音标（复用 .w 的 tip），点一下朗读这个词。 */
+#msgs .msg.user .w { border-radius: 4px; padding: 0 2px; cursor: pointer; }
+#msgs .msg.user .w:hover { outline: 1px solid rgba(77, 107, 254, .45); }
+#msgs .msg.user .w.s-good { background: rgba(74, 197, 128, .28); }
+#msgs .msg.user .w.s-ok   { background: rgba(240, 190, 70, .32); }
+#msgs .msg.user .w.s-poor { background: rgba(240, 110, 100, .34); }
+#msgs .msg.user .w.s-good:hover { background: rgba(74, 197, 128, .45); }
+#msgs .msg.user .w.s-ok:hover   { background: rgba(240, 190, 70, .5); }
+#msgs .msg.user .w.s-poor:hover { background: rgba(240, 110, 100, .5); }
+#msgs .msg.user .w.playing { outline: 2px solid #4d6bfe; }
+
+.scoreline { font-size: 11px; color: #6b7490; margin-bottom: 4px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.scoreline b { font-size: 14px; }
+.scoreline b.s-good { color: #2f9e68; }
+.scoreline b.s-ok   { color: #c08a1e; }
+.scoreline b.s-poor { color: #cf4d3f; }
+.scoreline .hint { font-size: 10px; opacity: .7; }
+
+/* ---------------- 翻译器 ---------------- */
+#trInput { width: 100%; border: 1px solid #e3e8f2; border-radius: 10px; padding: 9px 11px; font: 13px/1.5 inherit; resize: vertical; }
+#trOut { margin-top: 12px; }
+.tropt { border: 1px solid #e6ebf5; border-radius: 11px; padding: 10px 12px; margin-top: 9px; background: #fbfcff; }
+.tropt .en { font-size: 14px; font-weight: 600; color: #24304c; line-height: 1.55; }
+.tropt .zh { font-size: 12px; color: #6b7490; margin-top: 3px; }
+.tropt .note { font-size: 11px; color: #8b95ab; margin-top: 5px; }
+.tropt .acts { margin-top: 8px; display: flex; gap: 8px; }
+.tropt .acts button { padding: 5px 10px; font-size: 11px; border-radius: 8px; }
+.tropt .w { cursor: pointer; border-bottom: 1px dotted #9aa6c8; }
+.tropt .w:hover { color: #4d6bfe; }
+.tropt .w.playing { background: rgba(77, 107, 254, .18); border-radius: 4px; }
+
+/* ---------------- 跟读：她一句 / 你一句 对比 ---------------- */
+#msgs .petacts { margin-top: 6px; }
+#msgs .petacts button { padding: 3px 9px; font-size: 11px; border-radius: 8px; }
+#msgs .msg.repeat { background: #f7f9ff; border: 1px solid #e3e8f2; border-radius: 10px; padding: 8px 10px; }
+#msgs .msg.repeat .rline { margin-top: 4px; font-size: 12px; color: #2b3450; }
+#msgs .msg.repeat .rlab { display: inline-block; min-width: 46px; color: #8b95ab; font-size: 11px; }
+#msgs .msg.repeat .rmiss { margin-top: 5px; font-size: 11px; color: #cf4d3f; }
+#msgs .msg.repeat .rok { margin-top: 5px; font-size: 11px; color: #2f9e68; }
+
+/* ---------------- 进步曲线 ---------------- */
+.trendbox { margin-bottom: 12px; }
+.trendbox .trendline { font-size: 12px; color: #6b7490; margin-bottom: 8px; }
+.trendbox .tbar { display: flex; align-items: center; gap: 7px; margin-top: 4px; font-size: 11px; color: #6b7490; }
+.trendbox .tday { width: 34px; flex: none; }
+.trendbox .tfill { height: 10px; border-radius: 5px; display: inline-block; min-width: 3px; transition: width .3s; }
+.trendbox .tfill.s-good { background: rgba(74, 197, 128, .75); }
+.trendbox .tfill.s-ok   { background: rgba(240, 190, 70, .8); }
+.trendbox .tfill.s-poor { background: rgba(240, 110, 100, .8); }
+.trendbox .tval { flex: none; }
+
+/* ---------------- 顶栏「⋯ 更多」下拉 ----------------
+   顶栏只留 4 个常用的，其余收进来（元素和 id 没变，绑定照旧）。 */
+.tools { position: relative; }
+.moremenu {
+  position: absolute; right: 0; top: 26px; z-index: 20; min-width: 148px;
+  background: #fff; border: 1px solid #e3e8f2; border-radius: 12px;
+  box-shadow: 0 8px 22px rgba(30, 40, 80, .18); padding: 5px; display: flex; flex-direction: column;
+}
+.moremenu .mi {
+  display: block; padding: 7px 10px; border-radius: 8px; font-size: 12.5px; color: #2b3450;
+  cursor: pointer; white-space: nowrap;
+}
+.moremenu .mi:hover { background: #f1f5ff; }
+.moremenu .mi.danger { color: #cf4d3f; }
+.moremenu .mi.danger:hover { background: #fdf0ee; }
+.moremenu .msep { height: 1px; background: #eef1f7; margin: 4px 6px; }
