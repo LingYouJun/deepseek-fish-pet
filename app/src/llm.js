@@ -3,6 +3,16 @@
  * 超时是这里最关键的一条：以前 fetch 没有 signal，连上之后服务端不吐数据就会一直挂着
  * （实测黑洞连接 20 秒毫无反应）。而 main.js 的 before-quit 要 await 会话收尾，
  * 挂住就等于"窗口关不掉"。所以每条请求都带 AbortSignal 超时。
+ *
+ * 模型与思考模式（DeepSeek-V4.1-Flash）：
+ *   模型名用 deepseek-flash（旧名 deepseek-v4-flash / deepseek-v4-flash-vision-exp 已下线，
+ *   仍可调用但由 V4.1-Flash 提供服务，按 Flash 价计费）。
+ *   V4.1-Flash 的**思考模式默认打开、effort=high**，对桌宠是三重伤害：
+ *     ① reasoning_content 按**输出**价计费（¥4/M），一句"嗯"可能先烧几百 token 的思维链；
+ *     ② 思考模式下 temperature 不生效（官方明确：设置不报错但会被忽略），回复的随机性没了；
+ *     ③ 首字要等思维链写完，流式朗读和 TTS 的即时感全丢。
+ *   所以这里**显式关掉**：thinking: { type: 'disabled' }。
+ *   想改成思考模式就把这一项换成 { type: 'enabled' } 并配合 reasoning_effort。
  */
 const DEFAULT_TIMEOUT_MS = 90000;
 
@@ -32,7 +42,7 @@ async function request(cfg, messages) {
     res = await fetch(base + '/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + cfg.apiKey },
-      body: JSON.stringify({ model: cfg.model || 'deepseek-chat', messages, temperature: 0.4 }),
+      body: JSON.stringify({ model: cfg.model || 'deepseek-flash', messages, temperature: 0.4, thinking: { type: 'disabled' } }),
       signal,
     });
   } catch (e) { throw wrapNetErr(e, ms); }
@@ -57,7 +67,7 @@ async function stream(cfg, messages, onDelta) {
     res = await fetch(base + '/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + cfg.apiKey },
-      body: JSON.stringify({ model: cfg.model || 'deepseek-chat', messages, temperature: 0.4, stream: true }),
+      body: JSON.stringify({ model: cfg.model || 'deepseek-flash', messages, temperature: 0.4, stream: true, thinking: { type: 'disabled' } }),
       signal,
     });
   } catch (e) { throw wrapNetErr(e, ms); }
