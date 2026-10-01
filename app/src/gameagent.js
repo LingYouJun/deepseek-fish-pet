@@ -174,6 +174,10 @@ async function start(o) {
 function stop() {
   if (!running) return { ok: true, already: true };
   stopFlag = true;
+  /* 收手时松开所有修饰键/鼠标键：游戏助手最可能连续发 ctrl/shift 这类键，
+     循环要是被中途掐掉（用户点停、出错退出），卡住的键会跟着用户一整天。
+     这是"键盘被搞坏"事故的第二道防线（第一道是 Input.cs 里 key 分支的顺序修复）。 */
+  try { require('./input').releaseAll(); } catch {}
   log('info', '收到停止指令，正在收尾…');
   return { ok: true };
 }

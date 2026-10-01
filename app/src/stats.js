@@ -281,11 +281,22 @@ function behaviorSpec() {
 function stepBudget() {
   const v = load();
   const q = Number(v.iq) || NEUTRAL;
-  if (q >= 80) return 10;
-  if (q >= 65) return 8;
-  if (q >= 50) return 6;
-  if (q >= 35) return 4;
-  return 3;
+  /* ⚠️ 这里原来是写死的档位 3/4/6/8/10 —— **实测太低**：
+     用户 IQ 54 → 只有 6 步，而"写文件 → 跑脚本 → 看结果 → 改一下 → 再跑"
+     这种任务轻松超过 10 步，她只能中途停下报"没做完"
+     （用户原话："你给她步骤太少了，导致她完成不了任务"）。
+     现在改成在 base~max 之间按 IQ 连续插值，Base/Max 可配：
+       IQ 20 → base(8)    IQ 95 → max(30)    IQ 54 → 约 18 */
+  let base = 8, max = 30;
+  try {
+    const c = require('./config').load();
+    if (Number(c.stepBudgetBase) > 0) base = Number(c.stepBudgetBase);
+    if (Number(c.stepBudgetMax) > 0) max = Number(c.stepBudgetMax);
+  } catch {}
+  const lo = Math.max(1, Math.round(base));
+  const hi = Math.max(lo, Math.round(max));
+  const t = Math.max(0, Math.min(1, (q - 20) / 75));      // IQ 20 → 0，IQ 95 → 1
+  return Math.round(lo + (hi - lo) * t);
 }
 
 /* 由人设推导初始值（跟"界面风格"一样带人设指纹） */

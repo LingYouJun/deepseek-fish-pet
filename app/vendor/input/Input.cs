@@ -143,12 +143,42 @@ class Program
                     foreach (char c in args[1]) Uni(c); break;
                 case "key":
                     {
+                        /* ⚠️ 这个顺序是**安全缺陷修出来的**：必须**先把所有键名解析完**再动键盘。
+                         * 旧写法是一边解析修饰键一边按下、最后才解析主键 —— 只要主键名不认识
+                         * （`key ctrl+` 这种尾部加号、`key ctrl+cmd` 把 win 写错、模型偶尔会犯），
+                         * Vk() 抛异常就直接跳出函数，**已经按下的 Ctrl 再也没人松开**。
+                         * 表现：用户整个键盘变成"每个键都是 Ctrl+快捷键"，输入不了东西，只能重启。
+                         * 现在任何键名问题都在**动手之前**抛出，一个键都不会按下去。
+                         * 另外 try/finally 保证正常路径下修饰键一定被松开。 */
                         var parts = new List<string>(args[1].ToLower().Split('+'));
                         var mods = new List<ushort>();
-                        for (int i = 0; i < parts.Count - 1; i++) mods.Add(Vk(parts[i].Trim()));
+                        for (int i = 0; i < parts.Count - 1; i++)
+                        {
+                            var nm = parts[i].Trim();
+                            if (nm == "") throw new Exception("按键名写错了（多了个 + ？）: " + args[1]);
+                            mods.Add(Vk(nm));
+                        }
+                        var last = parts[parts.Count - 1].Trim();
+                        if (last == "") throw new Exception("按键名写错了（结尾多了个 + ？）: " + args[1]);
+                        ushort mainKey = Vk(last);          // ← 全部解析成功之后才开始按
                         foreach (var m in mods) Keybd(m, 0);
-                        Press(Vk(parts[parts.Count - 1].Trim()));
-                        foreach (var m in mods) Keybd(m, KEYEVENTF_KEYUP);
+                        try { Press(mainKey); }
+                        finally { foreach (var m in mods) Keybd(m, KEYEVENTF_KEYUP); }
+                        break;
+                    }
+                case "releaseall":
+                    {
+                        /* 兜底：把所有可能卡住的键统统松开。
+                         * 什么时候用：应用启动时（救上一次崩溃/被杀留下的卡键）、
+                         * 游戏助手收手时、退出之前。
+                         * 为什么包含 0xA0~0xA5：Shift/Ctrl/Alt 除了通用码（0x10/0x11/0x12）
+                         * 还有左右各自的码，卡住时可能只反映在其中一边，全都发一遍最稳。
+                         * Win 键（0x5B/0x5C）同理 —— 它卡住会把所有快捷键吃掉。 */
+                        ushort[] stuck = { 0x10, 0x11, 0x12, 0x5B, 0x5C, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5 };
+                        foreach (var v in stuck) Keybd(v, KEYEVENTF_KEYUP);
+                        mouse_event(LEFTUP, 0, 0, 0, 0);
+                        mouse_event(RIGHTUP, 0, 0, 0, 0);
+                        mouse_event(MIDDLEUP, 0, 0, 0, 0);
                         break;
                     }
                 default:

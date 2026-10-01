@@ -24,8 +24,8 @@ const persona = require('./src/persona');
 const personatags = require('./src/personatags');
 const petactions = require('./src/petactions');
 const speak = require('./src/speak');
-const testlog = require('./src/testlog');
-const userinput = require('./src/userinput');
+const testlog = require('./src/testlog');const userinput = require('./src/userinput');
+const input = require('./src/input');
 
 const dbg = (msg) => {
   try { fs.appendFileSync(path.join(app.getPath('userData'), 'debug.log'), new Date().toISOString() + ' ' + msg + '\n'); } catch {}
@@ -1507,6 +1507,12 @@ if (!gotLock) {
         pollMs: uy.userPollMs,
       });
     } catch (e) { dbg('[userinput] 参数设置失败 ' + e); }
+    /* 【键盘自救】清一次上次异常退出/被杀留下的卡键。
+     * 实测旧版 input.exe 只要键名写错（key ctrl+ / key ctrl+cmd）就会把 Ctrl 卡住，
+     * 用户表现："输入不了东西、键盘像错位了，只能重启一次"。
+     * 现在每次启动先松一遍修饰键，等于自动治好 —— 不用再重启。
+     * 放启动早期：用户很可能一开机就发现键盘不对。 */
+    try { input.releaseAll(); dbg('[input] 启动时释放卡键'); } catch (e) { dbg('[input] releaseAll 失败 ' + e); }
     memory.onAppStart().catch((e) => dbg('[memory] onAppStart err ' + e));
     // 隐藏数值：时间效应（多久没见）+ 性格慢回归，然后按需补判一次
     setTimeout(() => {
@@ -1543,11 +1549,15 @@ if (!gotLock) {
   });
 
   app.on('before-quit', (e) => {
+    /* 不管这次退出是不是要走"会话收尾"，都先把修饰键松开 ——
+       她要是正按着 ctrl+c 的中途被退出，卡键会留给用户一整天。 */
+    try { input.releaseAll(); } catch {}
     if (didSummarize) return;
     e.preventDefault();
     (async () => {
       try { await web.close(); } catch {}
       try { await memory.onSessionEnd(); } catch {}
+      try { input.releaseAll(); } catch {}      // 收尾期间也可能刚发过按键
       didSummarize = true;
       app.quit();
     })();

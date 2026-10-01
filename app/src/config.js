@@ -92,6 +92,11 @@ const DEFAULTS = {
      答案一样（甚至更准：给的开始按钮坐标更贴近真实位置）。
      所以默认 false；真要她"深度思考"再看这里。 */
   visionThinking: false,
+  /* 多步任务的步数预算（由 IQ 在 base~max 之间插值，见 stats.stepBudget）。
+     原来是写死的 3/4/6/8/10 档位，实测太低 —— IQ 54 只有 6 步，
+     "写文件→跑脚本→看结果→改一下"这种任务根本做不完，她只能中途报没做完。 */
+  stepBudgetBase: 8,
+  stepBudgetMax: 30,
   asrEngine: 'auto',     // auto | whisper | webspeech
   asrModel: 'base.en',   // tiny.en | base.en | small.en（默认 base.en：tiny 太不准，口语练习会误判）
   asrVad: true,          // 装了就启用 VAD 只处理语音段：实测免幻觉 + 快 53%（模型缺自动跳过）
