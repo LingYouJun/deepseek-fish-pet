@@ -20,6 +20,8 @@ app.whenReady().then(() => {
   let pass = 0, total = 0;
   const check = (n, ok, d) => { total++; if (ok) pass++; L((ok ? '  ✅ ' : '  ❌ ') + n + (d ? '  ' + d : '')); };
 
+  let crashed = '';
+
   try {
     const context = require('../src/memory/context');
     const permanent = require('../src/memory/permanent');
@@ -143,8 +145,9 @@ app.whenReady().then(() => {
     L('');
     L('  通过 ' + pass + ' / ' + total);
   } catch (e) {
+    crashed = String((e && e.stack) || e);
     L('ERROR: ' + ((e && e.stack) || e));
   }
   console.log(out.join('\n'));
-  setTimeout(() => app.exit(pass === total ? 0 : 1), 200);
+  setTimeout(() => app.exit((pass === total && !crashed) ? 0 : 1), 200);
 });

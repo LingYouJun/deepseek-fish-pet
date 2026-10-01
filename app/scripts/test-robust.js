@@ -25,6 +25,8 @@ app.whenReady().then(async () => {
   let pass = 0, total = 0;
   const check = (n, ok, d) => { total++; if (ok) pass++; L((ok ? '  ✅ ' : '  ❌ ') + n + (d ? '  ' + d : '')); };
 
+  let crashed = '';
+
   try {
     const store = require('../src/store');
     const config = require('../src/config');
@@ -208,8 +210,9 @@ app.whenReady().then(async () => {
     L('');
     L('  通过 ' + pass + ' / ' + total);
   } catch (e) {
+    crashed = String((e && e.stack) || e);
     L('ERROR: ' + ((e && e.stack) || e));
   }
   console.log(out.join('\n'));
-  setTimeout(() => app.exit(pass === total ? 0 : 1), 300);
+  setTimeout(() => app.exit((pass === total && !crashed) ? 0 : 1), 300);
 });

@@ -21,6 +21,8 @@ app.whenReady().then(() => {
     return p;
   };
 
+  let crashed = '';
+
   try {
     const t = pa.loadTable();
     L('=== 动作表 ===');
@@ -54,6 +56,7 @@ app.whenReady().then(() => {
     for (const r of rep) L('    ' + (r.has ? '✅ 已有' : '⬜ 待画') + '  ' + r.pose + (r.has ? '  → ' + pa.poseFile(r.pose, 'dafeiyu') : ''));
     L('  （把 PNG 按这些名字丢进上面的目录即生效，不用改代码、不用重启）');
   } catch (e) {
+    crashed = String((e && e.stack) || e);
     L('ERROR: ' + ((e && e.stack) || e));
   } finally {
     fs.writeFileSync(pFile, pBak);

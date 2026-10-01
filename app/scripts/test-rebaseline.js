@@ -91,6 +91,7 @@ app.whenReady().then(() => {
     L('  changed=' + r2.changed + '  applied=' + r2.applied.length + ' 条');
     L('  数值是否不变: ' + (JSON.stringify(stats.all()) === mid ? '✅ 不变' : '⚠ 变了'));
   } catch (e) {
+    crashed = String((e && e.stack) || e);
     L('ERROR: ' + ((e && e.stack) || e));
   } finally {
     fs.writeFileSync(pFile, pBak);

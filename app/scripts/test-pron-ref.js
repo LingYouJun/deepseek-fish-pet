@@ -17,6 +17,7 @@ app.whenReady().then(async () => {
   const L = (s) => out.push(s);
 
   const TEXT = 'Hello there. I would like to practice speaking English with you today.';
+  let crashed = '';
   try {
     const cfg = config.load();
     L('=== 配置 ===');
@@ -58,6 +59,7 @@ app.whenReady().then(async () => {
     L('  参考句链路: ' + (speak.refGet(TEXT) ? '✅ 通（缓存已写入，二次调用不再跑 whisper）' : '❌ 不通'));
     L('  缓存目录: ' + speak.refDir());
   } catch (e) {
+    crashed = String((e && e.stack) || e);
     L('ERROR: ' + ((e && e.stack) || e));
   }
   console.log(out.join('\n'));

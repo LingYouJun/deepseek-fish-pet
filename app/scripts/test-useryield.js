@@ -107,11 +107,12 @@ app.whenReady().then(async () => {
     L('  通过 ' + pass + ' / ' + total);
     L('  统计: ' + JSON.stringify(userinput.state().stats));
   } catch (e) {
+    crashed = String((e && e.stack) || e);
     L('ERROR: ' + ((e && e.stack) || e));
   } finally {
     userinput.stop();
     userinput.setCursorSource(null);   // 还原成真实光标
   }
   console.log(out.join('\n'));
-  setTimeout(() => app.exit(pass === total ? 0 : 1), 200);
+  setTimeout(() => app.exit((pass === total && !crashed) ? 0 : 1), 200);
 });

@@ -208,6 +208,7 @@ app.whenReady().then(() => {
       fs.writeFileSync(pFile, JSON.stringify(p, null, 2));
       return p;
     };
+    let crashed = '';
     try {
       const tsundere = setP('蓝发鲸鱼女仆，傲娇、温柔、嘴硬，被叫「吃白饭的大肥鱼」会炸毛。', '傲娇、温柔、嘴硬');
       const yandere = setP('黑发少女，病娇，极度偏执，独占欲强，只属于我。', '病娇、偏执');
@@ -236,8 +237,9 @@ app.whenReady().then(() => {
     L('');
     L('  通过 ' + pass + ' / ' + total);
   } catch (e) {
+    crashed = String((e && e.stack) || e);
     L('ERROR: ' + ((e && e.stack) || e));
   }
   console.log(out.join('\n'));
-  setTimeout(() => app.exit(pass === total ? 0 : 1), 200);
+  setTimeout(() => app.exit((pass === total && !crashed) ? 0 : 1), 200);
 });

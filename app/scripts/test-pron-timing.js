@@ -31,6 +31,8 @@ app.whenReady().then(async () => {
     return '零长/乱序的词 = ' + bad + ' / ' + words.length + '　首词起点=' + words[0].from + 'ms  末词终点=' + words[words.length - 1].to + 'ms  跨度=' + span + 'ms';
   };
 
+  let crashed = '';
+
   try {
     const cfg = config.load();
     /* 2. 先用 mp3 跑一遍（已知时间戳会坏，作为对照） */
@@ -61,6 +63,7 @@ app.whenReady().then(async () => {
       L('  ' + (okb > oka ? '✅ 16k WAV 明显更可靠 → 重采样这一步是必须的' : '⚠ 两者差不多，需要重新判断根因'));
     }
   } catch (e) {
+    crashed = String((e && e.stack) || e);
     L('ERROR: ' + ((e && e.stack) || e));
   }
   console.log(out.join('\n'));

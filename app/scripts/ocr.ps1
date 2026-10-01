@@ -1,6 +1,15 @@
 param([Parameter(Mandatory = $true)][string]$Path)
 # Windows 自带 OCR（WinRT OcrEngine），离线，支持系统里已安装的语言（中/英）。
 # 用法：powershell -NoProfile -ExecutionPolicy Bypass -File ocr.ps1 -Path <图片路径>
+#
+# ⚠️ 必须先把输出编码钉成 UTF-8：
+#   powershell.exe（5.1）把 stdout 重定向到管道时用的是**控制台代码页**，
+#   中文系统上是 GBK/936。而 Node 那边是按 UTF-8 解码的 ——
+#   于是识别出来的中文全变成 "��" 这种乱码（实测中文屏幕上整段都是乱码，
+#   "读屏幕"对中文界面等于失效）。设置 OutputEncoding 后写出的就是 UTF-8 字节，
+#   两边才对得上。
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
 $ErrorActionPreference = 'Stop'
 try {
     Add-Type -AssemblyName System.Runtime.WindowsRuntime

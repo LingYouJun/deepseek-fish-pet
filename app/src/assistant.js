@@ -2,6 +2,7 @@ const { app, shell, desktopCapturer, screen } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
+const { StringDecoder } = require('string_decoder');   // OCR 收 stdout 用（见 ocr() 的注释）
 const web = require('./web');
 const screenstream = require('./screenstream');
 const input = require('./input');
@@ -85,8 +86,13 @@ function ocr(pngPath) {
         { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     } catch { return fin(''); }
     const timer = setTimeout(() => { try { child.kill(); } catch {} fin(''); }, 25000);
-    child.stdout.on('data', (d) => { if (out.length < 40000) out += d; });
-    child.stderr.on('data', (d) => { if (err.length < 4000) err += d; });
+    /* 用 StringDecoder 而不是 `out += d`：后者是**逐块隐式 toString('utf8')**，
+       一个中文字被切在两次 data 事件之间就会解出 U+FFFD 乱码
+       （projects.js 里踩过同一个坑，那边也是这么修的）。
+       配合 ocr.ps1 里设的 UTF-8 输出编码，中文才不乱。 */
+    const dec = new StringDecoder('utf8');
+    child.stdout.on('data', (d) => { if (out.length < 40000) out += dec.write(d); });
+    child.stderr.on('data', (d) => { if (err.length < 4000) err += dec.write(d); });
     child.on('error', () => { clearTimeout(timer); fin(''); });
     child.on('close', (code) => {
       clearTimeout(timer);
@@ -139,6 +145,7 @@ async function run(tool, arg) {
     const cfg = config.load();
     let text = '';
     let usedVision = false;
+    let visionErr = '';
     let action = null;
     if (cfg.visionEnabled) {
       const q = (arg || '看看屏幕') + '\n\n【输出要求】先用一句中文说明你的判断；如果这一步需要操作屏幕，就在回答的最后单独输出一行：ACTION: 工具|参数（坐标基于 1280x720 截图，左上角 0,0；工具可选 click/rclick/dclick/move/drag/scroll/type/key，例如 ACTION: click|640,360）。如果不需要操作就不要写 ACTION 行。';
@@ -151,14 +158,20 @@ async function run(tool, arg) {
           if (TOOL_TIER[t]) action = { tool: t, arg: m[2].trim() };
         }
       } catch (e) {
+        /* ⚠️ 这里以前是 `text = ''`，**把视觉失败完全吞掉**：key 过期 / 余额不足 /
+         * 网络不通，全都表现成"降级成 OCR"，用户和模型都不知道出了什么事，
+         * 还会一直重复调。现在把原因记下来、一并报回去（翻译过的可读版本由 vision.js 给）。 */
+        visionErr = String((e && e.message) || e);
         text = '';
       }
     }
     if (!text) {
       const t = await ocr(cap.path);
-      text = t ? ('屏幕上识别到的文字：\n' + t) : '（未启用视觉模型，且未识别到文字）';
+      text = t ? ('屏幕上识别到的文字：\n' + t) : '（未识别到文字）';
+      if (visionErr) text += '\n\n⚠️ 视觉模型调用失败，已降级为 OCR：' + visionErr;
+      else if (!cfg.visionEnabled) text += '\n\n（config.json 里 visionEnabled 是关的，所以没走视觉模型）';
     }
-    return { text: (usedVision ? '👁 视觉模型：\n' : '🖥 屏幕文字：\n') + text, image: cap.dataUrl, path: cap.path, action };
+    return { text: (usedVision ? '👁 视觉模型：\n' : '🖥 屏幕文字：\n') + text, image: cap.dataUrl, path: cap.path, action, visionErr };
   }
 
   // 这几个允许空参数（列根目录 / 停手 / 查状态），其它需要参数的工具才拦

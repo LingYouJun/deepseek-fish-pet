@@ -13,6 +13,8 @@ app.whenReady().then(async () => {
   const out = [];
   const L = (s) => out.push(s);
 
+  let crashed = '';
+
   try {
     const cfg = config.load();
     L('=== 1. 打分分档（阈值 good>=' + cfg.speakGoodP + ' ok>=' + cfg.speakOkP + '）===');
@@ -71,6 +73,7 @@ app.whenReady().then(async () => {
       }
     }
   } catch (e) {
+    crashed = String((e && e.stack) || e);
     L('ERROR: ' + ((e && e.stack) || e));
   }
   console.log(out.join('\n'));

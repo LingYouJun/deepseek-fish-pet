@@ -80,6 +80,11 @@ function wrapNetErr(e, ms, base) {
   return new Error('模型请求失败：' + ((e && e.message) || e) + where);
 }
 
+/* 导出给别的"也直接 fetch 模型接口"的模块复用（目前是 vision.js）。
+ * 那边原本自己抛 `HTTP ${status} ${body}` 和裸网络错误 —— 和 llm.js 修之前一模一样，
+ * 用户同样只会看到 "fetch failed"。翻译逻辑放一处，别再复制一份走样。 */
+const net = { wrapNetErr, wrapHttpErr, errCodes, isTimeout };
+
 /* HTTP 状态码 → 人话。原来的实现直接把服务端 JSON 甩给用户（"HTTP 401 {…}"），
  * 401/402/429 这三种恰好是最需要说清楚的（key 错、没钱了、太频繁）。 */
 function wrapHttpErr(status, body) {
@@ -275,4 +280,5 @@ function parseReply(text) {
   return { en: en || prose || (lines.some((l) => !isAct(l)) ? strippedRaw : ''), zh, words, choices, action, mood: mood || '' };
 }
 
-module.exports = { request, stream, parseReply, DEFAULT_TIMEOUT_MS };
+module.exports = {
+  net, request, stream, parseReply, DEFAULT_TIMEOUT_MS };

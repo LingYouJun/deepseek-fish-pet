@@ -81,7 +81,8 @@ app.whenReady().then(async () => {
     L('');
     L('  通过 ' + pass + ' / ' + total);
   } catch (e) {
+    crashed = String((e && e.stack) || e);
     L('ERROR: ' + ((e && e.stack) || e));
   }
-  setTimeout(() => app.exit(pass === total ? 0 : 1), 300);
+  setTimeout(() => app.exit((pass === total && !crashed) ? 0 : 1), 300);
 });

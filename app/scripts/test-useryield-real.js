@@ -88,11 +88,12 @@ app.whenReady().then(async () => {
     L('  通过 ' + pass + ' / ' + total);
     L('  统计: ' + JSON.stringify(userinput.state().stats));
   } catch (e) {
+    crashed = String((e && e.stack) || e);
     L('ERROR: ' + ((e && e.stack) || e));
   } finally {
     try { const [rx, ry] = toModel(orig); input.move(rx, ry); } catch {}
     userinput.stop();
   }
   console.log(out.join('\n'));
-  setTimeout(() => app.exit(pass === total ? 0 : 1), 300);
+  setTimeout(() => app.exit((pass === total && !crashed) ? 0 : 1), 300);
 });

@@ -19,6 +19,8 @@ app.whenReady().then(async () => {
   ];
   const bandOf = (p) => (BANDS.find((b) => p >= b.min) || BANDS[BANDS.length - 1]);
 
+  let crashed = '';
+
   try {
     const wav = path.join(process.env.TEMP, 'asr-test.wav');
     L('wav = ' + wav + '  (' + (fs.existsSync(wav) ? Math.round(fs.statSync(wav).size / 1024) + ' KB' : '不存在') + ')');
@@ -57,6 +59,7 @@ app.whenReady().then(async () => {
       L('  标点 token "." 的 p = ' + (dot ? dot.p : '?') + '  → 已排除，不会拖累前一个词');
     }
   } catch (e) {
+    crashed = String((e && e.stack) || e);
     L('ERROR: ' + ((e && e.stack) || e));
   }
   console.log(out.join('\n'));

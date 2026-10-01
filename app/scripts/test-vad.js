@@ -12,6 +12,8 @@ app.whenReady().then(async () => {
   const out = [];
   const L = (s) => out.push(s);
 
+  let crashed = '';
+
   try {
     const cfg = config.load();
     const wav = path.join(process.env.TEMP, 'asr-padded.wav');
@@ -42,6 +44,7 @@ app.whenReady().then(async () => {
     L('  词数: ' + a.n + ' -> ' + b.n);
     L('  输出是否被 VAD 修正（幻觉词是否消失）: ' + (a.text !== b.text ? '有变化' : '无变化'));
   } catch (e) {
+    crashed = String((e && e.stack) || e);
     L('ERROR: ' + ((e && e.stack) || e));
   }
   console.log(out.join('\n'));

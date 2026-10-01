@@ -34,6 +34,8 @@ app.whenReady().then(async () => {
   const L = (s) => out.push(s);
   const D = 'C:/Users/64616/AppData/Local/Temp/dtwtest/';
 
+  let crashed = '';
+
   try {
     const cfg = config.load();
     const params = cfg.pron;
@@ -78,6 +80,7 @@ app.whenReady().then(async () => {
     L('  只换音色没有误报: ' + (ok2 ? '✅ 没误报（最大 S=' + r2.maxS.toFixed(2) + ' < ' + params.threshold + '）' : '❌ 误报成 ' + r2.maxWord));
     L('  → 端到端接线: ' + ((ok3 && ok2) ? '✅ 正确' : '❌ 有问题'));
   } catch (e) {
+    crashed = String((e && e.stack) || e);
     L('ERROR: ' + ((e && e.stack) || e));
   }
   console.log(out.join('\n'));

@@ -205,19 +205,31 @@ function analyze(persona) {
 
   const hits = {};
   const tw = table.tierWeights, fw = table.fieldWeights;
+  const bump = (tag, field, w, n) => {
+    if (!n) return;
+    const h = hits[tag.id] || (hits[tag.id] = { score: 0, hits: 0, fields: {}, words: {} });
+    h.score += (tw[tag.tier] || 1) * (fw[field] || 1) * n;
+    h.hits += n;
+    h.fields[field] = (h.fields[field] || 0) + n;
+    h.words[w] = (h.words[w] || 0) + n;
+  };
   for (const tag of table.tags) {
+    /* 拿 tag.id 也匹配一次（词边界、大小写不敏感）。
+     * 为什么需要：表里的匹配词只有中/日文（傲娇/ツンデレ…），而 id 是英文
+     * （tsundere / yandere / gentle / stubborn…）—— 那正好就是最标准的英文说法。
+     * 以前用户把人物设定写成英文（"a tsundere whale maid"）**一个词都匹配不上**，
+     * 于是 analyze 返回空、archOf 落到 _default、toneOf 为空、baseline 不生效：
+     * 整套人格系统静默失效，还没有任何提示。
+     * 用词边界是为了别让 gentle 命中 gentleman、genki 命中 genkiness 之类。 */
+    const idRe = new RegExp('(^|[^a-zA-Z])' + String(tag.id).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '($|[^a-zA-Z])', 'gi');
     for (const field of Object.keys(fw)) {
       const text = String(p[field] || '');
       if (!text) continue;
+      bump(tag, field, tag.id, (text.match(idRe) || []).length);
       for (const w of tag.words) {
         let idx = 0, n = 0;
         while ((idx = text.indexOf(w, idx)) >= 0) { n++; idx += w.length; }
-        if (!n) continue;
-        const h = hits[tag.id] || (hits[tag.id] = { score: 0, hits: 0, fields: {}, words: {} });
-        h.score += (tw[tag.tier] || 1) * (fw[field] || 1) * n;
-        h.hits += n;
-        h.fields[field] = (h.fields[field] || 0) + n;
-        h.words[w] = (h.words[w] || 0) + n;
+        bump(tag, field, w, n);
       }
     }
   }

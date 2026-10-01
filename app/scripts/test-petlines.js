@@ -19,6 +19,8 @@ app.whenReady().then(async () => {
   const out = [];
   const L = (s) => out.push(s);
 
+  let crashed = '';
+
   try {
     const cfg = config.load();
     const p = pt.loadPersona();
@@ -77,6 +79,7 @@ app.whenReady().then(async () => {
       }
     }
   } catch (e) {
+    crashed = String((e && e.stack) || e);
     L('ERROR: ' + ((e && e.stack) || e));
   } finally {
     if (hadOv) fs.writeFileSync(ovFile, ovBak); else { try { fs.unlinkSync(ovFile); } catch {} }
