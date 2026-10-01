@@ -26,9 +26,80 @@ function isTimeout(e) {
   const n = e && e.name;
   return n === 'TimeoutError' || n === 'AbortError';
 }
-function wrapNetErr(e, ms) {
-  if (isTimeout(e)) return new Error('模型请求超时（' + Math.round(ms / 1000) + ' 秒内没有响应）');
-  return e;
+
+/* 把网络层原始错误翻成**用户能照着做**的话。
+ * 起因：故障注入测试里把 API 地址指到打不通的端口，调用方收到的只有一句
+ *   `fetch failed` —— 渲染层会把它原样显示成错误气泡（chat.js 的 addErr），
+ *   用户看到这四个字完全不知道是网断了、地址配错了、还是 key 过期了
+ *   （这台机器上网络时好时坏，这个提示尤其重要）。
+ * 原始错误码塞进括号里保留，方便排查，但主句要先说人话。 */
+/* 把错误里所有可能藏原因的地方串起来。
+ * 为什么要这么啰嗦：Node/Electron 的 fetch 失败时**不是**简单的 `e.cause.code`。
+ * 实测连不上时拿到的是 `TypeError: fetch failed`，真正的原因埋在
+ *   cause = AggregateError（Happy Eyeballs 同时试 IPv4/IPv6）
+ *     └ errors[] = [Error: connect ECONNREFUSED …]   ← code 在这一层
+ * 只读 e.cause.code 会得到 undefined，于是分类全部落空、用户还是看到 "fetch failed"。 */
+function errCodes(e) {
+  const out = [];
+  const seen = new Set();
+  const push = (x, d) => {
+    if (!x || typeof x !== 'object' || d > 3 || seen.has(x)) return;
+    seen.add(x);
+    if (x.code) out.push(String(x.code));
+    if (x.errno) out.push(String(x.errno));
+    if (x.message) out.push(String(x.message));
+    if (Array.isArray(x.errors)) for (const y of x.errors) push(y, d + 1);
+    if (x.cause) push(x.cause, d + 1);
+  };
+  push(e, 0);
+  return out.join(' | ');
+}
+
+function wrapNetErr(e, ms, base) {
+  if (isTimeout(e)) return new Error('模型请求超时（' + Math.round(ms / 1000) + ' 秒内没有响应）—— 网络慢或被墙了，可以稍后重试。');
+  const blob = errCodes(e);
+  const where = base ? '（地址：' + base + '）' : '';
+  if (/ENOTFOUND|EAI_AGAIN|ERR_NAME_NOT_RESOLVED/i.test(blob)) {
+    return new Error('连不上模型服务器：域名解析失败' + where + '，检查网络或配置里的 apiBase。');
+  }
+  if (/ECONNREFUSED/i.test(blob)) {
+    return new Error('连不上模型服务器：连接被拒绝' + where + '，地址或端口不对（服务没在跑？）。');
+  }
+  if (/ECONNRESET|EPIPE|ERR_SSL|CERT|socket hang up|other side closed/i.test(blob)) {
+    return new Error('和模型服务器的连接被中断' + where + '（网络不稳、代理掉线或证书问题），稍后重试即可。');
+  }
+  if (/ENETUNREACH|EHOSTUNREACH|ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT/i.test(blob)) {
+    return new Error('网络不可达' + where + ' —— 检查是否开了代理/梯子。');
+  }
+  /* fetch 规范有一份"被禁端口"黑名单（9/25/587/6667 等），命中时 undici 直接拒绝、
+   * 连都不连，报的是 cause="bad port"。实测把 apiBase 指到 :9 就是这个 —— 光看
+   * "fetch failed" 完全猜不到是端口被禁，所以单独说清楚。 */
+  if (/bad port/i.test(blob)) {
+    return new Error('配置里的端口被浏览器安全策略禁止' + where + ' —— 换成 80/443/8080/3000 这类普通端口。');
+  }
+  return new Error('模型请求失败：' + ((e && e.message) || e) + where);
+}
+
+/* HTTP 状态码 → 人话。原来的实现直接把服务端 JSON 甩给用户（"HTTP 401 {…}"），
+ * 401/402/429 这三种恰好是最需要说清楚的（key 错、没钱了、太频繁）。 */
+function wrapHttpErr(status, body) {
+  const raw = String(body || '').replace(/\s+/g, ' ').slice(0, 200);
+  const map = {
+    400: '请求被拒绝（参数或模型名不对）',
+    401: 'API Key 无效或已过期 —— 去设置里重新填一次',
+    402: '账户余额不足 —— 需要充值才能继续',
+    403: '这个 Key 没有访问该模型的权限',
+    404: '接口地址不存在 —— 检查配置里的 apiBase 是不是少了/多了路径',
+    422: '请求内容不合法（格式或长度超限）',
+    429: '请求太频繁或已达限额 —— 等一会儿再试',
+    500: '模型服务端内部错误 —— 这不是你的问题，稍后重试',
+    502: '网关错误（服务端或代理不稳定）',
+    503: '服务暂时不可用（可能在维护）',
+    504: '网关超时（服务端响应太慢）',
+  };
+  const head = map[status] || ('模型服务返回 HTTP ' + status);
+  const detail = /Authentication Fails|invalid/i.test(raw) && status === 401 ? '' : '　服务端说明：' + raw;
+  return new Error(head + '（HTTP ' + status + '）' + detail);
 }
 
 async function request(cfg, messages) {
@@ -45,13 +116,13 @@ async function request(cfg, messages) {
       body: JSON.stringify({ model: cfg.model || 'deepseek-flash', messages, temperature: 0.4, thinking: { type: 'disabled' } }),
       signal,
     });
-  } catch (e) { throw wrapNetErr(e, ms); }
+  } catch (e) { throw wrapNetErr(e, ms, base); }
 
   if (!res.ok) {
     const body = (await res.text().catch(() => '')).slice(0, 300);
-    throw new Error(`HTTP ${res.status} ${body}`);
+    throw wrapHttpErr(res.status, body);
   }
-  const json = await res.json().catch((e) => { throw wrapNetErr(e, ms); });
+  const json = await res.json().catch((e) => { throw wrapNetErr(e, ms, base); });
   return json?.choices?.[0]?.message?.content || '';
 }
 
@@ -70,11 +141,11 @@ async function stream(cfg, messages, onDelta) {
       body: JSON.stringify({ model: cfg.model || 'deepseek-flash', messages, temperature: 0.4, stream: true, thinking: { type: 'disabled' } }),
       signal,
     });
-  } catch (e) { throw wrapNetErr(e, ms); }
+  } catch (e) { throw wrapNetErr(e, ms, base); }
 
   if (!res.ok) {
     const body = (await res.text().catch(() => '')).slice(0, 300);
-    throw new Error(`HTTP ${res.status} ${body}`);
+    throw wrapHttpErr(res.status, body);
   }
   if (!res.body || typeof res.body.getReader !== 'function') throw new Error('当前环境不支持流式读取');
 
@@ -105,7 +176,7 @@ async function stream(cfg, messages, onDelta) {
   } catch (e) {
     // onDelta 抛错（例如窗口销毁后 webContents.send 会抛）时也要把连接放掉，
     // 否则服务端会继续生成到 max_tokens 为止。
-    throw wrapNetErr(e, ms);
+    throw wrapNetErr(e, ms, base);
   } finally {
     try { reader.cancel(); } catch {}
   }
