@@ -85,6 +85,13 @@ const DEFAULTS = {
   visionBase: '',
   visionKey: '',
   visionModel: 'deepseek-flash',
+  /* 视觉模型是否走"推理模式"。
+     踩过的坑：vision.js 原先没传 thinking 参数，模型默认就开推理 ——
+     为了答 19 个字先生成 1600 token 的推理，单次"看屏幕"要 6~8.5 秒，
+     输出 token 是关闭时的 **150 倍**（又慢又贵）。A/B 实测关掉后 0.65~0.93 秒，
+     答案一样（甚至更准：给的开始按钮坐标更贴近真实位置）。
+     所以默认 false；真要她"深度思考"再看这里。 */
+  visionThinking: false,
   asrEngine: 'auto',     // auto | whisper | webspeech
   asrModel: 'base.en',   // tiny.en | base.en | small.en（默认 base.en：tiny 太不准，口语练习会误判）
   asrVad: true,          // 装了就启用 VAD 只处理语音段：实测免幻觉 + 快 53%（模型缺自动跳过）

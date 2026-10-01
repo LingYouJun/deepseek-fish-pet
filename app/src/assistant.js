@@ -141,7 +141,15 @@ async function run(tool, arg) {
   }
 
   if (tool === 'screen_look') {
+    /* 分段计时：抓帧 / 视觉 / OCR 各花了多久。
+       "看屏幕要 6-7 秒太慢"这种问题，光看总耗时是没法优化的 ——
+       实测抓帧热态只要 22ms、视觉 API 约 1.7s，加起来远小于总耗时，
+       说明大头在别处。所以把每段都打出来，别猜。 */
+    const timing = {};
+    const tick = () => Date.now();
+    const tCap = tick();
     const cap = await captureScreen();
+    timing.captureMs = tick() - tCap;
     const cfg = config.load();
     let text = '';
     let usedVision = false;
@@ -150,7 +158,9 @@ async function run(tool, arg) {
     if (cfg.visionEnabled) {
       const q = (arg || '看看屏幕') + '\n\n【输出要求】先用一句中文说明你的判断；如果这一步需要操作屏幕，就在回答的最后单独输出一行：ACTION: 工具|参数（坐标基于 1280x720 截图，左上角 0,0；工具可选 click/rclick/dclick/move/drag/scroll/type/key，例如 ACTION: click|640,360）。如果不需要操作就不要写 ACTION 行。';
       try {
+        const tV = tick();
         text = await vision.describe(cfg, cap.dataUrl, q, 'low');
+        timing.visionMs = tick() - tV;
         usedVision = true;
         const m = text.match(/ACTION\s*[:：]\s*([a-z_]+)\s*\|\s*(.+)/i);
         if (m) {
@@ -161,17 +171,23 @@ async function run(tool, arg) {
         /* ⚠️ 这里以前是 `text = ''`，**把视觉失败完全吞掉**：key 过期 / 余额不足 /
          * 网络不通，全都表现成"降级成 OCR"，用户和模型都不知道出了什么事，
          * 还会一直重复调。现在把原因记下来、一并报回去（翻译过的可读版本由 vision.js 给）。 */
+        timing.visionMs = tick() - tV;
         visionErr = String((e && e.message) || e);
         text = '';
       }
     }
     if (!text) {
+      const tO = tick();
       const t = await ocr(cap.path);
+      timing.ocrMs = tick() - tO;
       text = t ? ('屏幕上识别到的文字：\n' + t) : '（未识别到文字）';
       if (visionErr) text += '\n\n⚠️ 视觉模型调用失败，已降级为 OCR：' + visionErr;
       else if (!cfg.visionEnabled) text += '\n\n（config.json 里 visionEnabled 是关的，所以没走视觉模型）';
     }
-    return { text: (usedVision ? '👁 视觉模型：\n' : '🖥 屏幕文字：\n') + text, image: cap.dataUrl, path: cap.path, action, visionErr };
+    return {
+      text: (usedVision ? '👁 视觉模型：\n' : '🖥 屏幕文字：\n') + text,
+      image: cap.dataUrl, path: cap.path, action, visionErr, timing,
+    };
   }
 
   // 这几个允许空参数（列根目录 / 停手 / 查状态），其它需要参数的工具才拦

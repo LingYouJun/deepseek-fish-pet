@@ -35,6 +35,16 @@ async function describe(cfg, imageDataUrl, question, detail) {
             { type: 'image_url', image_url: { url: imageDataUrl, detail: detail || 'low' } },
           ],
         }],
+        /* ⚠️ 必须显式声明 thinking —— 和 llm.js 一样。
+         * 起因：用户反馈"看屏幕 6-7 秒太慢"。分段计时后发现抓帧只要 22ms（热态）
+         * 而视觉调用要 6~8.5 秒，可模型只输出 19 个字。
+         * A/B 实测（同一个"找左下角开始按钮并给坐标"的问题）：
+         *   不带 thinking 参数 → 6080ms / 8526ms，usage.out=1100~1600，
+         *                        并且返回里带 reasoning_content 1966~2849 字 ← 全花在这
+         *   thinking 显式关闭   →  932ms /  650ms，usage.out=7，答案一样（甚至更准）
+         * 即 **6.5~13 倍提速，输出 token 降到 1/150**。
+         * 默认关闭；要她"深度思考"再把 config.visionThinking 设 true。 */
+        thinking: { type: (cfg && cfg.visionThinking) ? 'enabled' : 'disabled' },
       }),
       /* ⚠️ signal 必须放在 **fetch 的选项**里，不能写进 body 的 JSON。
          我重构这个文件时曾把它挪进 JSON.stringify 里面 —— 结果 AbortSignal.timeout()
