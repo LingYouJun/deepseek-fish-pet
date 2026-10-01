@@ -29,10 +29,12 @@
  *     Python 的 MFCC 全程 float64，若在这里降到 float32 会引入 ~1e-7 的
  *     相对噪声，白送误差；Float64Array 同样能被下标访问，dtw() 两种都吃。
  *     为了让调用方拿得到 Web Audio 原生精度，额外提供 framesF32。
- *  2. Python 的 MFCC/energy 有若干处是 float32 运算（read_wav 返回 float32、
- *     预加重 y = np.empty_like(x) 也是 float32、np.mean(float32) 用 float32
- *     累加器）。这里统一用 float64 算，实测差异 ~1e-6 dB / 1e-7 相对，
- *     对 2% 的判定标准是 4 个数量级的余量。
+ *  2. Python 的 read_wav() 最后把波形 astype(np.float32)（L111），预加重也用
+ *     float32 数组（y = np.empty_like(x)）。这里默认全程 float64。
+ *     实测（test-dtw.js --deep 第 11 节）：这带来的 MFCC 系数差 ~1.6e-5（绝对），
+ *     而 Python 自己把波形从 float32 换成 float64 就差 1.8e-5 —— 我的偏差比
+ *     参考实现自身的 dtype 噪声还小。同一输入、全 float64 时两边只差 6e-14。
+ *     想复刻那个 float32 存储就传 params.wavFloat32 = true。
  *  3. Mel 滤波器组用稀疏存储（只存非零权重），Python 用稠密矩阵。
  *     两者求和顺序里被跳过的都是 0.0，加 0 不改变浮点值，所以数值等价，
  *     只是省掉 ~26x 的乘法（26*257 -> 26*~10）。
@@ -81,6 +83,14 @@
     highpassMinSamples: 3,    //                          (L106: max(3, ...))
     rmsNorm: 0.1,             // RMS 归一化目标                  (L110: x * (0.1/rms))
     rmsFloor: 1e-12,          //                          (L109: if rms > 1e-12)
+    wavFloat32: false,        // Python 的 read_wav 最后 x.astype(np.float32)（L111），
+                              // 所以参考实现是拿 float32 波形去算 MFCC 的。默认 false =
+                              // 全程 float64。设 true 复刻 Python 的 float32 存储；注意它
+                              // **不会**让两边 MFCC 完全一致（仍差 ~1e-5）：numpy 的
+                              // np.convolve 与这里的前缀和在末位有别，落在 float32 舍入
+                              // 边界上的样本会差 1 ULP，而 log(mel+eps) 对低能量 Mel 通道
+                              // 会把这点扰动放大。实测结论见 test-dtw.js --deep 第 11 节：
+                              // 我的实现误差（同一输入、全 float64）只有 6e-14。
 
     /* ---- 倒谱归一化 ---- */
     cmn: 'mean',              // 'none' | 'mean'(=cmn, L300) | 'meanvar'(=cmvn, L305)
@@ -322,6 +332,11 @@
         var g = p.rmsNorm / rms;
         for (i = 0; i < n; i++) x[i] *= g;
       }
+    }
+    if (p.wavFloat32) {                     // 复刻 Python L111 的 astype(np.float32)
+      var x32 = new Float32Array(n);
+      for (i = 0; i < n; i++) x32[i] = x[i];
+      return x32;
     }
     return x;
   }
@@ -652,6 +667,34 @@
     return words;
   }
 
+  /* 词对象的字段名归一化。
+   * 接口约定是 [{w, fromMs, toMs}]，但本仓库下面两层给的是 **whisper 原生字段名**：
+   *   app/src/asr.js  groupTokens() -> { w, ps, from, to }
+   *   app/main.js     fillWordGaps() -> { w, from, to }
+   * 两者都是毫秒。如果这里只认 fromMs，那边传进来的就是 undefined，时长全变 NaN，
+   * 逐词分全成 NaN、maxS 变 NaN、判定恒为"没问题" —— 一个不会报错的静默失败。
+   * 所以这里同时接受 fromMs/toMs、from/to、offsets.from/offsets.to 三种写法。
+   * 词文本同时接受 w 和 text。*/
+  function normWords(list) {
+    var out = [];
+    list = list || [];
+    for (var i = 0; i < list.length; i++) {
+      var x = list[i] || {};
+      var off = x.offsets || {};
+      var f = (x.fromMs !== undefined && x.fromMs !== null) ? x.fromMs
+        : (x.from !== undefined && x.from !== null) ? x.from : off.from;
+      var t = (x.toMs !== undefined && x.toMs !== null) ? x.toMs
+        : (x.to !== undefined && x.to !== null) ? x.to : off.to;
+      f = Number(f); t = Number(t);
+      if (!isFinite(f)) f = 0;
+      if (!isFinite(t)) t = f;
+      if (t < f) t = f;
+      var txt = (x.w !== undefined && x.w !== null) ? x.w : x.text;
+      out.push({ w: txt === undefined || txt === null ? '' : String(txt), fromMs: f, toMs: t });
+    }
+    return out;
+  }
+
   /* realign_words_to_voiced()（Python L483-522）—— primary 映射：
    * whisper 的词**时长**比它的绝对偏移可靠得多（实测这份 ref.wav 里 token 时长
    * 之和 3130ms 恰好等于有声总时长，但偏移会漂 100-400ms，把 'I' 塞进停顿、
@@ -797,7 +840,7 @@
    * ========================================================================*/
   function wordScores(frameCost, refWords, params) {
     var p = mergeParams(params);
-    var words = refWords || [];
+    var words = normWords(refWords);      // 兼容 {fromMs,toMs} / {from,to} 两种字段名
     var nw = words.length;
     var nF = frameCost.length;
 
@@ -838,6 +881,15 @@
     var wc = wordCosts(frameCost, mapped.owner, nw);
     var S = leaveOneOutScores(wc.cost);
     var rk = ranksDescending(wc.cost);
+
+    /* 退化检测：如果**没有任何一个词**有非零时长，说明时间戳根本没传进来
+     * （字段名不对 / ASR 没给）。这种情况下 realign 会把词平均摊到有声帧上，
+     * 结果看着很正常，却是在错误的位置上打分 —— 实测会指认错词
+     * （把 12 个词等分后 case3 会在 "to" 上给出 S=5.91）。与其误伤，
+     * 不如明确标记出来让上层拒绝判定。*/
+    var nTimed = 0;
+    for (var q2 = 0; q2 < nw; q2++) if (words[q2].toMs > words[q2].fromMs) nTimed++;
+    var timingDegenerate = (nw > 0 && nTimed === 0);
 
     var list = [], maxS = -Infinity, maxIndex = -1;
     for (var k = 0; k < nw; k++) {
@@ -881,7 +933,9 @@
       targetS: targetIndex >= 0 ? S[targetIndex] : NaN,
       targetRank: targetIndex >= 0 ? rk.rank[targetIndex] : -1,
       wordMap: p.wordMap,
-      mappingFallback: fallback
+      mappingFallback: fallback,
+      timingDegenerate: timingDegenerate,
+      timedWords: nTimed
     };
   }
 
@@ -908,24 +962,25 @@
 
     var d = dtw(ref.frames, usr.frames, p);
 
-    var ws = wordScores(d.frameCost, refWords, {
-      /* 合并后的参数 + 参考侧上下文 */
-      sampleRate: p.sampleRate,
-      frameMs: p.frameMs, hopMs: p.hopMs, preprocess: false,
-      cmn: p.cmn, cmnStdFloor: p.cmnStdFloor, dropC0: p.dropC0,
-      dtwBand: p.dtwBand, bandAbsPad: p.bandAbsPad, bandFrac: p.bandFrac, bandMin: p.bandMin,
-      speechFloorDb: p.speechFloorDb, vadPercentile: p.vadPercentile,
-      energyEps: p.energyEps, edgePadMs: p.edgePadMs, minWordDurMs: p.minWordDurMs,
-      minWordFrames: p.minWordFrames, wordMap: p.wordMap, threshold: p.threshold,
-      targetWord: p.targetWord,
-      refCentresMs: ref.centresMs, voicedMask: vad.voiced, totalMs: ref.durationMs
-    });
+    /* 把**合并后的完整参数**原样传给 wordScores，再补上参考侧上下文。
+     * 不要在这里手写参数白名单：那样调用方传的任何自定义项（dtwBand、
+     * minWordFrames、wordMap、threshold...）都会被悄悄丢掉。*/
+    var wsParams = mergeParams(p);
+    wsParams.sampleRate = rRate;          // 参考侧采样率（缺 refCentresMs 时推导帧中心要用）
+    wsParams.refCentresMs = ref.centresMs;
+    wsParams.voicedMask = vad.voiced;
+    wsParams.totalMs = ref.durationMs;
+    var ws = wordScores(d.frameCost, refWords, wsParams);
 
     /* 判定：可行性实验的结论是"只 flag S > 2.0"（Python L891），
-     * 两个对照组（同人同文本 case1、只换音色 case2）都停在 1.3 以下。*/
-    var flagged = !!(ws.maxS === ws.maxS && ws.maxS > p.threshold);
+     * 两个对照组（同人同文本 case1、只换音色 case2）都停在 1.3 以下。
+     * 另外：时间戳退化时一律不 flag —— 宁可漏报也不要在错的位置上指认单词。*/
+    var flagged = !!(ws.maxS === ws.maxS && ws.maxS > p.threshold && !ws.timingDegenerate);
     var reason;
-    if (flagged) {
+    if (ws.timingDegenerate) {
+      reason = '参考句没有可用的词级时间戳（' + refWords.length + ' 个词的时长全是 0），' +
+               '逐词归因不可信，不作判定';
+    } else if (flagged) {
       reason = '词"' + ws.maxWord + '"的相对分 S=' + ws.maxS.toFixed(2) +
                ' 超过阈值 ' + p.threshold.toFixed(2) + '，判定该词读错';
     } else if (ws.maxS === ws.maxS) {
@@ -937,8 +992,9 @@
     var verdict = {
       flagged: flagged, word: ws.maxWord, S: ws.maxS, threshold: p.threshold,
       targetWord: ws.targetWord, targetS: ws.targetS, targetRank: ws.targetRank,
+      timingDegenerate: ws.timingDegenerate,
       reason: reason,
-      text: (flagged ? '读错' : '通过') + '：' + reason
+      text: (ws.timingDegenerate ? '未判定：' : (flagged ? '读错：' : '通过：')) + reason
     };
 
     return {
@@ -950,6 +1006,7 @@
       /* ---- 合并结果 ---- */
       verdict: verdict,
       flagged: flagged,
+      timingDegenerate: ws.timingDegenerate,
       dtw: d,
       wordScores: ws,
       words: ws.words,
@@ -1039,6 +1096,7 @@
     /* ---- 工具 ---- */
     decodeWav: decodeWav,
     groupWhisperWords: groupWhisperWords,
+    normWords: normWords,
     hz2mel: hz2mel,
     mel2hz: mel2hz,
     buildMelFilterbank: buildMelFilterbank,

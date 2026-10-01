@@ -685,7 +685,9 @@ function paintPron(box, res) {
   if (!res) { line.innerHTML = '<span class="rlab">像不像</span><span class="pdim">（没跑评测）</span>'; box.appendChild(line); return; }
   if (res.error) { line.innerHTML = '<span class="rlab">像不像</span><span class="pdim">评测失败：' + esc(res.error) + '</span>'; box.appendChild(line); return; }
   const th = Number(res.threshold);
-  const ws = (res.words || []).filter((x) => Number.isFinite(x.S));
+  /* 只认 reliable 的词：dtw.js 会给"帧数不足 minWordFrames"和"时间戳全缺(timingDegenerate)"
+     打上 reliable:false —— 那些位置的 S 是等分时间轴算出来的，不可信，宁可漏报也不能乱指认 */
+  const ws = (res.words || []).filter((x) => Number.isFinite(x.S) && x.reliable !== false);
   const sus = ws.filter((x) => x.S > th).sort((a, b) => b.S - a.S);
   line.innerHTML = '<span class="rlab">像不像</span>'
     + (sus.length

@@ -12,7 +12,39 @@
  *   ref.wav case1.wav case2.wav case3.wav case2_base.wav case2b.wav
  *   ref_words.json   whisper 的 token 级时间戳（用来核对词表和词序）
  *   results.json     Python 的完整结果（对照基准）
- *   js_ref/mfcc_ref.json + js_ref/D_case3.f64   额外的深挖对照（可选，见 --deep）
+ *   js_ref/*         --deep 用的深挖对照数据，生成方法（用带 numpy 的 Python，
+ *                    导入 dtw-feasibility.py 后 dump，不写进仓库）：
+ *
+ *     import importlib.util, json, os, wave, numpy as np
+ *     spec = importlib.util.spec_from_file_location("dtwf", "app/scripts/dtw-feasibility.py")
+ *     m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+ *     OUT = "<DATA>/js_ref"; os.makedirs(OUT, exist_ok=True)
+ *     def mfcc_f64(x, sr):  # 参考实现的"全 float64"路径：预加重/FFT/mel/DCT 都 float64
+ *         flen, hop = int(round(sr*.025)), int(round(sr*.010))
+ *         y = np.empty(x.shape, np.float64); y[0] = x[0]; y[1:] = x[1:] - 0.97*x[:-1]
+ *         nf = 1 + (len(y)-flen)//hop
+ *         idx = np.arange(flen)[None,:] + hop*np.arange(nf)[:,None]
+ *         sp = np.fft.rfft(y[idx]*np.hamming(flen)[None,:], n=512, axis=1)
+ *         p = sp.real**2 + sp.imag**2
+ *         return np.log(p @ m._FB.T + 1e-10) @ m._DCT.T
+ *     def cond_f64(p):      # read_wav 的 float64 阶段（不含最后的 astype(float32)）
+ *         with wave.open(p, "rb") as w: sr = w.getframerate(); raw = w.readframes(w.getnframes())
+ *         x = np.frombuffer(raw, "<i2").astype(np.float32)/32768.0
+ *         x = x.astype(np.float64); x -= x.mean()
+ *         ww = max(3, int(round(sr*0.050)))
+ *         x -= np.convolve(x, np.ones(ww)/ww, "same")
+ *         return x*(0.1/np.sqrt(np.mean(x*x))), sr
+ *     for tag in ("ref","case1","case2","case3"):
+ *         p = "<DATA>/%s.wav" % tag
+ *         x32, sr = m.read_wav(p)                     # 参考实现实际用的 float32 波形
+ *         x32.tofile(OUT + "/x_%s.f32" % tag)
+ *         cond_f64(p)[0].astype("<f8").tofile(OUT + "/cond64_%s.f64" % tag)
+ *         a = m.mfcc(x32, sr)[0]                      # 参考实现跑的那条路
+ *         b = mfcc_f64(x32.astype(np.float64), sr)    # 同一波形值、全程 float64
+ *         f64j[tag] = {"mfcc64": [[float(v) for v in r] for r in b],
+ *                      "dtype_sens": float(np.abs(a-b).max()), "cond64_max": float(np.abs(cond_f64(p)[0]).max())}
+ *     # 另需 mfcc_ref.json（mfcc/cmn/centres/energy_db/x_head + dtw_case3 + D_case3.f64，
+ *     # 由 dtw-feasibility.py 的 read_wav/mfcc/cmn/dtw 直接 dump）
  *
  * 用法：
  *   node test-dtw.js
@@ -99,10 +131,13 @@ function e2(x) { return Number.isFinite(x) ? x.toExponential(2) : '   n/a  '; }
 
 /* 检查结果收集：每一类都记录最大相对误差，最后统一判定 */
 const buckets = {};
+function bucketOf(bucket, tol) {
+  if (!buckets[bucket]) buckets[bucket] = { n: 0, maxRel: -1, worst: '', tol: tol, fails: [] };
+  return buckets[bucket];
+}
 function rec(bucket, name, py, js, tol) {
   const r = relErr(js, py);
-  if (!buckets[bucket]) buckets[bucket] = { n: 0, maxRel: -1, worst: '', tol: tol, fails: [] };
-  const b = buckets[bucket];
+  const b = bucketOf(bucket, tol);
   b.n++;
   /* 两边都是 NaN（例如 whisper 映射下某个词 0 帧 -> 没有 cost）算一致 */
   if (py !== py && js !== js) return NaN;
@@ -111,6 +146,17 @@ function rec(bucket, name, py, js, tol) {
   }
   if (Number.isFinite(r) && r > b.maxRel) { b.maxRel = r; b.worst = name; }
   return r;
+}
+/* 绝对差版本：有些量（波形幅度、MFCC 原始系数）本身会过零，相对误差没有意义 */
+function recAbs(bucket, name, py, js, tolAbs) {
+  const d = Math.abs(js - py);
+  const b = bucketOf(bucket, tolAbs);
+  b.n++;
+  if (tolAbs !== undefined && tolAbs !== null) {
+    if (!(d < tolAbs)) b.fails.push(name + ' |Δ|=' + d.toExponential(2) + ' >= ' + tolAbs.toExponential(2));
+  }
+  if (d > b.maxRel) { b.maxRel = d; b.worst = name; }
+  return d;
 }
 function hr(title) {
   console.log('');
@@ -509,58 +555,130 @@ console.log('  （首帧调用会多花一次滤波器组+FFT表的构建成本�
  *     数据由同一份 dtw-feasibility.py 导入后 dump 出来（见脚本头部说明）
  * ========================================================================*/
 if (DEEP) {
-  hr('11. 深挖对照（--deep）：MFCC 原始系数 / 调理后波形 / D 矩阵');
+  hr('11. 深挖对照（--deep）：把"我的误差"和"参考实现自身的 dtype 噪声"分开');
   const deepJson = path.join(DATA, 'js_ref', 'mfcc_ref.json');
-  if (!fs.existsSync(deepJson)) {
-    console.log('  找不到 ' + deepJson + ' ，跳过（先跑生成脚本）');
+  const f64Json = path.join(DATA, 'js_ref', 'mfcc_f64.json');
+  if (!fs.existsSync(deepJson) || !fs.existsSync(f64Json)) {
+    console.log('  找不到 ' + deepJson + ' / ' + f64Json + ' ，跳过（生成方法见本文件头部注释）');
   } else {
     const dj = readJson(deepJson);
-    console.log('  ' + pad('tag', 7) + padS('frames', 8) + padS('|Δx|max', 12) + padS('|Δmfcc|max', 12) +
-                padS('mfcc max relΔ', 15) + padS('|Δcmn|max', 12) + padS('|Δdb|max', 12) + padS('|Δcentre|max', 13));
+    const f64j = readJson(f64Json);
+    const binF32 = (p) => {
+      if (!fs.existsSync(p)) return null;
+      const b = fs.readFileSync(p);
+      return new Float32Array(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength));
+    };
+    const binF64 = (p) => {
+      if (!fs.existsSync(p)) return null;
+      const b = fs.readFileSync(p);
+      return new Float64Array(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength));
+    };
+
+    /* ---- 11a 波形调理：JS(float64) vs numpy(float64) ---- */
+    console.log('');
+    console.log('  11a. 波形调理（同一份 PCM，两边都走 float64）');
+    console.log('  ' + pad('tag', 7) + padS('样本数', 9) + padS('|Δx|max', 12) + padS('|Δx|max / max|x|', 18) + '   Python 端');
     for (const t of TAGS) {
-      const py = dj[t];
+      const mine = PetDTW.preprocess(wavs[t].samples, wavs[t].sampleRate, { sampleRate: wavs[t].sampleRate });
+      const pyC = binF64(path.join(DATA, 'js_ref', 'cond64_' + t + '.f64'));
+      const py32 = binF32(path.join(DATA, 'js_ref', 'x_' + t + '.f32'));
+      if (!pyC) { console.log('  ' + pad(t, 7) + ' 缺 cond64_' + t + '.f64'); continue; }
+      let ma = 0;
+      for (let i = 0; i < pyC.length; i++) ma = Math.max(ma, Math.abs(mine[i] - pyC[i]));
+      const scale = f64j[t].cond64_max || 1;
+      recAbs('deepCond', t + '.cond', 0, ma, 1e-12);
+      /* 顺带量一下 wavFloat32 波形和 Python x32 的 bit 差异（解释为什么它不能把差归零） */
+      let nDiff = 0, md = 0;
+      if (py32) {
+        const mine32 = PetDTW.preprocess(wavs[t].samples, wavs[t].sampleRate,
+          { sampleRate: wavs[t].sampleRate, wavFloat32: true });
+        for (let i = 0; i < py32.length; i++) if (mine32[i] !== py32[i]) { nDiff++; md = Math.max(md, Math.abs(mine32[i] - py32[i])); }
+      }
+      console.log('  ' + pad(t, 7) + padS(pyC.length, 9) + padS(ma.toExponential(2), 12) +
+        padS((ma / scale).toExponential(2), 18) +
+        '   wavFloat32 vs x32: ' + nDiff + ' 个样本差 1ULP(max ' + md.toExponential(1) + ')');
+    }
+    console.log('  -> 前缀和实现的高通 vs numpy 的 np.convolve，差 ~1e-14（0.8 幅度信号上），可以忽略');
+
+    /* ---- 11b MFCC 三级对照 ---- */
+    console.log('');
+    console.log('  11b. MFCC 系数最大绝对差（三种口径）');
+    const rows = [];
+    for (const t of TAGS) {
+      const py = dj[t], pyf = f64j[t];
       const js = feats[t];
-      let dx = 0;
-      for (let i = 0; i < py.x_head.length; i++) dx = Math.max(dx, Math.abs(js.signal[i] - py.x_head[i]));
-      const nx = js.nFrames * P.ncep;
-      let dm = 0, dmr = 0, dc = 0, dd = 0, dcen = 0;
-      for (let i = 0; i < py.mfcc.length; i++) {
-        for (let k = 0; k < P.ncep; k++) {
-          const a = js.rawFrames[i][k], b = py.mfcc[i][k];
-          dm = Math.max(dm, Math.abs(a - b));
-          const r = relErr(a, b); if (Number.isFinite(r)) dmr = Math.max(dmr, r);
+      const js32 = PetDTW.mfcc(wavs[t].samples, wavs[t].sampleRate,
+        { sampleRate: wavs[t].sampleRate, wavFloat32: true });
+      /* 口径 1：给两边完全相同的输入（Python 的 float32 取值按 float64 参与运算），
+       *         Python 侧也走全 float64 —— 这一项才是"我的实现误差" */
+      const py32 = binF32(path.join(DATA, 'js_ref', 'x_' + t + '.f32'));
+      let same = 0;
+      if (py32) {
+        const xin = new Float64Array(py32.length);
+        for (let i = 0; i < py32.length; i++) xin[i] = py32[i];
+        const jsSame = PetDTW.mfcc(xin, wavs[t].sampleRate, { sampleRate: wavs[t].sampleRate, preprocess: false });
+        for (let i = 0; i < pyf.mfcc64.length; i++) {
+          for (let k = 0; k < P.ncep; k++) {
+            same = Math.max(same, Math.abs(jsSame.rawFrames[i][k] - pyf.mfcc64[i][k]));
+          }
         }
       }
-      for (let i = 0; i < py.cmn.length; i++) {
-        for (let k = 0; k < P.ncep; k++) dc = Math.max(dc, Math.abs(js.frames[i][k] - py.cmn[i][k]));
+      let dDef = 0, d32 = 0;
+      for (let i = 0; i < py.mfcc.length; i++) {
+        for (let k = 0; k < P.ncep; k++) {
+          dDef = Math.max(dDef, Math.abs(js.rawFrames[i][k] - py.mfcc[i][k]));
+          d32 = Math.max(d32, Math.abs(js32.rawFrames[i][k] - py.mfcc[i][k]));
+        }
       }
-      for (let i = 0; i < py.energy_db.length; i++) dd = Math.max(dd, Math.abs(js.energyDb[i] - py.energy_db[i]));
-      for (let i = 0; i < py.centres.length; i++) dcen = Math.max(dcen, Math.abs(js.centresMs[i] - py.centres[i]));
-      rec('deepMfcc', t + '.mfcc', py.mfcc[0][1], js.rawFrames[0][1], null);
-      buckets.deepMfcc.n += py.mfcc.length * P.ncep - 1;
-      if (dmr > buckets.deepMfcc.maxRel) { buckets.deepMfcc.maxRel = dmr; buckets.deepMfcc.worst = t + '.mfcc'; }
-      console.log('  ' + pad(t, 7) + padS(py.mfcc.length, 8) + padS(dx.toExponential(2), 12) +
-        padS(dm.toExponential(2), 12) + padS(e2(dmr), 15) + padS(dc.toExponential(2), 12) +
-        padS(dd.toExponential(2), 12) + padS(dcen.toExponential(2), 13));
+      rows.push({ t: t, same: same, dDef: dDef, d32: d32, sens: pyf.dtype_sens, n: py.mfcc.length * P.ncep });
+      recAbs('deepMfccSame', t + '.mfcc(同输入/全float64)', 0, same, 1e-9);
+      /* 逐文件只做"粗差"护栏（4x）；真正的判据放在表格后面的统计口径上。
+       * 理由：口径 2 和口径 4 都是"float32 存储"这同一个原因造成的一次随机抽样——
+       * 究竟哪一帧的低能量 Mel 通道把扰动放大，是混沌的，所以逐文件比值在 0.5~2 之间
+       * 波动属正常，拿单个文件比单个文件会误判。*/
+      recAbs('deepMfccGross', t + '.mfcc(默认float64)', 0, dDef, 4 * pyf.dtype_sens);
+      recAbs('deepMfccGross', t + '.mfcc(wavFloat32)', 0, d32, 4 * pyf.dtype_sens);
+      buckets.deepMfccSame.n += py.mfcc.length * P.ncep - 1;
     }
-    console.log('  （|Δx| 是"Python 调理后的 float32 波形 vs JS 调理后的 float64 波形"的前 200 个采样）');
+    console.log('  ' + pad('口径', 46) + TAGS.map((t) => padS(t, 12)).join(''));
+    const rowLine = (label, key) => console.log('  ' + pad(label, 46) +
+      rows.map((r) => padS(r[key].toExponential(2), 12)).join(''));
+    rowLine('1) 同一输入、两边全 float64  =>  我的实现误差', 'same');
+    rowLine('2) JS 默认(float64 波形) vs Python 实际(float32)', 'dDef');
+    rowLine('3) JS wavFloat32 复刻    vs Python 实际(float32)', 'd32');
+    rowLine('4) 参考实现自身 float32<->float64 敏感度', 'sens');
+    console.log('  ' + pad('5) 逐文件比值 (2)/(4)', 46) +
+      rows.map((r) => padS((r.dDef / r.sens).toFixed(2) + 'x', 12)).join(''));
+    const maxDef = Math.max.apply(null, rows.map((r) => r.dDef));
+    const max32 = Math.max.apply(null, rows.map((r) => r.d32));
+    const maxSens = Math.max.apply(null, rows.map((r) => r.sens));
+    const meanDef = rows.reduce((a, r) => a + r.dDef, 0) / rows.length;
+    const meanSens = rows.reduce((a, r) => a + r.sens, 0) / rows.length;
+    console.log('  ' + pad('6) 统计口径  max(我的)/max(参考) / mean(我的)/mean(参考)', 46) +
+      '  ' + (maxDef / maxSens).toFixed(2) + 'x  /  ' + (meanDef / meanSens).toFixed(2) + 'x');
+    recAbs('deepMfccWithin', 'max(JS默认)/max(参考dtype噪声)', 0, maxDef, 1.5 * maxSens);
+    recAbs('deepMfccWithin', 'mean(JS默认)/mean(参考dtype噪声)', 0, meanDef, 1.5 * meanSens);
+    recAbs('deepMfccWithin', 'max(JS wavFloat32)/max(参考dtype噪声)', 0, max32, 1.5 * maxSens);
+    buckets.deepMfccWithin.n = rows.length * P.ncep * 2;
+    console.log('  -> 口径 1 = 6e-14：手写的 FFT / Mel 三角滤波 / DCT-II 与 numpy 等价；');
+    console.log('     口径 2/3 ≈ 口径 4：剩下的 ~1e-5 完全来自参考实现的 float32 波形存储与');
+    console.log('     float32 预加重（log(mel+eps) 在低能量 Mel 通道上放大了这点扰动），');
+    console.log('     我的实现并不比"参考实现换个 dtype"离参考更远。');
 
-    /* D 矩阵：ref x case3 全部格点（496 x 492 = 244032 个） */
+    /* ---- 11c D 矩阵：ref x case3 全部格点 ---- */
     const dbin = path.join(DATA, 'js_ref', 'D_case3.f64');
     if (fs.existsSync(dbin) && dj.dtw_case3) {
       const M = dj.dtw_case3.M, N = dj.dtw_case3.N;
-      const buf = fs.readFileSync(dbin);
-      const pyD = new Float64Array(buf.buffer, buf.byteOffset, buf.byteLength / 8);
+      const pyD = binF64(dbin);
       const A = feats.ref.frames, B = feats.case3.frames;
       let ma = 0, mr = 0, worst = '';
       for (let i = 0; i < M; i++) {
         const ai = A[i];
+        let ra = 0; for (let k = 0; k < P.ncep; k++) ra += ai[k] * ai[k];
         for (let j = 0; j < N; j++) {
           const bj = B[j];
-          let dot = 0;
-          for (let k = 0; k < P.ncep; k++) dot += ai[k] * bj[k];
-          let ra = 0, rb = 0;
-          for (let k = 0; k < P.ncep; k++) { ra += ai[k] * ai[k]; rb += bj[k] * bj[k]; }
+          let dot = 0, rb = 0;
+          for (let k = 0; k < P.ncep; k++) { dot += ai[k] * bj[k]; rb += bj[k] * bj[k]; }
           let d2 = ra + rb - 2 * dot; if (d2 < 0) d2 = 0;
           const d = Math.sqrt(d2);
           const b = pyD[i * N + j];
@@ -569,11 +687,14 @@ if (DEEP) {
           const r = relErr(d, b); if (Number.isFinite(r) && r > mr) mr = r;
         }
       }
-      console.log('  D 矩阵 ' + M + 'x' + N + ' = ' + (M * N) + ' 格点:  |Δ|max=' + ma.toExponential(3) +
-                  '  最大相对Δ=' + mr.toExponential(3) + '  @(' + worst + ')');
-      console.log('  -> 单格点相对误差 1e-15 量级说明 DTW 的局部代价和 Python 的展开式逐格一致；');
-      console.log('     剩下那点差异全部来自 FFT/DCT 的舍入，不是算法差异。');
-      buckets.localDist = { n: M * N, maxRel: mr, worst: 'D[' + worst + ']', tol: null, fails: [] };
+      console.log('');
+      console.log('  11c. DTW 局部代价 D 矩阵 ' + M + 'x' + N + ' = ' + (M * N) + ' 格点');
+      console.log('       |Δ|max=' + ma.toExponential(3) + '   最大相对Δ=' + mr.toExponential(3) + '   @(' + worst + ')');
+      console.log('       （和 11b 口径 2 同数量级 => 误差全部继承自 MFCC 特征，');
+      console.log('         DTW 的带宽判据 / 三个转移 / 平局取 first-min / 回溯 / frame_cost 求平均');
+      console.log('         与 Python 逐格一致）');
+      recAbs('localDist', 'D[case3]', 0, ma, 1e-4);
+      buckets.localDist.n = M * N - 1;
     } else {
       console.log('  没有 D_case3.f64 / dtw_case3，跳过 D 矩阵对照');
     }
@@ -581,16 +702,53 @@ if (DEEP) {
 }
 
 /* ==========================================================================
- * 12. 总判定
+ * 12. 接线契约：词对象字段名 / 时间戳缺失时的退化保护
+ *     （本仓库 asr.js 的 groupTokens() 和 main.js 的 fillWordGaps() 给的是
+ *      {w, ps, from, to}，而接口约定是 {w, fromMs, toMs} —— 必须都能吃，
+ *      否则逐词归因会在错误的位置上打分。）
  * ========================================================================*/
-hr('12. 总判定');
+hr('12. 接线契约：词对象字段名容错 + 时间戳缺失保护');
+{
+  const asrShape = grouped.map((x) => ({ w: x.w, ps: [], from: x.fromMs, to: x.toMs }));
+  const noTime = grouped.map((x) => ({ w: x.w }));
+  const rCanon = jsRes.case3.ws;                       // 第 5 节已经算过（规范字段）
+  const sc3 = PetDTW.score(wavs.case3.samples, wavs.case3.sampleRate, wavs.ref.samples,
+    wavs.ref.sampleRate, asrShape, {});
+  let same = true;
+  for (let k = 0; k < refWords.length; k++) {
+    if (sc3.words[k].S !== rCanon.S[k] || sc3.words[k].frames !== rCanon.frameCounts[k]) same = false;
+  }
+  console.log('  {w,fromMs,toMs} vs {w,ps,from,to}: normDist 相同=' + (sc3.d === jsRes.case3.d.normDist) +
+              '  逐词 S/frames 完全相同=' + same);
+  console.log('    maxS=' + sc3.maxS.toFixed(4) + ' (规范字段 ' + rCanon.maxS.toFixed(4) + ')  flagged=' + sc3.flagged);
+  if (!same) buckets.contract.fails.push('{from,to} 与 {fromMs,toMs} 结果不一致');
+
+  const scNo = PetDTW.score(wavs.case3.samples, wavs.case3.sampleRate, wavs.ref.samples,
+    wavs.ref.sampleRate, noTime, {});
+  console.log('  完全不给时间戳: maxS=' + scNo.maxS.toFixed(4) + '  timingDegenerate=' + scNo.timingDegenerate +
+              '  flagged=' + scNo.flagged + '   （maxS 是通过"等分时间轴"算出来的，不可信，所以拒绝判定）');
+  console.log('    判定文本: ' + scNo['判定'].text);
+  if (scNo.flagged) buckets.contract.fails.push('时间戳缺失时仍然 flag 了');
+  if (!scNo.timingDegenerate) buckets.contract.fails.push('时间戳缺失没有被标记 timingDegenerate');
+  recAbs('contract', 'asr 字段名容错', 0, same ? 0 : 1, 1e-12);
+  recAbs('contract', '时间戳缺失保护', 0, scNo.flagged ? 1 : 0, 1e-12);
+}
+
+/* ==========================================================================
+ * 13. 总判定
+ * ========================================================================*/
+hr('13. 总判定');
 const CRITERIA = [
   ['normDist 相对误差 < 2%', ['global', 'ablation', 'align'], 0.02],
   ['逐词 S 相对误差 < 5%', ['S', 'Smax', 'ablationS'], 0.05],
   ['逐词 cost 相对误差 < 5%', ['wordCost', 'ablationWc', 'ablationWcTargetCost', 'alignWc', 'frameCostN'], 0.05],
   ['词->帧映射逐帧一致', ['mapping'], 1e-12],
-  ['深挖：MFCC 逐系数', ['deepMfcc'], null],
-  ['深挖：DTW 局部代价 D 逐格点', ['localDist'], null]
+  ['接线契约（字段名容错 / 缺失保护）', ['contract'], 1e-12],
+  ['深挖：波形调理 |Δx| < 1e-12（绝对）', ['deepCond'], 1e-12],
+  ['深挖：同一输入下 MFCC 实现误差 < 1e-9（绝对）', ['deepMfccSame'], 1e-9],
+  ['深挖：MFCC 偏差 ≤ 参考自身 dtype 噪声的 1.5 倍（统计）', ['deepMfccWithin'], 1.5],
+  ['深挖：逐文件 MFCC 偏差 < 4 倍 dtype 噪声（护栏）', ['deepMfccGross'], 4],
+  ['深挖：DTW 局部代价 D 逐格点 |Δ| < 1e-4（绝对）', ['localDist'], 1e-4]
 ];
 let allPass = true;
 console.log('  ' + pad('检查项', 34) + padS('样本数', 9) + padS('最大相对误差', 14) + padS('最差项', 30) + '   结论');

@@ -35,9 +35,12 @@ const MEMORY_DEFAULTS = {
 /* 发音评测（"像不像"）参数 —— **全部可被 config.json 覆盖，一个都不写死**
  * 依据：发音评测可行性-20261001.md 的实验结论
  *   · 只能用"逐词相对分 S = 该词代价 / 其它词均值"，**绝对分不可用**（换音色 4.014 > 换词 3.033）
- *   · 真错词 S≈4.52 排第1；只换音色时最大 S≈1.24 且平坦 → 阈值取 2.0
  *   · 前端消融里 CMN(丢掉第0维) 略优，所以默认 dropC0=true
- *   · 阈值 2.0 只来自单句 12 词、且音色差异是模拟的 → 之后必然要按真人样本调，故全部外置 */
+ *   · 阈值 2.0 只来自单句 12 词、且音色差异是模拟的 → 之后必然要按真人样本调，故全部外置
+ * 本组默认值下复算的期望结果（12 词基准句 "…practice speaking English…"）：
+ *   真错词 practice → S≈4.72 排第 1；只换音色 → 最大 S≈1.19 平坦；阈值 2.0 可分离
+ * ⚠️ 改 speechFloorDb 会改变"有声帧"集合，从而改变逐词归因与所有 S 值
+ *   （实测 -45 与 -35 的结论一致，但只有 -35 逐帧对齐过 Python 参考实现，故默认取 -35） */
 const PRON_DEFAULTS = {
   enabled: true,        // 总开关
   threshold: 2.0,       // S 大于此值判为"可疑的词"
@@ -51,9 +54,10 @@ const PRON_DEFAULTS = {
   fmax: 8000,           // Mel 上限 Hz（16kHz 采样 → 奈奎斯特）
   cmn: 'mean',          // 倒谱归一化：none | mean | meanvar
   dropC0: true,         // 丢掉第 0 维倒谱（= 不把音量当特征，实验里略优）
-  dtwBand: null,        // DTW 带宽约束：null=不限；数字=带宽占对角线比例
-  minWordFrames: 3,     // 词至少几帧才参与打分（短词方差大，如 "I"）
-  speechFloorDb: -45,   // 低于此能量当静音
+  dtwBand: null,        // DTW 带宽约束：null=不限制；数字=**绝对格数**（不是比例！）
+                        //   自动值 = max(|M-N|+15, 0.25*max(M,N), 40) 格
+  minWordFrames: 3,     // 词至少几帧才 reliable（不足的词不参与指认，见 dtw.js 的 reliable）
+  speechFloorDb: -35,   // 低于此能量当静音（对齐已验证过的参考实现）
   refMaxChars: 200,     // 参考句超过这个长度就不处理
 };
 
