@@ -157,8 +157,10 @@ async function run(tool, arg) {
     let action = null;
     if (cfg.visionEnabled) {
       const q = (arg || '看看屏幕') + '\n\n【输出要求】先用一句中文说明你的判断；如果这一步需要操作屏幕，就在回答的最后单独输出一行：ACTION: 工具|参数（坐标基于 1280x720 截图，左上角 0,0；工具可选 click/rclick/dclick/move/drag/scroll/type/key，例如 ACTION: click|640,360）。如果不需要操作就不要写 ACTION 行。';
+      /* tV 必须声明在 try **外面**：catch 里也要用它算耗时，
+         写在 try 内的话失败路径会 ReferenceError（实测被 §6 那条测试抓住）。 */
+      let tV = tick();
       try {
-        const tV = tick();
         text = await vision.describe(cfg, cap.dataUrl, q, 'low');
         timing.visionMs = tick() - tV;
         usedVision = true;
