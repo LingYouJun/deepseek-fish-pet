@@ -58,10 +58,18 @@ function notePetMove(screenX, screenY) {
   start();
 }
 
-/* 模型坐标（1280x720）→ 屏幕 DIP 坐标，供 notePetMove 使用 */
+/* 模型坐标（抓帧尺寸，默认 1920x1080）→ 屏幕 DIP 坐标，供 notePetMove 使用 */
 function fromModel(x, y) {
   const d = screen.getPrimaryDisplay();
-  const W = 1280, H = 720;
+  /* 和 input.js / 抓帧保持同一个坐标空间（默认 1920x1080，可配）。
+     这里直接读 config 而不 require('./input')：input.js 反过来依赖本模块做落点登记，
+     互相 require 会成环。 */
+  let W = 1920, H = 1080;
+  try {
+    const c = require('./config').load();
+    if (Number(c.screenCaptureWidth) > 0) W = Number(c.screenCaptureWidth);
+    if (Number(c.screenCaptureHeight) > 0) H = Number(c.screenCaptureHeight);
+  } catch {}
   return { x: (Number(x) || 0) / W * d.size.width, y: (Number(y) || 0) / H * d.size.height };
 }
 function notePetMoveModel(x, y) { const p = fromModel(x, y); return notePetMove(p.x, p.y); }

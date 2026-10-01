@@ -1,12 +1,30 @@
 // OS 级键鼠输入：spawn 一个极小的原生 input.exe（user32 的 SendInput/mouse_event）。
-// 坐标约定：模型看到的是 1280x720 的屏幕截图，给的坐标也在这个空间里；
+// 坐标约定：模型看到的是抓帧尺寸（默认 1920x1080，可配）的屏幕截图，给的坐标也在这个空间里；
 // 这里归一化成 0..1 再交给 exe，避免 DPI/分辨率差异。
 const { spawnSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const userinput = require('./userinput');
 
-const W = 1280, H = 720;   // 屏幕流抓帧尺寸，模型坐标空间
+/* ⚠️ 坐标空间**必须和抓帧尺寸一致**（模型报的 x,y 基于它）。
+ * 以前写死 1280x720，而抓帧也写死 1280x720，所以恰好对上。
+ * 现在抓帧尺寸可配（config.screenCaptureWidth/Height，默认 1920x1080 以看清细节），
+ * 这里就必须跟着读 —— 否则模型按 1920 报坐标、这里按 1280 归一化，
+ * 点击会整体偏到左下角（约 1.5 倍误差）。
+ * 带 2 秒缓存：norm() 是每次点击都要走的热路径，不能每次读文件。 */
+let _space = null, _spaceAt = 0;
+function space() {
+  if (_space && Date.now() - _spaceAt < 2000) return _space;
+  let w = 1920, h = 1080;
+  try {
+    const c = require('./config').load();
+    if (Number(c.screenCaptureWidth) > 0) w = Number(c.screenCaptureWidth);
+    if (Number(c.screenCaptureHeight) > 0) h = Number(c.screenCaptureHeight);
+  } catch {}
+  _space = { w, h }; _spaceAt = Date.now();
+  return _space;
+}
+const W = 1280, H = 720;   // 仅作历史默认值保留（下面 norm 已改用 space()）
 
 function exePath() {
   const dev = path.join(__dirname, '..', 'vendor', 'input', 'input.exe');
@@ -17,8 +35,9 @@ function exePath() {
 }
 
 function norm(x, y) {
-  const nx = Math.max(0, Math.min(W, Number(x) || 0)) / W;
-  const ny = Math.max(0, Math.min(H, Number(y) || 0)) / H;
+  const s = space();
+  const nx = Math.max(0, Math.min(s.w, Number(x) || 0)) / s.w;
+  const ny = Math.max(0, Math.min(s.h, Number(y) || 0)) / s.h;
   return [nx.toFixed(4), ny.toFixed(4)];
 }
 
@@ -78,4 +97,4 @@ function releaseAll() {
   try { return run('releaseall', []); } catch { return false; }
 }
 
-module.exports = { click, rclick, dclick, move, drag, scroll, type, key, W, H, exePath, norm, releaseAll, validateKey, KEY_NAMES };
+module.exports = { click, rclick, dclick, move, drag, scroll, type, key, W, H, exePath, norm, releaseAll, validateKey, KEY_NAMES, space };

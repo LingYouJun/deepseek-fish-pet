@@ -1,10 +1,19 @@
 /* 隐藏窗口里的屏幕捕获页：主进程用 executeJavaScript 驱动它
- *   __startStream(sourceId) -> 拉桌面视频流，等第一帧可画
- *   __grabFrame()           -> 把当前帧画进 canvas 返回 jpeg dataURL
- */
+ *   __startStream(sourceId, w, h) -> 拉桌面视频流，等第一帧可画
+ *   __grabFrame()                 -> 把当前帧画进 canvas 返回 jpeg dataURL
+ *
+ * ⚠️ 分辨率由主进程传进来（config.screenCaptureWidth/Height），**不要在这里写死**。
+ *    原来写死 1280x720，用户反馈"分辨率太低、桌宠分辨不了了"：
+ *    1920 的屏幕压到 1280 再被视觉 API 的 detail:low 压一次，小字图标全糊。
+ *    注意：抓帧尺寸同时是**坐标空间**（模型报的 x,y 就基于这个尺寸），
+ *    所以改尺寸必须让 input.norm / 提示词一起跟着改，否则点击会错位。 */
 let stream = null, video = null, canvas = null, ctx = null;
+let CAP_W = 1920, CAP_H = 1080, JPEG_Q = 0.92;
 
-window.__startStream = async (sourceId) => {
+window.__startStream = async (sourceId, w, h, q) => {
+  if (w > 0) CAP_W = Math.round(w);
+  if (h > 0) CAP_H = Math.round(h);
+  if (q > 0) JPEG_Q = Math.min(1, Math.max(0.3, Number(q)));
   if (stream && ctx) return { ok: true, w: canvas.width, h: canvas.height };
   const constraints = {
     audio: false,
@@ -12,7 +21,7 @@ window.__startStream = async (sourceId) => {
       mandatory: {
         chromeMediaSource: 'desktop',
         chromeMediaSourceId: sourceId,
-        maxWidth: 1920, maxHeight: 1080, maxFrameRate: 30,
+        maxWidth: 3840, maxHeight: 2160, maxFrameRate: 30,
       },
     },
   };
@@ -25,9 +34,8 @@ window.__startStream = async (sourceId) => {
   // 等视频真正有可画的帧（readyState >= HAVE_CURRENT_DATA）
   for (let i = 0; i < 40 && video.readyState < 2; i++) await new Promise((r) => setTimeout(r, 50));
   canvas = document.createElement('canvas');
-  // 缩到 720p：够看够 OCR，JPEG 编码快一截，抓帧更省
-  canvas.width = 1280;
-  canvas.height = 720;
+  canvas.width = CAP_W;
+  canvas.height = CAP_H;
   ctx = canvas.getContext('2d');
   return { ok: true, w: canvas.width, h: canvas.height };
 };
@@ -59,6 +67,6 @@ function frameSig() {
 
 window.__grabFrame = () => {
   if (!ctx || !video) return null;
-  ctx.drawImage(video, 0, 0, 1280, 720);
-  return { dataUrl: canvas.toDataURL('image/jpeg', 0.75), width: 1280, height: 720, sig: frameSig() };
+  ctx.drawImage(video, 0, 0, CAP_W, CAP_H);
+  return { dataUrl: canvas.toDataURL('image/jpeg', JPEG_Q), width: CAP_W, height: CAP_H, sig: frameSig() };
 };

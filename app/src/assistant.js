@@ -64,11 +64,12 @@ async function captureScreenFallback() {
      而回退路径原来返回的是物理分辨率（1920x1080 / 2560x1440）→ 模型按图上的像素报坐标
      会被 norm() 静默钳到屏幕右下角，点错位置还回"✅ 已点击"。
      这里直接缩放到 1280x720，让两条路径的坐标空间完全一致。 */
-  const png = src.thumbnail.resize({ width: 1280, height: 720 }).toPNG();
+  const png = src.thumbnail.resize({ width: require('./input').space().w, height: require('./input').space().h }).toPNG();
 
   const p = path.join(shotsDir(), 'screen-' + Date.now() + '.png');
   fs.writeFileSync(p, png);
-  return { path: p, width: 1280, height: 720, dataUrl: 'data:image/png;base64,' + png.toString('base64') };
+  const _s2 = require('./input').space();
+  return { path: p, width: _s2.w, height: _s2.h, dataUrl: 'data:image/png;base64,' + png.toString('base64') };
 }
 
 /* Windows 自带 OCR（离线，支持中英文）。失败返回空串，不影响截图展示。
@@ -156,12 +157,13 @@ async function run(tool, arg) {
     let visionErr = '';
     let action = null;
     if (cfg.visionEnabled) {
-      const q = (arg || '看看屏幕') + '\n\n【输出要求】先用一句中文说明你的判断；如果这一步需要操作屏幕，就在回答的最后单独输出一行：ACTION: 工具|参数（坐标基于 1280x720 截图，左上角 0,0；工具可选 click/rclick/dclick/move/drag/scroll/type/key，例如 ACTION: click|640,360）。如果不需要操作就不要写 ACTION 行。';
+      const _sp = require('./input').space(); const CAPW = _sp.w, CAPH = _sp.h; const CAPEX = Math.round(_sp.w / 2), CAPEY = Math.round(_sp.h / 2);
+      const q = (arg || '看看屏幕') + '\n\n【输出要求】先用一句中文说明你的判断；如果这一步需要操作屏幕，就在回答的最后单独输出一行：ACTION: 工具|参数（坐标基于 ${CAPW}x${CAPH} 截图，左上角 0,0；工具可选 click/rclick/dclick/move/drag/scroll/type/key，例如 ACTION: click|${CAPEX},${CAPEY}）。如果不需要操作就不要写 ACTION 行。';
       /* tV 必须声明在 try **外面**：catch 里也要用它算耗时，
          写在 try 内的话失败路径会 ReferenceError（实测被 §6 那条测试抓住）。 */
       let tV = tick();
       try {
-        text = await vision.describe(cfg, cap.dataUrl, q, 'low');
+        text = await vision.describe(cfg, cap.dataUrl, q, cfg.visionDetail || 'high');
         timing.visionMs = tick() - tV;
         usedVision = true;
         const m = text.match(/ACTION\s*[:：]\s*([a-z_]+)\s*\|\s*(.+)/i);
@@ -355,7 +357,7 @@ async function run(tool, arg) {
       + '\n（**不需要再调 game_start**：现在只要用正常格式跟主人说一声你已经上手了、想停就说「停」。用户说停的时候再调 game_stop。）';
   }
 
-  /* ---------------- OS 级键鼠（坐标是 1280x720 截图空间） ---------------- */
+  /* ---------------- OS 级键鼠（坐标 = 抓帧空间，见 input.space()） ---------------- */
   const parseXY = (s) => {
     const m = String(s || '').trim().match(/^\s*(-?\d+(?:\.\d+)?)\s*[,，]\s*(-?\d+(?:\.\d+)?)\s*$/);
     if (!m) throw new Error('坐标格式应为 x,y');

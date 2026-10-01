@@ -19,7 +19,7 @@ const userinput = require('./userinput');   // 主人一动鼠标就让位（见
 const PROTOCOL = '\n\n【协议】每次观察后：'
   + '\n1) 先用一句中文说明：现在是什么局面（主界面/菜单/战斗/加载中/结算/弹窗…）、你的判断。'
   + '\n2) 最后单独一行，二选一：'
-  + '\n   ACTION: 工具|参数     —— 坐标基于 1280x720 截图，左上角 0,0，取你要点的元素中心'
+  + '\n   ACTION: 工具|参数     —— 坐标基于 ' + (() => { try { const s = require('./input').space(); return s.w + 'x' + s.h; } catch { return '1920x1080'; } })() + ' 截图，左上角 0,0，取你要点的元素中心'
   + '\n   DONE                  —— 目标已达成，或当前确实没有任何可做的操作（就写 DONE，别写成 ACTION: DONE）'
   + '\n可用工具：click / dclick / rclick / drag / scroll / type / key / move。'
   + '\n注意：一次只做一个动作；看不清就先点开看得清的地方，别乱点。';

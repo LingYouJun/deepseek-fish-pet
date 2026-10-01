@@ -92,6 +92,15 @@ const DEFAULTS = {
      答案一样（甚至更准：给的开始按钮坐标更贴近真实位置）。
      所以默认 false；真要她"深度思考"再看这里。 */
   visionThinking: false,
+  /* 「看屏幕」的分辨率 —— 之前是硬编码 1280x720 + JPEG 0.75 + detail:'low'，
+     用户反馈"分辨率太低、桌宠分辨不了了"：等于让她用约 512 级别的眼睛看 1920 的屏幕，
+     小字/图标/按钮细节全看不清。
+     现在：抓帧用屏幕原生分辨率（1920x1080），JPEG 提到 0.92，视觉用 detail:'high'。
+     想省流量/token 就往下调（比如 1280x720 + low）。坐标空间跟着这两个值走，改它们不会点错位置。 */
+  screenCaptureWidth: 1920,
+  screenCaptureHeight: 1080,
+  screenJpegQuality: 0.92,
+  visionDetail: 'high',           // low | high —— high 才能看清小字和图标细节
   /* 多步任务的步数预算（由 IQ 在 base~max 之间插值，见 stats.stepBudget）。
      原来是写死的 3/4/6/8/10 档位，实测太低 —— IQ 54 只有 6 步，
      "写文件→跑脚本→看结果→改一下"这种任务根本做不完，她只能中途报没做完。 */

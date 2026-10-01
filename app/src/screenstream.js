@@ -71,7 +71,16 @@ async function init() {
       const primary = screen.getPrimaryDisplay();
       const src = sources.find((s) => s.display_id === String(primary.id)) || sources[0];
       if (!src) throw new Error('no screen source');
-      await w.webContents.executeJavaScript(`window.__startStream(${JSON.stringify(src.id)})`);
+      /* 抓帧尺寸 = 坐标空间，由 config 决定（默认屏幕原生 1920x1080）。
+         改这里必须同时改 input.norm / 提示词里的坐标说明，否则点击错位。 */
+      let cw = 1920, ch = 1080, cq = 0.92;
+      try {
+        const c = require('./config').load();
+        if (Number(c.screenCaptureWidth) > 0) cw = Number(c.screenCaptureWidth);
+        if (Number(c.screenCaptureHeight) > 0) ch = Number(c.screenCaptureHeight);
+        if (Number(c.screenJpegQuality) > 0) cq = Number(c.screenJpegQuality);
+      } catch {}
+      await w.webContents.executeJavaScript(`window.__startStream(${JSON.stringify(src.id)}, ${cw}, ${ch}, ${cq})`);
       ready = true;
       failed = false;
     } catch (e) {
