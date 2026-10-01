@@ -124,6 +124,23 @@ function buildSystemPrompt(cfg) {
   }
   const memCtx = memory.buildContext();
   const statSpec = stats.behaviorSpec();   // 隐藏数值 → 行为描述（不含数字）
+  /* 生词本回路：把"主人读错过的词"喂进提示词。
+     以前生词本是**只写不读**的 —— 读错的词自动收进来、面板上看得见，
+     但系统提示词里完全没有它（下面那处 `vocab: personatags.vocabulary()`
+     其实是**人设词条**、不是生词本），所以练了等于没练。
+     ⚠️ 位置：放在 "Language rules" 里、输出格式说明**之前** ——
+     格式说明那段在它后面，加新词时前缀缓存会从这儿断掉、多付约 500 token；
+     但加词不是每轮都发生，代价可忽略。 */
+  let vocabSec = '';
+  try {
+    const words = vocab.toPractice(8);
+    if (words.length) {
+      vocabSec = '\n# 主人正在练的词（他读错过、或自己存进来的）\n'
+        + words.map((x) => '- ' + x.w + (x.ipa ? ' ' + x.ipa : '') + (x.zh ? ' ' + x.zh : '')
+          + (x.review ? '（复习 ' + x.review + ' 次，对 ' + (x.good || 0) + ' 次）' : '')).join('\n')
+        + '\n在他说话时**自然**地用上其中 1-2 个帮他巩固。别一次堆一堆，也别当成词表念出来。\n';
+    }
+  } catch {}
   // 技能：只常驻一份"短目录"，命中时模型自己用 use_skill 把完整说明 load 进来（渐进式披露）
   let skillSec = '';
   if (tier !== 'off') {
@@ -170,6 +187,7 @@ Never mention, hint at, or allude to this on your own.
 # Language rules
 - ALWAYS speak English, natural spoken English, 1-3 short sentences.
 - Vocabulary level: ${VOCAB[cfg.vocabLevel] || VOCAB.high_school}.
+${vocabSec}
 
 # Current relationship state (internal — never mention these numbers directly)
 - Affection toward the user: ${mo.affection}/100
