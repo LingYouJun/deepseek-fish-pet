@@ -24,6 +24,10 @@ const MEMORY_DEFAULTS = {
   fullTurns: 3,          // 最近几轮助手回复保留完整格式（格式锚）
   toolResultChars: 250,  // AI 助手执行结果入库时的截断长度（太长会把真实对话挤出历史）
   inject: {              // 每轮注入上下文的数量/长度
+    /* ⚠️ totalChars 是 context.build() 读的**总字符预算**（三块加起来的上限）。
+       它以前没写在这里 —— 代码里 `Number(inj.totalChars) || 2400` 会一直落到 2400，
+       等于这个旋钮是死的、agent.json 里配了也不生效。测试时发现的。 */
+    totalChars: 2400,
     permanentFacts: 20,
     longDays: 3,
     mediumCount: 4,

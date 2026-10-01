@@ -1,6 +1,8 @@
 const { app, BrowserWindow, ipcMain, Menu, screen, session, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
+/* clock 必须最先加载：它会劫持 Date.now()，后面的模块读到的才是平移过的时间 */
+const clock = require('./src/clock');
 const config = require('./src/config');
 const llm = require('./src/llm');
 const memory = require('./src/memory');
@@ -22,12 +24,45 @@ const persona = require('./src/persona');
 const personatags = require('./src/personatags');
 const petactions = require('./src/petactions');
 const speak = require('./src/speak');
+const testlog = require('./src/testlog');
 
-const dbg = (msg) => { try { fs.appendFileSync(path.join(app.getPath('userData'), 'debug.log'), new Date().toISOString() + ' ' + msg + '\n'); } catch {} };
+const dbg = (msg) => {
+  try { fs.appendFileSync(path.join(app.getPath('userData'), 'debug.log'), new Date().toISOString() + ' ' + msg + '\n'); } catch {}
+  /* 结构化日志镜像一份：debug.log 是自由文本、几万行里翻不出规律，
+     testlog.jsonl 能直接按模块/事件聚合，这是"测完找异常数据"的入口。
+     只记 dbg 的第一段（像 [asr] / [stats] / [pron] 这种前缀）当模块名 */
+  try {
+    const s = String(msg);
+    const m = s.match(/^\[([a-z0-9_]+)\]\s*(.*)$/i);
+    testlog.log(m ? m[1] : 'main', 'dbg', m ? { v: m[2] } : { v: s });
+  } catch {}
+};
 
 let petWin = null;
 let chatWin = null;
 let didSummarize = false;
+
+/* ---------------- 自动埋点（测试用，见 src/testlog.js） ----------------
+ * 给每个模块的导出函数套一层，自动记录 模块/函数/耗时/参数摘要/结果摘要/错误。
+ * 这样"每个模块都有日志"不用去改 25 个文件，也不会漏。
+ * 注意：**不能埋 testlog 自己**（log 里再调 log 会无限递归）。 */
+try {
+  const bus = require('./src/bus');
+  const store = require('./src/store');
+  testlog.instrumentAll({
+    llm, memory, mood, assistant, web, dsh, vocab, tts, asr, chatlog,
+    screenstream, gameagent, skills, style, projects, stats, persona,
+    personatags, petactions, speak, store,
+  }, {
+    /* tokens 在裁剪历史时每轮调几十次，纯计算、没有可分析的信息量 */
+    tokens: { skip: ['est', 'clip', 'estMessages'] },
+  });
+  for (const ev of ['store:error', 'stats:changed', 'stats:rebaseline', 'stats:judged',
+    'memory:changed', 'memory:permanent', 'memory:skillmem', 'session:start', 'session:end', 'session:turn']) {
+    bus.on(ev, (d) => { try { testlog.log('bus', ev, (d && typeof d === 'object') ? d : { v: d }); } catch {} });
+  }
+  testlog.log('main', 'boot', { ver: app.getVersion(), clockOffsetMs: clock.offset(), day: clock.day() });
+} catch (e) { dbg('[testlog] 埋点失败（不影响运行）: ' + ((e && e.message) || e)); }
 let allowChatClose = false;
 
 const posFile = () => path.join(app.getPath('userData'), 'position.json');
@@ -1236,6 +1271,60 @@ ipcMain.handle('stats:task', (_e, o) => {
 });
 ipcMain.handle('stats:get', () => ({ all: stats.all(), hidden: stats.HIDDEN, log: stats.recentLog(40), stepBudget: stats.stepBudget() }));
 
+/* ---------------- 测试驱动器（给 app/scripts/test-chat.js 用，界面不走这里） ----------------
+ * 走**和 chat:send 完全相同的核心管线**：同一个 buildSystemPrompt、同一份记忆注入、
+ * 同一套历史裁剪、同一个 genReply、同样 memory.onTurn + mood.adjust。
+ * 唯一区别是不碰窗口（不出气泡、不朗读），所以测出来的行为就是真实行为。
+ *
+ * 这些频道**没有暴露给 preload**，应用自己的两个窗口调不到，只有明确知道频道名的
+ * 测试脚本能调（脚本是 require main.js 启动真应用的，见 scripts/test-chat.js）。 */
+ipcMain.handle('test:turn', async (_e, payload) => {
+  const cfg = config.load();
+  const text = String((payload && payload.text) || '').trim();
+  if (!text) return { ok: false, error: '空消息' };
+  const t0 = Date.now();
+  const sys = buildSystemPrompt(cfg);
+  const hist = memory.pickHistory();
+  const messages = [{ role: 'system', content: sys }, ...hist, { role: 'user', content: text }];
+  const { reply, raw } = await genReply(cfg, messages);
+  if (reply.en) { memory.onTurn(text, raw, reply.en); mood.adjust({ affection: 1, mood: 2 }); }
+  logTurn(text, reply);
+  const r = {
+    ok: true, en: reply.en, zh: reply.zh, words: reply.words, choices: reply.choices,
+    action: reply.action || null, ms: Date.now() - t0, sysChars: sys.length, histMsgs: hist.length,
+  };
+  testlog.log('test', 'turn', { in: text, en: reply.en, zh: reply.zh, ms: r.ms, sysChars: r.sysChars, histMsgs: r.histMsgs, action: r.action });
+  return r;
+});
+/* 结束本次会话：触发真正的收尾（4 个并行 LLM 任务 + 写中期/永久/技能经验 + 判数值） */
+ipcMain.handle('test:endSession', async () => {
+  try { const r = await memory.onSessionEnd(); return { ok: true, r }; }
+  catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+});
+/* 模拟"关掉应用再打开"（跨天测试用：推进时钟后跑一次启动流程，触发衰减/熔炼/晋升） */
+ipcMain.handle('test:appStart', async () => {
+  try { await memory.onAppStart(); return { ok: true, day: clock.day() }; }
+  catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+});
+/* 时钟平移（不改系统时间）。传 {days:5} / {ms:...} / 0 复原 */
+ipcMain.handle('test:clock', (_e, p) => ({ ok: true, ...clock.set(p) }));
+/* 一次性把关键状态取出来，方便断言 */
+ipcMain.handle('test:snap', () => ({
+  ok: true,
+  day: clock.day(),
+  clockOffsetMs: clock.offset(),
+  stats: stats.all(),
+  statsLog: stats.recentLog(20),
+  mood: mood.load(),
+  session: memory.session.info(),
+  persona: (() => { try { return { name: persona.load().name, char: (persona.load().character_setting || '').slice(0, 60) }; } catch { return null; } })(),
+  long: (() => { try { return memory.long.list().map((d) => ({ date: d.date, turns: d.turns, summary: String(d.summary || '').slice(0, 120) })); } catch { return []; } })(),
+  permanent: (() => { try { return memory.permanent.facts().map((f) => ({ text: String(f.text || '').slice(0, 80), weight: f.weight, hits: f.hits })); } catch { return []; } })(),
+  medium: (() => { try { return memory.medium.list().map((m) => ({ date: m.date, id: m.id, summary: String(m.summary || '').slice(0, 100) })); } catch { return []; } })(),
+  skillmem: (() => { try { return memory.skillmem.candidates().map((c) => ({ text: String(c.text || '').slice(0, 80), weight: c.weight, skill: c.skill })); } catch { return []; } })(),
+  values: (() => { try { const v = require('./src/store').read('values', null); return v; } catch { return null; } })(),
+}));
+
 /* ---------------- 界面风格（从人设推导 + 记忆微调） ---------------- */
 ipcMain.handle('style:get', () => ({ style: style.load(), spec: style.spec(config.load(), mood.load()) }));
 ipcMain.handle('style:ensure', async (_e, force) => {
@@ -1356,11 +1445,22 @@ if (!gotLock) {
       cb(permission === 'media');
     });
     mood.startupDecay();
+    /* 基线和"离线多久"都应该**立刻**算，不能放进下面那个 9 秒的 setTimeout：
+       ensureBaseline 在首次运行（stats.json 还没有 inited）时会按人设**重置**成基线，
+       如果拖到 9 秒后才跑，这 9 秒里已经累积的偏移会被一起抹掉
+       （实测：新装的桌宠头几轮数值走 50→51，9 秒后突然跳成傲娇基线 62，那 +1 就没了）。 */
+    try {
+      stats.ensureBaseline(loadPersona());   // 首次 / 人设变了 → 按人设给基线
+      const sb = stats.load();
+      const goneH = sb.lastSeen ? (Date.now() - sb.lastSeen) / 3600000 : 0;
+      sb.lastSeen = Date.now();
+      stats.save(sb);
+      if (goneH > 6) dbg('[stats] boot 离线 ' + goneH.toFixed(1) + 'h');
+    } catch (e) { dbg('[stats] boot baseline err ' + e); }
     memory.onAppStart().catch((e) => dbg('[memory] onAppStart err ' + e));
     // 隐藏数值：时间效应（多久没见）+ 性格慢回归，然后按需补判一次
     setTimeout(() => {
       try {
-        stats.ensureBaseline(loadPersona());   // 首次 / 人设变了 → 按人设给基线
         const st0 = stats.load();
         const awayH = st0.lastSeen ? (Date.now() - st0.lastSeen) / 3600000 : 0;
         if (awayH > 20) {
@@ -1415,3 +1515,14 @@ if (!gotLock) {
     try { fs.watch(__dirname, (_ev, f) => { if (f === 'main.js' || f === 'preload.js' || f === 'persona.json') relaunch(); }); } catch {}
   }
 }
+
+/* ---------------- 测试专用出口 ----------------
+ * 测试脚本用 `require('../main.js')` **启动真应用**（单实例锁要求先停掉正在跑的桌宠），
+ * 然后直接调这些函数驱动对话 —— 比走 IPC 少一层，也拿得到内部状态。
+ * 正常运行时这些导出没有任何副作用。 */
+module.exports = {
+  buildSystemPrompt, genReply, logTurn,
+  config, llm, memory, mood, stats, persona, personatags, petactions, speak,
+  assistant, skills, projects, tts, asr, testlog, clock,
+  win: () => ({ petWin, chatWin }),
+};
