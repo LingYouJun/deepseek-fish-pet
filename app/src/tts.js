@@ -72,19 +72,40 @@ function cacheDir() {
   return dir;
 }
 
-/* 把长句切成小段，避免单次请求过长、也提高命中缓存的概率 */
+/* 把长句切成小段，避免单次请求过长、也提高命中缓存的概率。
+ * ⚠️ 只按标点切是不够的：合并条件 `(cur + p).length > 180 && cur` 要求 cur 非空，
+ *   所以**第一个片段永远整段收下**、不管多长 —— 模型偶尔会写出一整段没有句号的
+ *   run-on，实测 1500 字那种会一次生成 512KB 音频、耗时 3.9 秒，
+ *   再长就会顶到 45 秒超时，而且缓存粒度也退化成"整段一个 key"。
+ *   这里补一道**硬切**：超过 180 字的片段先按空格断（中文没空格就按字数断）。 */
+const MAX_SEG = 180;
 function toSentences(text) {
   const t = String(text || '').replace(/\s+/g, ' ').trim();
   if (!t) return [];
   const parts = t.match(/[^.!?;:]+[.!?;:]*/g) || [t];
+
+  /* 第一道：把超长片段硬切开 */
+  const hard = [];
+  for (const p of parts) {
+    let s = p;
+    while (s.length > MAX_SEG) {
+      let cut = s.lastIndexOf(' ', MAX_SEG);
+      if (cut < MAX_SEG * 0.5) cut = MAX_SEG;      // 中文长句没有空格 → 直接按字数断
+      hard.push(s.slice(0, cut));
+      s = s.slice(cut);
+    }
+    if (s) hard.push(s);
+  }
+
+  /* 第二道：把过短的相邻片段并起来（减少请求数、提高整段命中缓存的概率） */
   const out = [];
   let cur = '';
-  for (const p of parts) {
-    if ((cur + p).length > 180 && cur) { out.push(cur.trim()); cur = p; }
+  for (const p of hard) {
+    if ((cur + p).length > MAX_SEG && cur) { out.push(cur.trim()); cur = p; }
     else cur += p;
   }
   if (cur.trim()) out.push(cur.trim());
-  return out.slice(0, 12);
+  return out.filter(Boolean).slice(0, 12);
 }
 
 function synthesizeOnce(voice, text, outPath, rate, pitch) {
@@ -241,4 +262,4 @@ async function synthesize(text, opts = {}) {
   };
 }
 
-module.exports = { synthesize, VOICES, STYLES, DEFAULT_VOICE, DEFAULT_STYLE, resolveStyle, voiceById };
+module.exports = { synthesize, VOICES, STYLES, DEFAULT_VOICE, DEFAULT_STYLE, resolveStyle, voiceById, toSentences, MAX_SEG };
