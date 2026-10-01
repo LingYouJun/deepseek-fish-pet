@@ -511,6 +511,80 @@ ipcMain.handle('speak:autoAdd', (_e, on) => {
   return { on: v };
 });
 
+/* ---------------- 发音评测（"像不像"）的参考句 ----------------
+ * 依据 发音评测可行性-20261001.md：拿"目标句的母语者 TTS"当参考做 DTW，
+ * 只用逐词相对分 S，不用绝对分（绝对分会被音色差异淹没）。
+ *
+ * ⚠️ **参考音频必须重采样成 16kHz 才能跑 whisper**：
+ *    Edge TTS 给的是 **48kHz mp3**，直接把 mp3 喂 whisper-cli 虽然能出文字，
+ *    但 **token 时间戳是坏的** —— 实测 'answer' 的 offsets 是 {from:7100,to:7100}（零长），
+ *    段级 offsets 报 0~30000ms 而音频只有 7 秒。逐词归因全靠这组时间戳，坏了就全错位。
+ *    所以流程改成：渲染层用 Web Audio 解码 + OfflineAudioContext 重采样到 16k + 自己封 WAV，
+ *    再交给这里跑 whisper（见 pron:timing）。
+ * 两个 IPC 分工：
+ *   pron:ref    → TTS 的 mp3 + 参数（+ 命中缓存的话连词级时间戳一起给）
+ *   pron:timing → 拿渲染层传来的 16k 单声道 WAV 跑 whisper，取词级时间戳并缓存
+ */
+ipcMain.handle('pron:ref', async (_e, payload) => {
+  const cfg = config.load();
+  const pr = cfg.pron || {};
+  const text = String((payload && payload.text) || '').trim();
+  if (!text) return { ok: false, error: '空句子' };
+  const maxChars = Number(pr.refMaxChars) || 200;
+  if (text.length > maxChars) return { ok: false, error: '句子太长（>' + maxChars + ' 字），不作参考评测' };
+  try {
+    const tts = await tts.synthesize(text, { voice: cfg.ttsVoice || undefined });
+    if (!tts || !tts.dataUrl) return { ok: false, error: 'TTS 合成失败' };
+    const ref = speak.refGet(text);      // 命中缓存就不用渲染层再做重采样那一步
+    return { ok: true, dataUrl: tts.dataUrl, words: (ref && ref.words) || null, params: pr };
+  } catch (e) {
+    dbg('[pron] ref err ' + String((e && e.message) || e));
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+});
+
+/* whisper 对短功能词（I / to / a）经常给**零长**时间戳（from === to），
+ * 直接拿去归因会让这些词的帧区间为空、评分里凭空少词。
+ * 用相邻词把空档补出来：从上一个词的终点，到下一个词的起点。 */
+function fillWordGaps(words) {
+  const ws = (words || []).map((w) => ({
+    w: String(w.w), from: Number(w.from) || 0, to: Number(w.to) || 0,
+  }));
+  for (let i = 0; i < ws.length; i++) {
+    if (ws[i].to > ws[i].from) continue;
+    const prevEnd = i > 0 ? ws[i - 1].to : 0;
+    let nextStart = 0;
+    for (let k = i + 1; k < ws.length; k++) { if (ws[k].from > prevEnd) { nextStart = ws[k].from; break; } }
+    const from = Math.max(prevEnd, Math.min(ws[i].from, nextStart || ws[i].from));
+    ws[i].from = from;
+    ws[i].to = (nextStart && nextStart > from) ? nextStart : from + 40;   // 兜底给 40ms 窗
+  }
+  return ws;
+}
+
+/* 渲染层已经把 TTS 音频重采样成 16k 单声道 WAV（统一时间轴） */
+ipcMain.handle('pron:timing', async (_e, payload) => {
+  const cfg = config.load();
+  const text = String((payload && payload.text) || '').trim();
+  const buf = payload && payload.wav;
+  if (!text || !buf) return { ok: false, error: '缺少句子或音频' };
+  const hit = speak.refGet(text);
+  if (hit) return { ok: true, words: hit.words, cached: true };
+  try {
+    const b = Buffer.isBuffer(buf) ? buf : Buffer.from(buf);
+    const r = await asr.transcribeDetailed(b, cfg.asrModel || 'base.en', { vad: true });
+    const raw = (r.words || []).filter((w) => w && w.w);
+    if (!raw.length) return { ok: false, error: 'whisper 没给出词' };
+    const words = fillWordGaps(raw);
+    speak.refPut(text, words);
+    dbg('[pron] 参考句已分析并缓存，词数=' + words.length + '：「' + text.slice(0, 36) + '」');
+    return { ok: true, words, cached: false };
+  } catch (e) {
+    dbg('[pron] timing err ' + String((e && e.message) || e));
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+});
+
 /* ---------------- 麦克风权限 ---------------- */
 /* 语音识别报"没授权/没设备"时，把对话窗弹出来并显示授权面板 */
 ipcMain.on('mic:needPermission', (_e, reason) => {

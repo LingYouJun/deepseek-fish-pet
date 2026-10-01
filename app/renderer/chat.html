@@ -129,6 +129,9 @@
     <label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-size:12px;cursor:pointer">
       <input type="checkbox" id="vocabAuto" style="width:auto"> 读得含糊的词自动收进生词本
     </label>
+    <label style="display:flex;align-items:center;gap:8px;margin-top:6px;font-size:12px;cursor:pointer">
+      <input type="checkbox" id="pronOn" style="width:auto"> 跟读时做「像不像」评测（DTW 对比母语者 TTS，实验性）
+    </label>
   </div>
 </div>
 
@@ -237,6 +240,8 @@
 </div>
 
 <script src="asr-recorder.js"></script>
+<!-- 发音评测（"像不像"）：MFCC + DTW，纯 JS 零依赖，参数全部来自 config.pron -->
+<script src="dtw.js"></script>
 <script src="chat.js"></script>
 </body>
 </html>

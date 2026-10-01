@@ -197,6 +197,12 @@ header .tools { margin-left: auto; display: flex; gap: 8px; }
 /* ---------------- 翻译器 ---------------- */
 #trInput { width: 100%; border: 1px solid #e3e8f2; border-radius: 10px; padding: 9px 11px; font: 13px/1.5 inherit; resize: vertical; }
 #trOut { margin-top: 12px; }
+
+/* 「像不像」——独立的第二条色带：用**下划线**区分，不跟清晰度的背景色打架 */
+#msgs .msg.repeat .psus { color: #b3306e; border-bottom: 2px solid #e57bb0; padding-bottom: 1px; }
+#msgs .msg.repeat .pval { color: #b3306e; font-size: 11px; }
+#msgs .msg.repeat .pok { color: #2f9e68; }
+#msgs .msg.repeat .pdim { color: #8b95ab; font-size: 11px; }
 .tropt { border: 1px solid #e6ebf5; border-radius: 11px; padding: 10px 12px; margin-top: 9px; background: #fbfcff; }
 .tropt .en { font-size: 14px; font-weight: 600; color: #24304c; line-height: 1.55; }
 .tropt .zh { font-size: 12px; color: #6b7490; margin-top: 3px; }

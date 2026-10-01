@@ -289,15 +289,21 @@ function transcribeDetailed(wavBuf, cfgModel, opts) {
     if (!hasModel(name)) return reject(new Error('语音模型还没下载（设置里点「下载语音模型」）'));
     const mp = modelPath(name);
     const base = path.join(os.tmpdir(), 'dayu-asr-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7));
-    const wav = base + '.wav';
-    const trimmed = trimSilence(wavBuf);                 // 先掐掉首尾静音（省时间、少幻觉）
+    /* ext 默认 'wav'。传 'mp3' 等其它格式时**不能做静音裁剪** —— trimSilence 是按 PCM 解析字节的，
+       拿去处理 mp3 会把文件改坏。whisper-cli 自己能解 mp3（miniaudio 自带解码器）。 */
+    const ext = String((opts && opts.ext) || 'wav').replace(/[^a-z0-9]/gi, '') || 'wav';
+    const wav = base + '.' + ext;
+    const trimmed = (ext === 'wav') ? trimSilence(wavBuf) : wavBuf;
     try { fs.writeFileSync(wav, trimmed); } catch (e) { return reject(e); }
 
-    /* -ojf: 输出含 token 概率的完整 JSON（逐词打分的唯一依据）
-       -nt:  不要时间戳前缀（纯文本更好用）
+    /* -ojf: 输出含 token 概率 + 词级时间戳的完整 JSON（逐词打分和逐词归因都靠它）
+       **绝对不能加 -nt**：实测 -nt（"不要时间戳"）会把 JSON 里 token 的 offsets 一起关掉 ——
+         加 -nt  → 15 个 token 只有 3 个有非零时间跨度（前两个词吃掉整段、其余全是零长）
+         不加 -nt → 16 个 token 有 11 个正常（Hello[170-760] / practice[2680-3210] …）
+       文字的干净度不受影响：JSON 的 transcription[0].text 始终是纯文本，没有时间戳前缀。
        --vad: 只处理语音段（跳过静音：免幻觉 + 快一半，见文件上方 VAD 注释） */
     const useVad = !(opts && opts.vad === false) && hasVad();
-    const args = ['-m', mp, '-f', wav, '-l', 'en', '-nt', '-ojf', '-of', base, '-np'];
+    const args = ['-m', mp, '-f', wav, '-l', 'en', '-ojf', '-of', base, '-np'];
     if (useVad) {
       args.push('--vad', '-vm', vadPath());
       const vt = Number(opts && opts.vadThreshold);

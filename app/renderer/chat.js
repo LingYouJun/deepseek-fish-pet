@@ -440,6 +440,11 @@ async function renderVocab() {
   try {
     const a = await window.petAPI.speakAutoAdd();
     if (a && $('vocabAuto')) $('vocabAuto').checked = a.on !== false;
+    /* 发音评测开关：读一次 config，回填勾选状态（不做成独立 IPC，少一个渠道） */
+    try {
+      const c = await window.petAPI.configGet();
+      if (c && c.pron && $('pronOn')) $('pronOn').checked = c.pron.enabled !== false;
+    } catch {}
   } catch {}
   const body = $('vocabBody');
   if (!vocabData.length) {
@@ -500,6 +505,13 @@ $('vocabReview').addEventListener('click', startReview);
 if ($('vocabAuto')) $('vocabAuto').addEventListener('change', async (e) => {
   const r = await window.petAPI.speakAutoAdd(e.target.checked);
   addSys((r && r.on) ? '📒 已开启：读得含糊的词自动收进生词本' : '📒 已关闭自动收录');
+});
+/* 「像不像」评测开关（写进 config.pron.enabled，参数都在 config.json 里，随时可调） */
+if ($('pronOn')) $('pronOn').addEventListener('change', async (e) => {
+  try { await window.petAPI.configSet({ pron: { enabled: !!e.target.checked } }); } catch {}
+  addSys(e.target.checked
+    ? '🎯 已开启「像不像」评测：跟读时用 DTW 对比母语者 TTS，可疑的词会加下划线（实验性，阈值在 config.pron 里）'
+    : '🎯 已关闭「像不像」评测');
 });
 /* 🐢 慢速朗读已经并进 🔊 的三态里了，原来单独的按钮不再需要 */
 
@@ -601,7 +613,97 @@ function startRepeat(en) {
   addSys('🎤 跟读模式：照着她那句话读一遍，说完自动对比（不想跟读就再说一句别的）');
   try { if (!recording) startTalk(); } catch { addSys('麦克风没起来？点输入框左边的 🎤 手动开始'); }
 }
-function showRepeat(target, text, score) {
+/* ---------------- 发音评测（"像不像"）----------------
+ * 只在**跟读**里跑：跟读有明确的目标句，才能合成"母语者参考音频"来对比。
+ * 依据 发音评测可行性-20261001.md：
+ *   · 只用逐词**相对分** S = 该词代价 / 其它词均值；绝对分会被音色差异淹没（换音色 4.014 > 换词 3.033）
+ *   · 阈值等全部参数来自主进程返回的 cfg.pron，**这里不写死任何数字**
+ *   · 它是独立于"清晰度"的第二条色带：清晰度测"读清楚了没"，S 测"像不像母语者" */
+/* 把解码后的音频重采样成 **16kHz 单声道** 并封成 WAV。
+ * 为什么必须做这一步：Edge TTS 给的是 48kHz mp3，直接把 mp3 喂 whisper-cli 虽然能出文字，
+ * 但 **token 时间戳是坏的**（实测 'answer' 的 offsets 是 {from:7100,to:7100} 零长，
+ * 段级还报 0~30000ms 而音频只有 7 秒）。逐词归因全靠这组时间戳，坏了就全错位。
+ * OfflineAudioContext 顺带就完成了重采样，WAV 头自己封。 */
+async function toWav16k(audioBuffer) {
+  const sr = 16000;
+  const n = Math.max(1, Math.ceil(audioBuffer.duration * sr));
+  const off = new OfflineAudioContext(1, n, sr);
+  const src = off.createBufferSource();
+  src.buffer = audioBuffer;
+  src.connect(off.destination);
+  src.start();
+  const rendered = await off.startRendering();
+  const pcm = rendered.getChannelData(0);
+  const ab = new ArrayBuffer(44 + pcm.length * 2);
+  const v = new DataView(ab);
+  const wr = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  wr(0, 'RIFF'); v.setUint32(4, 36 + pcm.length * 2, true); wr(8, 'WAVE');
+  wr(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, sr, true); v.setUint32(28, sr * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  wr(36, 'data'); v.setUint32(40, pcm.length * 2, true);
+  for (let i = 0; i < pcm.length; i++) {
+    const s = Math.max(-1, Math.min(1, pcm[i]));
+    v.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+  }
+  return { wav: ab, pcm, sampleRate: sr };
+}
+async function pronScore(userWav, targetText) {
+  const P = window.PetDTW;
+  if (!P || !userWav) return null;
+  let ref = null;
+  try { ref = await window.petAPI.pronRef(targetText); } catch (e) { return { error: (e && e.message) || String(e) }; }
+  if (!ref || !ref.ok) return { error: (ref && ref.error) || '拿不到参考音频' };
+  const params = ref.params || {};
+  if (params.enabled === false) return null;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  const ctx = new AC();
+  try {
+    /* decodeAudioData 会把 ArrayBuffer「拿走」，所以用户音频要 copy 一份再解 */
+    const [uBuf, rBuf] = await Promise.all([
+      ctx.decodeAudioData(userWav.slice ? userWav.slice(0) : userWav),
+      fetch(ref.dataUrl).then((x) => x.arrayBuffer()).then((ab) => ctx.decodeAudioData(ab)),
+    ]);
+    /* 参考音频统一用重采样后的 16k，和 whisper 的时间戳同一时间轴 */
+    const r16 = await toWav16k(rBuf);
+    let words = ref.words;
+    if (!words || !words.length) {
+      const t = await window.petAPI.pronTiming(targetText, r16.wav);
+      if (!t || !t.ok) return { error: (t && t.error) || '拿不到参考词级时间戳' };
+      words = t.words;
+    }
+    const out = P.score(uBuf.getChannelData(0), uBuf.sampleRate, r16.pcm, r16.sampleRate, words, params);
+    out.threshold = Number(params.threshold);
+    return out;
+  } catch (e) {
+    return { error: (e && e.message) || String(e) };
+  } finally { try { ctx.close(); } catch {} }
+}
+/* 把「像不像」渲染成独立一行 + 在"她说的"那句里给可疑词加下划线 */
+function paintPron(box, res) {
+  const line = document.createElement('div');
+  line.className = 'rline';
+  if (!res) { line.innerHTML = '<span class="rlab">像不像</span><span class="pdim">（没跑评测）</span>'; box.appendChild(line); return; }
+  if (res.error) { line.innerHTML = '<span class="rlab">像不像</span><span class="pdim">评测失败：' + esc(res.error) + '</span>'; box.appendChild(line); return; }
+  const th = Number(res.threshold);
+  const ws = (res.words || []).filter((x) => Number.isFinite(x.S));
+  const sus = ws.filter((x) => x.S > th).sort((a, b) => b.S - a.S);
+  line.innerHTML = '<span class="rlab">像不像</span>'
+    + (sus.length
+      ? sus.map((x) => '<b class="psus">' + esc(x.w) + '</b> <span class="pval">' + x.S.toFixed(2) + '</span>').join('　')
+        + '<span class="pdim">　（S &gt; ' + th + ' 判为可疑；只看相对值，不给绝对分）</span>'
+      : '<span class="pok">没发现明显可疑的词</span><span class="pdim">（最高 S=' + (res.maxS != null ? Number(res.maxS).toFixed(2) : '-') + '）</span>');
+  box.appendChild(line);
+  /* 在"她说的"那句里把最可疑的词标出来，让对照更直观 */
+  if (sus.length) {
+    const first = box.querySelector('.rline .rlab');
+    const targetLine = first && first.parentElement;
+    if (targetLine) {
+      const words = new Set(sus.map((x) => String(x.w).toLowerCase().replace(/[^a-z']/g, '')));
+      targetLine.innerHTML = targetLine.innerHTML.replace(/([A-Za-z']+)/g, (m) => (words.has(m.toLowerCase()) ? '<span class="psus">' + m + '</span>' : m));
+    }
+  }
+}
+function showRepeat(target, text, score, userWav) {
   const tw = (target.toLowerCase().match(/[a-z']+/g) || []);
   const uw = (text.toLowerCase().match(/[a-z']+/g) || []);
   const uset = new Set(uw);
@@ -617,6 +719,8 @@ function showRepeat(target, text, score) {
       ? '<div class="rmiss">没听到或没读清：' + missing.map((w) => esc(w)).join(', ') + '</div>'
       : '<div class="rok">整句都对上了 👍</div>');
   $('msgs').appendChild(d); scroll();
+  /* 「像不像」要合成 TTS + 跑 DTW，比上面慢，所以异步补一行进来 */
+  pronScore(userWav, target).then((res) => { paintPron(d, res); scroll(); }).catch(() => {});
 }
 function addErr(text) {
   const key = String(text);
@@ -1118,7 +1222,7 @@ async function stopTalk(cancel) {
   if (r && r.ok) {
     /* 跟读中 → 不进对话，只做对比；否则带上逐词清晰度 + 音标发出去 */
     if (r.text) {
-      if (repeatTarget) { const t = repeatTarget; repeatTarget = ''; showRepeat(t, r.text, r.score); }
+      if (repeatTarget) { const t = repeatTarget; repeatTarget = ''; showRepeat(t, r.text, r.score, wav); }
       else send(r.text, { score: r.score, ipa: r.ipa, autoAdded: r.autoAdded });
     } else addErr('没听清，再说一次？');
   } else {

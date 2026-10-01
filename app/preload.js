@@ -54,6 +54,9 @@ contextBridge.exposeInMainWorld('petAPI', {
   onSpeakIpa: (cb) => ipcRenderer.on('speak:ipa', (_e, d) => cb(d)),
   speakTrend: (days) => ipcRenderer.invoke('speak:trend', days),
   speakAutoAdd: (on) => ipcRenderer.invoke('speak:autoAdd', on),
+  // 发音评测（"像不像"）：目标句 → TTS 参考音频 + 参考词级时间戳 + 全部参数
+  pronRef: (text) => ipcRenderer.invoke('pron:ref', { text }),
+  pronTiming: (text, wav) => ipcRenderer.invoke('pron:timing', { text, wav }),
   shot: () => ipcRenderer.send('pet:shot'),
   chatShot: () => ipcRenderer.send('chat:shot'),
   // 配置

@@ -197,9 +197,44 @@ function parseJson(raw) {
   try { return JSON.parse(t.slice(i, j + 1)); } catch { return null; }
 }
 
+/* ---------------- 发音评测（"像不像"）的参考句缓存 ----------------
+ * 方案依据见 发音评测可行性-20261001.md：拿"目标句的母语者 TTS"当参考，
+ * 两边都算 MFCC 做 DTW，再按**参考句的词边界**把逐帧代价归到词，
+ * 最后只用**相对分** S = 该词代价 / 其它词均值（绝对分会被音色差异淹没）。
+ *
+ * 这里缓存两样东西（key = sha1(句子文本)，同一句只算一次）：
+ *   1. 参考音频：tts.js 自己已经按文本缓存 mp3，不用重复存
+ *   2. **参考句的词级时间戳**：要靠 whisper 跑一遍那段 TTS 音频才有，
+ *      实测 whisper-cli 能直接读 mp3（miniaudio 自带解码器），不用转 WAV
+ */
+const crypto = require('crypto');
+const refDir = () => {
+  const d = path.join(app.getPath('userData'), 'pron-cache');
+  try { fs.mkdirSync(d, { recursive: true }); } catch {}
+  return d;
+};
+const refKey = (text) => crypto.createHash('sha1').update(String(text || '').trim()).digest('hex').slice(0, 16);
+const refFile = (text) => path.join(refDir(), refKey(text) + '.json');
+
+function refGet(text) {
+  try {
+    const j = JSON.parse(fs.readFileSync(refFile(text), 'utf8').replace(/^\uFEFF/, ''));
+    return (j && Array.isArray(j.words) && j.words.length) ? j : null;
+  } catch { return null; }
+}
+function refPut(text, words, extra) {
+  try {
+    fs.writeFileSync(refFile(text), JSON.stringify(Object.assign({
+      text: String(text || ''), words: words || [], at: Date.now(),
+    }, extra || {}), null, 2));
+    return true;
+  } catch { return false; }
+}
+
 module.exports = {
   BANDS, bandOf, scoreWords, thresholds, applyPosBias, POS_BONUS, keyOf: key,
   logFile, readLog, logScore, trend,
   ipaFile, loadIpa, ipaGet, ipaPut, ipaMissing, buildIpaPrompt,
   buildTranslatePrompt, parseJson,
+  refDir, refKey, refFile, refGet, refPut,
 };

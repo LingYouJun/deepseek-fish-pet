@@ -32,6 +32,31 @@ const MEMORY_DEFAULTS = {
   },
 };
 
+/* 发音评测（"像不像"）参数 —— **全部可被 config.json 覆盖，一个都不写死**
+ * 依据：发音评测可行性-20261001.md 的实验结论
+ *   · 只能用"逐词相对分 S = 该词代价 / 其它词均值"，**绝对分不可用**（换音色 4.014 > 换词 3.033）
+ *   · 真错词 S≈4.52 排第1；只换音色时最大 S≈1.24 且平坦 → 阈值取 2.0
+ *   · 前端消融里 CMN(丢掉第0维) 略优，所以默认 dropC0=true
+ *   · 阈值 2.0 只来自单句 12 词、且音色差异是模拟的 → 之后必然要按真人样本调，故全部外置 */
+const PRON_DEFAULTS = {
+  enabled: true,        // 总开关
+  threshold: 2.0,       // S 大于此值判为"可疑的词"
+  frameMs: 25,          // MFCC 窗长（毫秒）
+  hopMs: 10,            // 帧移（毫秒）
+  nfft: 512,
+  nmel: 26,             // Mel 滤波器个数
+  ncep: 13,             // 倒谱系数维数
+  preemph: 0.97,        // 预加重
+  fmin: 0,              // Mel 下限 Hz
+  fmax: 8000,           // Mel 上限 Hz（16kHz 采样 → 奈奎斯特）
+  cmn: 'mean',          // 倒谱归一化：none | mean | meanvar
+  dropC0: true,         // 丢掉第 0 维倒谱（= 不把音量当特征，实验里略优）
+  dtwBand: null,        // DTW 带宽约束：null=不限；数字=带宽占对角线比例
+  minWordFrames: 3,     // 词至少几帧才参与打分（短词方差大，如 "I"）
+  speechFloorDb: -45,   // 低于此能量当静音
+  refMaxChars: 200,     // 参考句超过这个长度就不处理
+};
+
 const DEFAULTS = {
   apiBase: 'https://api.deepseek.com/v1',
   apiKey: '',
@@ -61,6 +86,7 @@ const DEFAULTS = {
   speakPosBias: true,    // 句首偏差补偿（第 1~2 个词天然偏低，给一点点补偿）
   vocabAutoAdd: true,    // 读得含糊的词自动进生词本
   memory: MEMORY_DEFAULTS,
+  pron: PRON_DEFAULTS,   // 发音评测（"像不像"）的全部参数，见上
 };
 
 const deepMerge = (base, over) => {
@@ -79,6 +105,7 @@ function load() {
   const merged = deepMerge(DEFAULTS, saved);
   merged.memory = deepMerge(MEMORY_DEFAULTS, saved.memory || {});   // 旧配置没有 memory 字段也能补齐
   merged.memory.inject = deepMerge(MEMORY_DEFAULTS.inject, (saved.memory && saved.memory.inject) || {});
+  merged.pron = deepMerge(PRON_DEFAULTS, saved.pron || {});         // 发音评测参数同样两级合并
   return merged;
 }
 
@@ -88,5 +115,5 @@ function save(patch) {
   return next;
 }
 
-module.exports = { load, save, DEFAULTS, MEMORY_DEFAULTS, file };
+module.exports = { load, save, DEFAULTS, MEMORY_DEFAULTS, PRON_DEFAULTS, file };
 
