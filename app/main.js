@@ -25,6 +25,7 @@ const personatags = require('./src/personatags');
 const petactions = require('./src/petactions');
 const speak = require('./src/speak');
 const testlog = require('./src/testlog');
+const userinput = require('./src/userinput');
 
 const dbg = (msg) => {
   try { fs.appendFileSync(path.join(app.getPath('userData'), 'debug.log'), new Date().toISOString() + ' ' + msg + '\n'); } catch {}
@@ -1309,6 +1310,12 @@ ipcMain.handle('test:appStart', async () => {
 });
 /* 时钟平移（不改系统时间）。传 {days:5} / {ms:...} / 0 复原 */
 ipcMain.handle('test:clock', (_e, p) => ({ ok: true, ...clock.set(p) }));
+/* 让位机制的当前状态（测"主人一动鼠标就暂停"用） */
+ipcMain.handle('test:userinput', (_e, p) => {
+  if (p && p.set) userinput.setParams(p.set);
+  if (p && p.resetStats) userinput.resetStats();
+  return { ok: true, state: userinput.state() };
+});
 /* 一次性把关键状态取出来，方便断言 */
 ipcMain.handle('test:snap', () => ({
   ok: true,
@@ -1419,7 +1426,7 @@ gameagent.init({
 });
 ipcMain.handle('game:start', async (_e, o) => gameagent.start(o || {}));
 ipcMain.handle('game:stop', () => gameagent.stop());
-ipcMain.handle('game:status', () => gameagent.status());
+ipcMain.handle('game:status', () => Object.assign(gameagent.status(), { userinput: userinput.state() }));
 
 /* 桌宠窗口用语音接受了任务（带 ACTION）→ 把对话窗叫出来执行，别让她的承诺落空 */
 ipcMain.on('pet:action', (_e, action) => {
@@ -1458,6 +1465,16 @@ if (!gotLock) {
       stats.save(sb);
       if (goneH > 6) dbg('[stats] boot 离线 ' + goneH.toFixed(1) + 'h');
     } catch (e) { dbg('[stats] boot baseline err ' + e); }
+    /* 「主人接管鼠标」让位参数（改 config.json 后重启即生效） */
+    try {
+      const uy = config.load();
+      userinput.setParams({
+        enabled: uy.userYield !== false,
+        calmMs: uy.userCalmMs,
+        movePx: uy.userMovePx,
+        pollMs: uy.userPollMs,
+      });
+    } catch (e) { dbg('[userinput] 参数设置失败 ' + e); }
     memory.onAppStart().catch((e) => dbg('[memory] onAppStart err ' + e));
     // 隐藏数值：时间效应（多久没见）+ 性格慢回归，然后按需补判一次
     setTimeout(() => {

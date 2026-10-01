@@ -14,6 +14,7 @@ const screenstream = require('./screenstream');
 const vision = require('./vision');
 const assistant = require('./assistant');
 const config = require('./config');
+const userinput = require('./userinput');   // 主人一动鼠标就让位（见下方"3) 做"那段的注释）
 
 const PROTOCOL = '\n\n【协议】每次观察后：'
   + '\n1) 先用一句中文说明：现在是什么局面（主界面/菜单/战斗/加载中/结算/弹窗…）、你的判断。'
@@ -239,6 +240,17 @@ async function loop() {
 
     let did = act.tool + ' ' + act.arg;
     try {
+      /* 【让位】主人一动鼠标就停手、等他松手再继续。
+         需求：她替我打游戏/看视频时，我想自己接管就该立刻拿到控制权，
+         而不是跟她抢光标。判定见 src/userinput.js（用全局光标位移做代理，
+         她自己的落点会预先登记，所以不会被误判成主人在动）。 */
+      if (userinput.isUserActive()) {
+        const capMs = Number((cfgNow.memory || {}).userYieldMaxMs) || 120000;
+        log('wait', '✋ 主人在用鼠标，我先让位…（你松手后自动继续）');
+        const waited = await userinput.waitUntilFree(capMs);
+        log('info', waited > capMs - 50 ? '⏳ 等太久（' + Math.round(waited / 1000) + 's），这一步先跳过' : '▶ 主人松手了，继续（等了 ' + (waited / 1000).toFixed(1) + 's）');
+        if (waited > capMs - 50) { await nap(opts.intervalMs); continue; }
+      }
       const r = await assistant.run(act.tool, act.arg);
       tally.act++; tally.ok++;
       log('act', '🖱 执行 ' + act.tool + ' ' + act.arg + ' → ' + String((r && r.text) || r).slice(0, 100));

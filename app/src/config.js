@@ -89,6 +89,14 @@ const DEFAULTS = {
   asrModel: 'base.en',   // tiny.en | base.en | small.en（默认 base.en：tiny 太不准，口语练习会误判）
   asrVad: true,          // 装了就启用 VAD 只处理语音段：实测免幻觉 + 快 53%（模型缺自动跳过）
   asrVadThreshold: 0.5,  // VAD 灵敏度 0~1，越高越严格（说话轻就调低）
+  /* 「主人接管鼠标」让位机制（她打游戏/看视频控制光标时）：
+     主人一动鼠标她就停手，连续 userCalmMs 没动就算松手、自动继续。
+     判定用**全局光标位移**做代理（Electron 拿不到按键状态），
+     所以她自己的落点会预先登记，不会被误判成主人在动。 */
+  userYield: true,       // 总开关
+  userCalmMs: 1200,      // 主人多久没动鼠标算"松手了"
+  userMovePx: 6,         // 单次位移超过多少像素算"动过"
+  userPollMs: 50,        // 光标轮询间隔
   speakGoodP: 0.8,       // 口语打分：p ≥ 此值 = 绿（读得清楚）
   speakOkP: 0.55,        // p ≥ 此值 = 黄（一般），再低 = 红（含糊）
   speakPosBias: true,    // 句首偏差补偿（第 1~2 个词天然偏低，给一点点补偿）
