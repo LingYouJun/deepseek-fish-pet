@@ -81,7 +81,11 @@ const mono = () => (typeof performance !== 'undefined' && performance.now ? perf
 
 /* ---------------- 自动埋点 ----------------
  * opts.skip: 跳过的函数名数组（高频且无信息量的，比如 tokens.est）
- * opts.summary: { fnName: (args, result) => object } 自定义摘要（覆盖默认） */
+ * opts.summary: { fnName: (args, result) => object } 自定义摘要（覆盖默认）
+ * opts.before: { fnName: () => object } 调用**前**先取一份状态，和结果一起记。
+ *   为什么需要：像 mood.startupDecay() 这种"没有参数、按离线时长扣分"的函数，
+ *   只记结果的话日志里全是 `mood=0`，完全看不出"从 70 扣到了 0、扣了多少"
+ *   —— 审计真实数据时就被这个卡住过（只看到心情恒为 0，查不出原因）。 */
 function summarize(args) {
   if (!args || !args.length) return {};
   const o = {};
@@ -93,13 +97,17 @@ function instrumentOne(modName, fnName, holder, opts) {
   if (typeof orig !== 'function') return;
   if ((opts.skip || []).indexOf(fnName) >= 0) return;
   const custom = (opts.summary || {})[fnName];
+  const beforeFn = (opts.before || {})[fnName];
   holder[fnName] = function () {
     const args = Array.prototype.slice.call(arguments);
     const t0 = mono();
     const base = { fn: fnName };
+    let pre = null;
+    if (beforeFn) { try { pre = redact(beforeFn()); } catch {} }
     const done = (ok, res, err) => {
       try {
         const d = Object.assign({}, base, summarize(args), custom ? custom(args, res) : { r: redact(res) });
+        if (pre) d.before = pre;
         if (!ok) d.err = redact(String((err && err.message) || err));
         d.ms = Math.round(mono() - t0);
         log(modName, ok ? 'call' : 'err', d);

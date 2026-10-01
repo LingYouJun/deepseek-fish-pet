@@ -57,6 +57,20 @@ try {
   }, {
     /* tokens 在裁剪历史时每轮调几十次，纯计算、没有可分析的信息量 */
     tokens: { skip: ['est', 'clip', 'estMessages'] },
+    /* 这两个是"改状态"的核心：记下调用**前**的值，才能看出"扣了多少 / 涨了多少"。
+       （startupDecay 没有参数，不记 before 的话日志里全是 mood=0，查不出原因。） */
+    mood: {
+      before: {
+        adjust: () => { const m = mood.load(); return { affection: m.affection, mood: m.mood }; },
+        startupDecay: () => { const m = mood.load(); return { affection: m.affection, mood: m.mood, lastSeen: m.lastSeen }; },
+      },
+    },
+    stats: {
+      before: {
+        nudge: () => { const a = stats.all(); return { dependency: a.dependency, iq: a.iq, diligence: a.diligence }; },
+        rebaseline: () => stats.all(),
+      },
+    },
   });
   for (const ev of ['store:error', 'stats:changed', 'stats:rebaseline', 'stats:judged',
     'memory:changed', 'memory:permanent', 'memory:skillmem', 'session:start', 'session:end', 'session:turn']) {

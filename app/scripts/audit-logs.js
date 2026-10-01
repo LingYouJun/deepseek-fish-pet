@@ -26,6 +26,10 @@ const sinceMs = (() => {
   return n * unit;
 })();
 const CUT = sinceMs ? Date.now() - sinceMs : 0;
+/* 未来时间戳一律丢弃：修好 t 字段之前写下的旧条目带 +1~2 天偏移、看起来落在未来，
+   而"只排除过去"的过滤**恰好放它们进来** —— 实测那条假的 24 小时 TTS 耗时就是这么
+   在 --since 里阴魂不散的。日志不可能来自未来，超过 5 分钟余量就说明是脏数据。 */
+const FUTURE = Date.now() + 5 * 60000;
 
 const ROOT = path.join(process.env.APPDATA);
 const DIRS = fs.readdirSync(ROOT).filter((d) => /^dayu-pet/.test(d))
@@ -37,6 +41,7 @@ if (!DIRS.length) { console.log('没找到 testlog.jsonl（先跑一次测试）
 
 const groups = {};      // key -> {n, errs, ms[], fields{}, dirs:Set, samples[]}
 let total = 0;
+let futureSkipped = 0;
 const sources = [];
 for (const f of DIRS) {
   const dir = path.basename(path.dirname(f));
@@ -46,6 +51,7 @@ for (const f of DIRS) {
   for (const ln of lines) {
     let e; try { e = JSON.parse(ln); } catch { continue; }
     if (CUT && Number(e.t) < CUT) continue;      // --since 过滤：别让旧账盖住新问题
+    if (Number(e.t) > FUTURE) { futureSkipped++; continue; }   // 脏的未来时间戳（旧格式）
     total++;
     const k = e.mod + '.' + e.ev + (e.fn ? ':' + e.fn : '');
     const g = groups[k] || (groups[k] = { n: 0, errs: 0, ms: [], fields: {}, dirs: new Set(), errSamples: [] });
@@ -73,7 +79,8 @@ const rows = Object.entries(groups).map(([k, g]) => {
 
 console.log('================ 日志审计 ================');
 console.log('  来源: ' + sources.map((s) => s.dir + '(' + s.lines + '行/' + s.kb + 'KB)').join('  '));
-console.log('  总条目 ' + total + '　分组 ' + rows.length + '　过滤: 出现次数 >= ' + MIN + (SINCE ? '　时间窗: 最近 ' + SINCE : ''));
+console.log('  总条目 ' + total + '　分组 ' + rows.length + '　过滤: 出现次数 >= ' + MIN + (SINCE ? '　时间窗: 最近 ' + SINCE : '')
+  + (futureSkipped ? '　丢弃未来时间戳 ' + futureSkipped + ' 条（旧格式脏数据）' : ''));
 console.log('');
 
 /* ---------- 异常规则 ---------- */
@@ -115,6 +122,32 @@ for (const r of rows.filter((x) => x.n >= MIN).sort((a, b) => b.n - a.n).slice(0
     .filter(([k]) => !/^a\d|^v$|^in$|^en$|^zh$/.test(k))
     .slice(0, 3).map(([k, s]) => k + '[' + s.min + '~' + s.max + ']').join(' ');
   console.log('  ' + r.key.padEnd(36) + String(r.n).padStart(5) + String(r.errs || '').padStart(5) + '  ' + ms + ' ' + f);
+}
+
+/* ---------- 状态变化轨迹（有记 before 的那些）----------
+ * 为什么单列一块：像 mood.startupDecay() 这种"没参数、按离线时长扣分"的函数，
+ * 光看结果永远是 `mood=0`，看不出"从多少扣到多少"；有了 before 才能一眼看出
+ * "这次启动因为离线 18 小时被扣了 30 点"。 */
+const changes = [];
+for (const f of DIRS) {
+  let lines = [];
+  try { lines = fs.readFileSync(f, 'utf8').split('\n').filter(Boolean); } catch { continue; }
+  for (const ln of lines) {
+    let e; try { e = JSON.parse(ln); } catch { continue; }
+    if (CUT && Number(e.t) < CUT) continue;
+    if (Number(e.t) > FUTURE) continue;
+    if (!e.before) continue;
+    changes.push({ t: e.t, key: e.mod + '.' + e.fn, before: e.before, after: e.r, arg: e.a0, err: e.err });
+  }
+}
+if (changes.length) {
+  console.log('');
+  console.log('--- 状态变化轨迹（before → after，最近 12 条）---');
+  for (const c of changes.slice(-12)) {
+    const ts = new Date(c.t).toLocaleTimeString('zh-CN', { hour12: false });
+    const b = JSON.stringify(c.before), a = JSON.stringify(c.after);
+    console.log('  ' + ts + '  ' + c.key.padEnd(26) + b + '  →  ' + a + (c.arg ? '   请求=' + JSON.stringify(c.arg) : ''));
+  }
 }
 
 /* ---------- 可疑：非数字字段里的异常 ---------- */
