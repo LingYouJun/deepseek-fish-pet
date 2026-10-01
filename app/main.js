@@ -131,7 +131,8 @@ function buildSystemPrompt(cfg) {
       + 'To create files, put one or more blocks anywhere in your reply:\n'
       + '<<<WRITE: <project>/index.html\n<the complete file content, real line breaks>\n>>>\n'
       + '(several blocks = several files; nothing is written until the user approves)\n'
-      + 'Tools (paths are relative to the project folder): proj_ls|<path>  proj_read|<path>  proj_rm|<path>  proj_open|<path>  proj_run|<path>\n'
+      + 'Tools (paths are relative to the project folder): proj_ls|<path>  proj_read|<path>  proj_rm|<path>  proj_open|<path>  proj_run|<path>  proj_write|<path>||<content>\n'
+      + 'proj_write creates/overwrites one file under the project folder (use it mid-task, where a multi-line WRITE block is awkward). For several files at once, the WRITE block above is still fine.\n'
       + 'proj_run actually EXECUTES a file and returns its stdout/stderr — use it to test and debug your own scripts (.py .js .mjs .cjs .bat .cmd .ps1) and then fix them. For .html use proj_open (browser) instead.\n'
       + 'proj_open opens a file with the default app — for .html that is the browser, which is how you "run" a web app.\n'
       + 'Whenever you build an interface, follow your 「界面风格」 skill. Keep apps self-contained: one HTML file when possible, no CDN, no external images.\n';
@@ -1364,7 +1365,7 @@ function buildContinuePrompt(cfg) {
   const tier = cfg.assistant || 'off';
   let tools = '- open_url|https://...   - open_path|C:\\...   - list_dir|C:\\...   - read_file|C:\\...   - use_skill|<skill id>\n';
   tools += '- skill_ls|<path>   - skill_read|<path>   - skill_write|<path>||<text>   - skill_rm|<path>\n';
-  tools += '- proj_ls|<path>   - proj_read|<path>   - proj_rm|<path>   - proj_open|<path>   - proj_run|<path>\n';
+  tools += '- proj_ls|<path>   - proj_read|<path>   - proj_rm|<path>   - proj_open|<path>   - proj_run|<path>   - proj_write|<path>||<content>\n';
   if (tier === 'web' || tier === 'full') tools += '- web_open|<url>   - web_click|<css selector>   - web_type|<selector>||<text>   - web_read\n';
   if (tier === 'full') tools += '- screen_shot   - screen_look|<question>   - click|x,y   - rclick|x,y   - dclick|x,y   - move|x,y   - drag|x1,y1|x2,y2   - scroll|x,y|delta   - type|<text>   - key|<name>   - game_start|<game+goal+strategy>   - game_stop   - game_status\n';
   return `You are "${p.name || '大肥鱼'}", a desktop pet (${p.personality || '傲娇、温柔、嘴硬'}). Stay in character.
@@ -1521,7 +1522,7 @@ if (!gotLock) {
  * 然后直接调这些函数驱动对话 —— 比走 IPC 少一层，也拿得到内部状态。
  * 正常运行时这些导出没有任何副作用。 */
 module.exports = {
-  buildSystemPrompt, genReply, logTurn,
+  buildSystemPrompt, buildContinuePrompt, genReply, logTurn,
   config, llm, memory, mood, stats, persona, personatags, petactions, speak,
   assistant, skills, projects, tts, asr, testlog, clock,
   win: () => ({ petWin, chatWin }),

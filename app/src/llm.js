@@ -135,11 +135,25 @@ function parseReply(text) {
   }
 
   // 2) 逐行标签格式解析
-  const lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  /* 历史里的紧凑标记**绝不能**被复述出来：实测模型会把
+     "(earlier reply, abridged) ACTION: proj_run|xxx" 整行当成回复吐回来，
+     而 find() 只认行首 → 既匹配不到 en: 也匹配不到 ACTION:
+     → action 丢了、这一整行还被当成 en（回复变成一句垃圾，也没人发现）。 */
+  const ABRIDGED = /^\s*\(earlier reply,\s*abridged\)\s*/i;
+  const lines = raw.split(/\r?\n/).map((l) => l.trim().replace(ABRIDGED, '')).filter(Boolean);
   const find = (labels) => {
     for (const l of lines) {
       const low = l.toLowerCase();
       for (const label of labels) if (low.startsWith(label.toLowerCase())) return l.slice(label.length).trim();
+    }
+    return '';
+  };
+  /* ACTION 不要求在行首：模型常把标记或说明和 ACTION 挤在同一行。
+     只要行内出现 "action:" 就取它后面的内容（真伪交给 assistant.allowed/run 判）。 */
+  const findAction = () => {
+    for (const l of lines) {
+      const m = l.match(/(?:^|\s)action\s*[:：]\s*(.+)$/i);
+      if (m) return m[1].trim();
     }
     return '';
   };
@@ -158,7 +172,7 @@ function parseReply(text) {
   if (c2) choices.push({ en: c2, zh: c2zh, ipa: '' });
 
   // 可选：电脑操作请求 ACTION: tool|arg
-  const actLine = find(['action:', 'action：']);
+  const actLine = findAction();
   let action = null;
   if (actLine) {
     const i = actLine.indexOf('|');
@@ -178,7 +192,16 @@ function parseReply(text) {
   // 可选：隐藏心情行（不显示给用户，只留在历史里给下一轮的自己看）
   const mood = find(['mood:', 'mood：']);
 
-  return { en: en || raw, zh, words, choices, action, mood: mood || '' };
+  /* EN 的兜底**不能直接用 raw**：
+     模型没按格式回答时 raw 兜底是有意义的（总比什么都不说好），
+     但如果这一轮**只有 ACTION 行**，raw 就是 "ACTION: proj_run|calc/mul.py" 这种东西 ——
+     拿它当台词会让她把工具调用念出来（实测就是这么吐出 "(earlier reply, abridged) ACTION: …" 的）。
+     所以：先用"去掉 ACTION 行"的正文兜底；正文空（纯动作轮）就返回空串，让调用方跳过朗读。 */
+  const isAct = (l) => /(?:^|\s)action\s*[:：]/i.test(l);
+  const prose = lines.filter((l) => !isAct(l)).join(' ').trim();
+  const strippedRaw = raw.replace(/(?:^|\r?\n)\s*\(earlier reply,\s*abridged\)\s*/gi, '\n').trim();
+
+  return { en: en || prose || (lines.some((l) => !isAct(l)) ? strippedRaw : ''), zh, words, choices, action, mood: mood || '' };
 }
 
 module.exports = { request, stream, parseReply, DEFAULT_TIMEOUT_MS };

@@ -167,7 +167,14 @@ function clipOut(s, max) {
 function run(rel, timeoutMs) {
   return new Promise((resolve, reject) => {
     const p = safePath(rel);
-    if (!fs.existsSync(p)) return reject(new Error('文件不存在：' + rel));
+    if (!fs.existsSync(p)) {
+      /* 常见误用：把"命令 + 参数"整串当路径传（实测 proj_run|python calc/mul.py）。
+         proj_run 只接受**一个文件路径**，解释器按扩展名自动选 —— 这里直接点破。 */
+      const hint = /\s/.test(String(rel == null ? '' : rel).trim())
+        ? '\n提示：proj_run 只接受**一个文件路径**，不接受 "python 脚本.py" 这种「命令 + 参数」写法（解释器会按扩展名自动选）。'
+        : '';
+      return reject(new Error('文件不存在：' + rel + hint));
+    }
     if (fs.statSync(p).isDirectory()) return reject(new Error('这是个文件夹，不能运行'));
     const ext = path.extname(p).toLowerCase();
     const cands = RUNNERS[ext];
@@ -193,7 +200,10 @@ function run(rel, timeoutMs) {
     const tailNote = () => (cut ? '\n（输出过多，已提前停止累积）' : '');
 
     const tryAt = (i) => {
-      if (i >= cands.length) return reject(new Error('没找到可用的解释器（试过：' + cands.map((c) => c[0]).join(' / ') + '）'));
+      if (i >= cands.length) {
+        return reject(new Error('没找到可用的解释器（试过：' + cands.map((c) => c[0]).join(' / ') + '）—— '
+          + '这台机器上可能没装对应的运行时。改成 .js 最稳（Node 一定有），也可以写 .bat。'));
+      }
       const [cmd, mk] = cands[i];
       let child;
       try {
@@ -213,6 +223,15 @@ function run(rel, timeoutMs) {
       });
       child.on('close', (code) => {
         clearTimeout(timer);
+        if (done) return;
+        /* Windows 上"命令找不到"**不一定**报 ENOENT：
+           应用商店版 python 的 App Execution Alias 会让进程**正常启动**、然后立刻以 **9009** 退出，
+           而且一点输出都没有。以前这种就直接当"运行出错（退出码 9009）"报回去 ——
+           模型看不出任何原因，只会反复重试同一条死路（实测 6 步里 5 步撞在这上面，
+           而它明明可以改用 .js）。这里按"解释器缺失"处理，换下一个候补；
+           全都缺才抛出上面那条带建议的错误。POSIX 下对应的是 127。 */
+        const interpreterMissing = (code === 9009 || code === 127) && !String(out).trim();
+        if (interpreterMissing) { out = ''; cut = false; return tryAt(i + 1); }
         finish({ path: String(rel), code, timeout: false, ms: Date.now() - t0, output: clipOut(out) + tailNote() || '(程序没有任何输出)' });
       });
     };

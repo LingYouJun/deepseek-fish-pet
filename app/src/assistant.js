@@ -16,7 +16,7 @@ const personatags = require('./personatags');
 const TOOL_TIER = {
   list_dir: 'read', read_file: 'read', use_skill: 'read', skill_ls: 'read', skill_read: 'read',
   proj_ls: 'read', proj_read: 'read', tag_list: 'read',
-  open_path: 'normal', open_url: 'normal', skill_write: 'normal', skill_rm: 'normal', proj_rm: 'normal', proj_open: 'normal', proj_run: 'normal',
+  open_path: 'normal', open_url: 'normal', skill_write: 'normal', skill_rm: 'normal', proj_rm: 'normal', proj_open: 'normal', proj_run: 'normal', proj_write: 'normal',
   tag_set: 'normal', tag_rm: 'normal',
   web_open: 'web', web_click: 'web', web_type: 'web', web_read: 'web',
   screen_shot: 'full', screen_look: 'full',
@@ -232,6 +232,21 @@ async function run(tool, arg) {
   if (tool === 'skill_rm') {
     const r = skills.remove(arg || '');
     return '🗑 已删除：' + r.path;
+  }
+  /* 项目文件写入。
+   * 为什么必须单独开一个工具：以前项目文件**只能**靠回复里的 <<<WRITE: 路径 …>>> 块创建，
+   * 而那个语法只写在"首轮系统提示词"里 —— 多步任务续跑用的是精简提示词（buildContinuePrompt），
+   * 里面完全没提 WRITE 块。于是续跑阶段她手上**唯一像写入的工具就是 skill_write**：
+   * 实测她把算乘法的 `calc/mul.py` 写进了**技能文件夹**，还返回"已写入技能文件"一路成功、
+   * 不报任何错 —— 属于"看着正常其实写错地方"。补上 proj_write 后续跑阶段也有正确落盘方式。 */
+  if (tool === 'proj_write') {
+    const s = String(arg || '');
+    const i = s.indexOf('||');
+    if (i < 0) throw new Error('格式：proj_write|子路径/文件.py||文件内容');
+    const rel = s.slice(0, i).trim();
+    const content = s.slice(i + 2).replace(/\\n/g, '\n');   // ACTION 只能一行，允许用 \n 写换行
+    const r = projects.writeOne(rel, content);
+    return '💾 已写入项目文件：' + r.path + '（' + r.bytes + ' 字节）';
   }
 
   /* ---------------- 人格词条（她自己的"人格词典"，也是将来换立绘的 key） ---------------- */
