@@ -1539,8 +1539,8 @@ if (!gotLock) {
  * 然后直接调这些函数驱动对话 —— 比走 IPC 少一层，也拿得到内部状态。
  * 正常运行时这些导出没有任何副作用。 */
 module.exports = {
-  buildSystemPrompt, buildContinuePrompt, genReply, logTurn,
+  buildSystemPrompt, buildContinuePrompt, genReply, logTurn, createChat, createPet,
   config, llm, memory, mood, stats, persona, personatags, petactions, speak,
-  assistant, skills, projects, tts, asr, testlog, clock,
+  assistant, skills, projects, tts, asr, testlog, clock, userinput,
   win: () => ({ petWin, chatWin }),
 };
