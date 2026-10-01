@@ -11,6 +11,14 @@
  *
  * 注意：`new Date()`（不带参数）走的是系统时钟，不受影响 —— 这是故意的：
  *   testlog/debug 的时间戳保持真实时间，方便对照分析。
+ *
+ * ⚠️ 用 Date.now() 做**耗时测量**或**记录日志时间戳**的地方会受影响（三个真实踩到的坑）：
+ *   1. 跨天那一瞬间正在跑的调用，算出来是 +86400000ms 的假耗时
+ *      → testlog / projects.run 已改用单调时钟 performance.now()
+ *   2. 日志条目如果记 Date.now() 会带上偏移、按时间窗审计就筛不动
+ *      → testlog 的 t 字段改用 new Date().getTime()（真实墙钟），另存 td 供对照
+ *   3. dsh.js 拿 Date.now() 去比**文件 mtime**（真实时钟）→ 测试里会误判"很久没同步"
+ *      （生产环境偏移恒为 0，无影响）
  */
 const { app } = require('electron');
 const path = require('path');

@@ -182,7 +182,10 @@ function run(rel, timeoutMs) {
       return reject(new Error('不支持直接运行 ' + (ext || '（无扩展名）') + '。能运行：' + Object.keys(RUNNERS).join(' / ') + '（网页 .html 请用 proj_open 打开）'));
     }
     const cwd = path.dirname(p);
-    const t0 = Date.now();
+    /* 耗时用单调时钟：clock.js 会劫持 Date.now() 做跨天测试，
+       否则"脚本在跑的过程中时钟平移了一天"会得出 24 小时这种假耗时。 */
+    const mono = () => (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now());
+    const t0 = mono();
     const limit = Math.max(3000, Math.min(300000, Number(timeoutMs) || 60000));
     let out = '', done = false, cut = false;
     const finish = (v) => { if (!done) { done = true; resolve(v); } };
@@ -211,7 +214,7 @@ function run(rel, timeoutMs) {
       } catch (e) { return tryAt(i + 1); }
       const timer = setTimeout(() => {
         killTree(child);
-        finish({ path: String(rel), code: -1, timeout: true, ms: Date.now() - t0, output: clipOut(out) + tailNote() + '\n（超过 ' + Math.round(limit / 1000) + ' 秒，已连子进程一起强制结束）' });
+        finish({ path: String(rel), code: -1, timeout: true, ms: Math.round(mono() - t0), output: clipOut(out) + tailNote() + '\n（超过 ' + Math.round(limit / 1000) + ' 秒，已连子进程一起强制结束）' });
       }, limit);
       child.stdout.on('data', take);
       child.stderr.on('data', take);
@@ -232,7 +235,7 @@ function run(rel, timeoutMs) {
            全都缺才抛出上面那条带建议的错误。POSIX 下对应的是 127。 */
         const interpreterMissing = (code === 9009 || code === 127) && !String(out).trim();
         if (interpreterMissing) { out = ''; cut = false; return tryAt(i + 1); }
-        finish({ path: String(rel), code, timeout: false, ms: Date.now() - t0, output: clipOut(out) + tailNote() || '(程序没有任何输出)' });
+        finish({ path: String(rel), code, timeout: false, ms: Math.round(mono() - t0), output: clipOut(out) + tailNote() || '(程序没有任何输出)' });
       });
     };
     tryAt(0);

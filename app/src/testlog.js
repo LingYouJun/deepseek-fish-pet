@@ -61,10 +61,23 @@ function log(mod, ev, data) {
   try {
     rotateChecked++;
     if (rotateChecked % 500 === 1) rotateIfNeeded();
-    const line = JSON.stringify(Object.assign({ t: Date.now(), i: ++seq, mod: String(mod), ev: String(ev) }, redact(data || {})));
+    /* t  = **真实墙钟**：new Date() 不带参数走的是系统时钟，**不受 clock.js 劫持 Date.now() 影响**。
+     *      日志必须按真实时间排，否则跨天测试里写下的条目会带上 +1~2 天的偏移、
+     *      看起来落在"未来"，按时间窗审计（audit-logs.js --since）就完全筛不动 —— 实测踩到过。
+     * td = 应用内时间（测试里可能被平移），用来和 t 对照，平时两者相等。 */
+    const line = JSON.stringify(Object.assign({
+      t: new Date().getTime(), td: Date.now(), i: ++seq, mod: String(mod), ev: String(ev),
+    }, redact(data || {})));
     fs.appendFileSync(file(), line + '\n');
   } catch { disabled = true; }        // 日志坏了不影响主流程
 }
+
+/* 耗时用**单调时钟** performance.now()，不用 Date.now()。
+ * 原因：clock.js 会劫持 Date.now() 来实现"跨天测试不改系统时间"，
+ * 于是"开始记 t0 → 期间时钟平移了 1 天 → 结束算差"就会得出 86401541ms 这种
+ * 24 小时的假耗时（审计日志时真的抓到了这条，一度以为 TTS 卡死）。
+ * performance.now() 不受影响，且本来就是测耗时的正确工具。 */
+const mono = () => (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now());
 
 /* ---------------- 自动埋点 ----------------
  * opts.skip: 跳过的函数名数组（高频且无信息量的，比如 tokens.est）
@@ -82,13 +95,13 @@ function instrumentOne(modName, fnName, holder, opts) {
   const custom = (opts.summary || {})[fnName];
   holder[fnName] = function () {
     const args = Array.prototype.slice.call(arguments);
-    const t0 = Date.now();
+    const t0 = mono();
     const base = { fn: fnName };
     const done = (ok, res, err) => {
       try {
         const d = Object.assign({}, base, summarize(args), custom ? custom(args, res) : { r: redact(res) });
         if (!ok) d.err = redact(String((err && err.message) || err));
-        d.ms = Date.now() - t0;
+        d.ms = Math.round(mono() - t0);
         log(modName, ok ? 'call' : 'err', d);
       } catch {}
     };
