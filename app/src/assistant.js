@@ -722,9 +722,29 @@ async function runInner(tool, arg) {
       catch (e) { one = '（这一帧视觉失败：' + ((e && e.message) || e) + '）'; }
       timeline.push('【第 ' + (k + 1) + ' 帧 · ' + (Math.round((k * ivMs) / 100) / 10) + 's】' + String(one).replace(/\s+/g, ' ').trim());
     }
-    return '👀 连续看了 ' + frames.length + ' 帧（约 ' + secs + ' 秒，间隔 ' + ivMs + 'ms），时间线：\n'
-      + timeline.join('\n')
-      + '\n帧图已存在 shots/ 下（watch-' + stamp + '-NN.jpg）。';
+    /* 【回执必须压缩】实测 40 帧 × 每帧约 200 字 ≈ 8000 字，回执被上层截断 ——
+       她只看到前两帧，整个"看主人演示"就白做了。所以：
+       ① 完整时间线写进文件（她想细看可以 read_file）；
+       ② 回执只给"**画面真的变了**的那些帧"（连续相同的描述合并计数），并硬性截到 3000 字以内。 */
+    const full = timeline.join('\n');
+    const tpath = path.join(shotsDir(), 'watch-' + stamp + '-timeline.txt');
+    try { fs.writeFileSync(tpath, full, 'utf8'); } catch {}
+    const compact = [];
+    let lastDesc = '', dup = 0;
+    for (const line of timeline) {
+      const desc = line.replace(/^【[^】]*】/, '');
+      if (desc === lastDesc) { dup++; continue; }
+      if (dup) compact[compact.length - 1] += '（之后 ' + dup + ' 帧画面基本没变）';
+      dup = 0; lastDesc = desc;
+      compact.push(line);
+    }
+    if (dup) compact[compact.length - 1] += '（之后 ' + dup + ' 帧画面基本没变）';
+    let body = compact.join('\n');
+    if (body.length > 3000) body = body.slice(0, 3000) + '\n…（完整时间线见文件，内容太长这里截断了）';
+    return '👀 连续看了 ' + frames.length + ' 帧（约 ' + secs + ' 秒，间隔 ' + ivMs + 'ms）。'
+      + '以下是**画面真正发生变化**的那些帧（连续没变的已合并）：\n' + body
+      + '\n\n完整时间线：' + tpath + '（需要逐帧细看可以用 read_file 读它）'
+      + '\n帧图：shots/watch-' + stamp + '-NN.jpg';
   }
   if (tool === 'find_template_scroll') {
     /* 【滚动列表里找模板】模板匹配的三个天生短板之一：目标在列表里、当前屏看不到。

@@ -1466,7 +1466,7 @@ ipcMain.handle('assistant:run', async (_e, a) => {
   /* 看屏幕/截图时也要让开：她自己的立绘窗是 alwaysOnTop，会盖在游戏上面。
      实测她抱怨过"屏幕上是你的对话窗把游戏盖住了"（那是外部窗口），
      而她自己的立绘同样会挡 —— 抓帧前统一藏起来，抓完放回。 */
-  const LOOK_TOOLS = ['screen_look', 'screen_shot'];
+  const LOOK_TOOLS = ['screen_look', 'screen_shot', 'watch_screen'];   // watch_screen 也要让开：实测它拍到的全是盖在游戏上的聊天窗
   let petHiddenForLook = false;
   if (LOOK_TOOLS.includes(String(a && a.tool)) && petWin && !petWin.isDestroyed() && petWin.isVisible()) {
     try { petWin.hide(); petHiddenForLook = true; markPetHidden('look'); await new Promise((r2) => setTimeout(r2, 350)); } catch {}
@@ -1476,7 +1476,7 @@ ipcMain.handle('assistant:run', async (_e, a) => {
      实测她记不住（截图里全是她自己的对话窗，游戏/网页被挡着，读不到也点不准）。
      这件事不该靠她记 —— 由程序替她做：所有"看/操作屏幕"的工具，
      执行前把对话窗最小化，执行完恢复。否则她每看一眼屏幕都是看自己。 */
-  const SCREEN_TOOLS = ['screen_look', 'screen_shot', 'click', 'rclick', 'dclick', 'move', 'drag', 'scroll', 'type', 'key', 'focus_window'];
+  const SCREEN_TOOLS = ['screen_look', 'screen_shot', 'click', 'rclick', 'dclick', 'move', 'drag', 'scroll', 'type', 'key', 'focus_window', 'watch_screen'];
   /* 【主人一动鼠标她就停手】用户要求："我动鼠标时她停止，3秒检测一次，不然她一直顶窗口"。
      机制本来就有（src/userinput.js，游戏助手早就在用），但**没接到助手的动作上** ——
      所以她做任务时会一直抢光标、反复把窗口顶到最前，跟主人抢画面。
