@@ -1372,6 +1372,15 @@ ipcMain.handle('proj:openFolder', async (_e, rel) => {
 /* ---------------- 隐藏数值：每轮/每任务的小微调 ---------------- */
 ipcMain.handle('stats:task', (_e, o) => {
   const ok = !!(o && o.ok);
+  /* 【记录停止原因】照 DSH dsh-agent-loop 的做法，循环结束时带一个**显式的停止原因**
+     （completed / step-budget / look-streak / no-result / no-next / aborted / error）。
+     以前只知道"结束了"，查不出"为什么结束" —— 今天那次"看→又想看"自转就是因此才要翻代码找根因。
+     现在落到 testlog 里，可以直接统计"她都是因为什么停的"。 */
+  const reason = String((o && o.stopReason) || '');
+  /* ⚠️ testlog.log 的签名是**三个位置参数** log(mod, ev, data) ——
+     第一版我写成了 log({mod,ev,...})（一个对象），落盘成了 {"mod":"[object Object]","ev":"undefined"} 的垃圾条目，
+     是去读日志文件才发现的（§C 那条 "看不到" 就是它）。 */
+  if (reason) { try { testlog.log('loop', 'stop', { reason, ok }); } catch {} }
   const out = [];
   if (ok) {
     out.push(stats.nudge('iq', 0.3, 'task-ok', '独立办成了一件事'));
@@ -1379,7 +1388,7 @@ ipcMain.handle('stats:task', (_e, o) => {
   } else {
     out.push(stats.nudge('iq', -0.5, 'task-fail', '事情没办成'));
   }
-  return { ok: true, applied: out.filter((x) => x && !x.skipped) };
+  return { ok: true, applied: out.filter((x) => x && !x.skipped), stopReason: reason };
 });
 ipcMain.handle('stats:get', () => ({ all: stats.all(), hidden: stats.HIDDEN, log: stats.recentLog(40), stepBudget: stats.stepBudget() }));
 

@@ -773,7 +773,9 @@ async function refreshBudget() {
   try { const s = await window.petAPI.statsGet(); if (s && s.stepBudget) stepBudget = s.stepBudget; } catch {}
 }
 function reportTask() {
-  try { window.petAPI.statsTask({ ok: !taskFailed }); } catch {}
+  /* 把**显式的停止原因**一并上报（completed / step-budget / look-streak / no-result / no-next / aborted / error）。
+     以前只知道"任务结束了"，查不出为什么 —— 今天那次自转就是因此才要翻代码找根因。 */
+  try { window.petAPI.statsTask({ ok: !taskFailed, stopReason: taskStopReason }); } catch {}
   refreshBudget();
 }
 
@@ -789,22 +791,35 @@ function reportTask() {
 const LOOK_ONLY_TOOLS = ['screen_look', 'screen_shot', 'windows_list', 'template_list', 'find_template', 'find_text', 'find_template_scroll'];
 const LOOK_STREAK_MAX = 6;
 let lookStreak = 0;
+/* 【主循环驱动器】停止条件的判定收进 renderer/loop.js（照 DSH dsh-agent-loop 的显式停止原因）。
+   上面那两个旧变量保留：lookStreak 仍用于显示/兼容，判定则统一走 LOOP。
+   每次任务开始时重建 —— 这样步数预算（stepBudget 会随 IQ 变化）能按当前值生效。 */
+let LOOP = null;
+let taskStopReason = null;
+function newLoop() {
+  if (!window.PetLoop) return null;
+  return window.PetLoop.create({ lookOnlyTools: LOOK_ONLY_TOOLS, lookStreakMax: LOOK_STREAK_MAX, stepBudget: stepBudget });
+}
 async function runTask(msgEl, action, depth) {
-  if (depth === 1) { taskFailed = false; lookStreak = 0; }
-  if (depth > stepBudget) { addSys('⏸ 已达到本次任务的步数上限（' + stepBudget + '），先停下来'); reportTask(); return; }
-  if (LOOK_ONLY_TOOLS.indexOf(action.tool) >= 0) {
-    lookStreak++;
-    if (lookStreak > LOOK_STREAK_MAX) {
-      addSys('⏸ 连续 ' + lookStreak + ' 次都只是在看屏幕（' + action.tool + '）、没有任何实际动作，先停下来。'
-        + '这通常意味着卡在"看→再看→再看"的自转里 —— 需要换个办法（点一下试试、放大看清、裁模板、退回上一层），或者告诉主人卡在哪。');
+  if (depth === 1) { taskFailed = false; lookStreak = 0; taskStopReason = null; LOOP = newLoop(); }
+  if (LOOP) {
+    const d = LOOP.beforeStep({ tool: action.tool });
+    if (d.kind === 'stop') {
+      taskStopReason = d.reason;
+      addSys(d.message);
       reportTask();
       return;
     }
-  } else {
-    lookStreak = 0;
+    lookStreak = LOOP.stats().lookStreak;   // 仅用于界面显示，判定已在 LOOP 里
+  } else if (depth > stepBudget) {
+    /* 兜底：万一 loop.js 没加载上，仍然保留旧的步数闸门（宁可保守，也不能无限跑） */
+    taskStopReason = 'step-budget';
+    addSys('⏸ 已达到本次任务的步数上限（' + stepBudget + '），先停下来');
+    reportTask();
+    return;
   }
   const r = await execAction(action);
-  if (!r) { reportTask(); return; }   // 视觉一步到位：工具（如 screen_look）直接给出了下一步动作，就跳过文本模型，直接执行
+  if (!r) { if (LOOP) taskStopReason = LOOP.finish('no-result').reason; reportTask(); return; }
   if (r.action) {
     const box = document.createElement('div');
     box.className = 'msg sys';
@@ -816,14 +831,15 @@ async function runTask(msgEl, action, depth) {
   let next;
   try {
     next = await window.petAPI.chatContinue({ tool: action.tool, arg: action.arg, result: r.result });
-  } catch (e) { addErr('模型继续失败：' + e.message); reportTask(); return; }
-  if (!next || !next.en) { reportTask(); return; }
+  } catch (e) { if (LOOP) taskStopReason = LOOP.fail(e).reason; addErr('模型继续失败：' + e.message); reportTask(); return; }
+  if (!next || !next.en) { if (LOOP) taskStopReason = LOOP.finish('no-next').reason; reportTask(); return; }
   const pe = addPet(next.en, next.zh, next.words);
   renderChoices(next.choices);
   if (next.action) {
     // 中间步骤：只显示不朗读，继续下一步
     renderAction(pe, next.action, () => runTask(pe, next.action, depth + 1), () => {});
   } else {
+    if (LOOP) taskStopReason = LOOP.finish('completed').reason;
     speak(next.en);   // 最后一句才朗读
     reportTask();
   }

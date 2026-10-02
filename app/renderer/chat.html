@@ -242,6 +242,8 @@
 <script src="asr-recorder.js"></script>
 <!-- 发音评测（"像不像"）：MFCC + DTW，纯 JS 零依赖，参数全部来自 config.pron -->
 <script src="dtw.js"></script>
+<!-- agent 主循环驱动器：把"能不能再走一步 / 为什么停下"收拢成显式判定（必须排在 chat.js 前面） -->
+<script src="loop.js"></script>
 <script src="chat.js"></script>
 </body>
 </html>
