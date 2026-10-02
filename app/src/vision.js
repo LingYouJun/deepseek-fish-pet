@@ -32,7 +32,11 @@ async function describe(cfg, imageDataUrl, question, detail) {
           role: 'user',
           content: [
             { type: 'text', text: question },
-            { type: 'image_url', image_url: { url: imageDataUrl, detail: detail || 'low' } },
+            /* ⚠️ 默认从 'low' 改成 'high'：卡片上的干员名只有 ~15px，low 会把它压没。
+         实测（公招计算器找水月）：high 能一次读准，low 连名字都糊。
+         assistant.js 那条路径本来就传 cfg.visionDetail || 'high'，只有直接调 describe 的
+         地方会吃到这个默认值 —— 改成 high 免得以后踩。 */
+            { type: 'image_url', image_url: { url: imageDataUrl, detail: detail || 'high' } },
           ],
         }],
         /* ⚠️ 必须显式声明 thinking —— 和 llm.js 一样。
