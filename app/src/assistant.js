@@ -396,14 +396,22 @@ async function runInner(tool, arg) {
            + '**不要自己换算成整屏坐标，也不要用 1920x1080 这个数字** —— 换算由程序做。'
            + '（你要点击时请用 find_text|<文字> 或 find_template|<名字> 让程序去精确定位，别直接给像素坐标。）')
         : '';
-      const q = (arg || '看看屏幕') + _zoomNote + `\n\n【读坐标的方法】图上画了**刻度网格**（每格 240x135），边上黄色数字就是那条线的像素坐标（左上角写着 0,0，右下角写着 ${CAPW},${CAPH}）。请**顺着网格读出**目标在哪一格，再判断它在格内的相对位置 —— 不要凭感觉估：实测凭感觉在贴近屏幕边缘时能差 300 像素。
+      const q = (arg || '看看屏幕') + _zoomNote + `\n\n【怎么告诉我位置】用**归一化坐标**：左上角是 (0,0)，右下角是 (1,1)，正中央是 (0.5,0.5)。
+不要给像素值，也不要自己换算 —— 换算由程序做。
+（以前这里是让模型"顺着刻度网格读像素坐标"，实测那套又绕又偏：同一个卡片它会报高整整一行 ✗。
+  改成归一化坐标之后，实测同一个模型一次命中，光标精准落在目标名字上 ✓。）
 
 【输出要求】先用一句中文说明你的判断（**说清你看到了什么、那个东西叫什么名字**）。
-只有在你能**说出目标的文字名字**、并且确实需要程序去点它时，才在最后单独输出一行：
-  ACTION: find_text|<目标上的文字>     或     ACTION: find_template|<已存的模板名>
+然后，按需要单独输出一行：
+· 需要把**光标移到**某个东西上（只是悬停/指出位置，不点击）：
+    ACTION: move_norm|<nx>,<ny>        例如 ACTION: move_norm|0.334,0.424
+· 需要程序去**点击**某个能说出名字的东西时（更稳，因为程序会自己精确定位并复核）：
+    ACTION: find_text|<目标上的文字>     或     ACTION: find_template|<已存的模板名>
 ⚠️ **绝对不要输出带像素坐标的点击**（如 click|960,540、clickz|400,200、move|x,y、drag|x,y|x,y）——
 实测这么干会点错地方（在选人面板上点屏幕正中央 = 点到某张干员卡 = 把它选上/取消），
-把已经做好的选择毁掉。说不出名字就**只描述、不要给 ACTION**，让主人/自己下一步再看一次。`;
+把已经做好的选择毁掉。
+（move_norm 只**移动光标**、不按下任何键，所以安全；click 这类必须走 find_text/find_template。）
+说不出名字就**只描述、不要给 ACTION**，让主人/自己下一步再看一次。`;
       /* tV 必须声明在 try **外面**：catch 里也要用它算耗时，
          写在 try 内的话失败路径会 ReferenceError（实测被 §6 那条测试抓住）。 */
       let tV = tick();
@@ -412,7 +420,35 @@ async function runInner(tool, arg) {
         timing.visionMs = tick() - tV;
         usedVision = true;
         const m = text.match(/ACTION\s*[:：]\s*([a-z_]+)\s*\|\s*(.+)/i);
-        if (m) {
+        if (m && m[1].trim().toLowerCase() === 'move_norm') {
+          /* ★★ ACTION: move_norm|<nx>,<ny> —— 归一化坐标，只移动光标、不点击 ★★
+             为什么单独开这一条：今天实测（在公招计算器上找水月）——
+               让视觉模型给**归一化坐标**，它一次命中，光标精准落在目标名字上 ✓；
+               而让它"顺着刻度网格读像素坐标"，同一个卡片它报高了整整一行 ✗。
+             为什么只允许"移动"、不允许"点击"：见下面那段事故注释 ——
+               带像素坐标的点击曾经把已经选好的干员**取消掉**（屏幕正中央正好是一张卡）。
+               移动光标没有副作用，所以可以放心交给它。 */
+          const nm = String(m[2]).match(/(-?\d*\.?\d+)\s*[,，]\s*(-?\d*\.?\d+)/);
+          if (nm) {
+            const nx = Number(nm[1]), ny = Number(nm[2]);
+            if (Number.isFinite(nx) && Number.isFinite(ny) && nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1) {
+              const _s = require('./input').space();
+              const px = Math.round(nx * _s.w), py = Math.round(ny * _s.h);
+              try {
+                require('./input').move(px, py);
+                dbg('[look] move_norm ' + nx + ',' + ny + ' → 屏幕 (' + px + ',' + py + ')');
+                text += '\n\n【程序已执行】把光标移到了归一化坐标 (' + nx + ',' + ny + ') 对应的屏幕位置 ('
+                  + px + ',' + py + ') —— 只是悬停，没有点击。';
+              } catch (e) {
+                text += '\n\n【程序未能移动光标】' + ((e && e.message) || e);
+              }
+            } else {
+              text += '\n\n【move_norm 被忽略】归一化坐标必须都在 0~1 之间，收到的是 (' + nm[1] + ',' + nm[2] + ')。';
+            }
+          } else {
+            text += '\n\n【move_norm 被忽略】没解析出两个数字。';
+          }
+        } else if (m) {
           const t = m[1].trim().toLowerCase();
           /* ★★ 只接受"有可验证目标"的动作 —— **裸坐标的点击一律拒绝** ★★
              实测事故链（用户的判断完全正确）：

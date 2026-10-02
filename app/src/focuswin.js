@@ -87,8 +87,13 @@ public class FW2 {
   public static uint Dpi() { return GetDpiForSystem(); }
   public static string Cursor() { PT pt; GetCursorPos(out pt); return pt.X + "," + pt.Y; }
   /* ★ 按一下 ESC：用来收掉"空按 Alt"可能打开的开始菜单/菜单栏 ★
-     不加这一下的话，连续聚焦多个窗口会在屏幕上留下一个开始菜单（实测踩过）。 */
-  public static void SendEsc() { keybd_event(0x1B, 0, 0, UIntPtr.Zero); Thread.Sleep(20); keybd_event(0x1B, 0, 2, UIntPtr.Zero); }
+     ⚠️ 这里必须写全 System.Threading.Thread —— 这个 C# 类没有 using System.Threading;，
+        写成 Thread.Sleep 会让 Add-Type 编译失败（当前上下文中不存在名称 Thread），
+        而失败之后 listWindows **静默返回 0 个窗口**、一点都不报错 ✗。
+        （实测连踩两次：先是 UIntPtr/IntPtr 类型不符，然后是 Thread 找不到。）
+     ⚠️ 另外：这段注释里**不能出现反引号** —— 整个 PS 脚本是 JS 的模板串（反引号），
+        注释里再写一对反引号会把 JS 串截断，直接语法错误（刚踩过）。 */
+  public static void SendEsc() { keybd_event(0x1B, 0, 0, IntPtr.Zero); System.Threading.Thread.Sleep(20); keybd_event(0x1B, 0, 2, IntPtr.Zero); }
   public static bool Cloaked(IntPtr h) { int v = 0; try { DwmGetWindowAttribute(h, 14, out v, 4); } catch {} return v != 0; }
   public static string TitleOf(IntPtr h) { var sb = new StringBuilder(400); GetWindowTextW(h, sb, 400); return sb.ToString(); }
   public static IntPtr Fg() { return GetForegroundWindow(); }
