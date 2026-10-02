@@ -243,10 +243,30 @@ async function target(title, opts) {
   /* ⚠️ 前台那一个【还必须可见】：实测 UWP 应用（计算器）会有一个 visible=false 的宿主窗口，
      而它居然是 GetForegroundWindow() 的返回值 —— 不加 visible 条件就会挑中它，
      随后 UIA 查不到元素树（NOTFOUND）、点击也落不到真正可见的窗口上。 */
-  let win = (list.foregroundHwnd ? cands.find((w) => w.hwnd === list.foregroundHwnd && w.visible !== false) : null)
+  /* ★ "真的在屏幕上"的判定：visible && !cloaked && !iconic ★
+     实测（2026-10-03）：同机有 8 个标题都含「可露希尔」的 Edge 窗口，
+     **全部 visible=否**，其中一个还是 cloaked=是；屏幕上其实只有桌面和我的窗口。
+     而 target() 因为"前台 HWND 匹配"挑中了其中一个 —— 前台也会是这种幽灵窗口 ✗。
+     DWM 的 cloaked = 被合成器隐藏（UWP 挂起 / 别的虚拟桌面 / 刚关掉的 Edge），
+     Win32 的 IsWindowVisible 对这种窗口照样返回 true，只有它才靠得住。 */
+  const reallyShown = (w) => w.visible !== false && !w.cloaked && !w.iconic;
+  let win = (list.foregroundHwnd ? cands.find((w) => w.hwnd === list.foregroundHwnd && reallyShown(w)) : null)
     || cands.find((w) => fgTitle && normT(w.title) === normT(fgTitle) && w.visible !== false)
-    || cands.filter((w) => w.visible !== false && !w.iconic).sort((a, b) => b.w * b.h - a.w * a.h)[0]
-    || cands.sort((a, b) => b.w * b.h - a.w * a.h)[0];
+    || cands.filter(reallyShown).sort((a, b) => b.w * b.h - a.w * a.h)[0]
+    || null;
+  /* ★ 兜底不能再退到"不可见的窗口" ★
+     实测事故：浏览器其实已经被关掉了，只剩一个 visible=false 的残留 Edge 窗口，
+     而旧代码的最后一道兜底是"按面积取第一个匹配" —— 它不看 visible，
+     于是 target() 报 ok 并返回那个隐藏窗口的矩形，后面所有定位/点击全建在错的位置上 ✗。
+     没有"可见且非最小化"的匹配时，就如实失败。 */
+  if (!win) {
+    return {
+      ok: false, reason: 'window-not-visible',
+      candidates: cands.map((w) => ({ title: w.title, visible: w.visible, iconic: w.iconic, cloaked: w.cloaked })),
+      message: '找到 ' + cands.length + ' 个标题匹配的窗口，但【没有一个可见且非最小化】——'
+        + '目标大概是关掉了，或者被 DWM 隐藏着（cloaked）。先把它打开/切到前台，再继续。'
+    };
+  }
   if (!win) return { ok: false, reason: 'window-not-found', candidates: list.windows.map((w) => w.title).slice(0, 20) };
   const f = await ensureForeground(want, o);
   /* ★★ 前提断言：目标不能被"压在它上面的窗口"盖住 ★★

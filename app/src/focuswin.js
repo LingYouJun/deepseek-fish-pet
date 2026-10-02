@@ -56,6 +56,12 @@ public class FW2 {
   [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out R r);
   [DllImport("user32.dll")] public static extern int GetWindowLong(IntPtr h, int i);
+  /* ★ DWM 的 CLOAKED 属性 —— 判断窗口"到底有没有真的显示在屏幕上" ★
+     实测事故：浏览器明明已经关掉了，桌面上只剩它的一条 URL 残影，
+     而 Win32 的 IsWindowVisible() 仍返回 true，于是 target() 报 ok、
+     后续所有 OCR/定位/点击全建在一个并不存在的窗口上 ✗。
+     Windows 对"被 DWM 隐藏的窗口"（UWP 挂起、其他虚拟桌面、刚关闭的 Edge）会置这个标志。 */
+  [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr h, int attr, out int val, int size);
   [DllImport("user32.dll")] static extern void keybd_event(byte vk, byte scan, uint f, IntPtr extra);
   [DllImport("user32.dll")] static extern IntPtr SetProcessDpiAwarenessContext(IntPtr ctx);
   /* ★ 光标真值 ★ 实测事故：input.move() 返回 true，而 Win32 GetCursorPos 一查差了 551px ——
@@ -80,6 +86,7 @@ public class FW2 {
   }
   public static uint Dpi() { return GetDpiForSystem(); }
   public static string Cursor() { PT pt; GetCursorPos(out pt); return pt.X + "," + pt.Y; }
+  public static bool Cloaked(IntPtr h) { int v = 0; try { DwmGetWindowAttribute(h, 14, out v, 4); } catch {} return v != 0; }
   public static string TitleOf(IntPtr h) { var sb = new StringBuilder(400); GetWindowTextW(h, sb, 400); return sb.ToString(); }
   public static IntPtr Fg() { return GetForegroundWindow(); }
 
@@ -95,7 +102,8 @@ public class FW2 {
         uint pid; GetWindowThreadProcessId(h, out pid);
         All.Add(t + " [" + r.L + "," + r.T + " " + (r.Rr - r.L) + "x" + (r.B - r.T) + "] hwnd=" + h + " pid=" + pid
                 + " iconic=" + IsIconic(h) + " visible=" + IsWindowVisible(h)
-                + " topmost=" + ((GetWindowLong(h, -20) & 0x8) != 0) + " z=" + All.Count);
+                + " topmost=" + ((GetWindowLong(h, -20) & 0x8) != 0)
+                + " cloaked=" + Cloaked(h) + " z=" + All.Count);
       }
       if (Want.Length > 0 && t.IndexOf(Want, StringComparison.OrdinalIgnoreCase) >= 0) {
         Hit = h; HitTitle = t; return false;
@@ -179,12 +187,12 @@ async function listWindows() {
   for (const line of out.split(/\r?\n/)) {
     let m = line.match(/^DPI=(\d+)\s+dpiCtxOk=(\w+)/);
     if (m) { dpi = Number(m[1]); dpiOk = m[2] === 'True'; continue; }
-    m = line.match(/^WIN (.*?)\s*\[(-?\d+),(-?\d+)\s+(\d+)x(\d+)\]\s*hwnd=(\d+)\s*pid=(\d+)\s*iconic=(\w+)\s*visible=(\w+)\s*topmost=(\w+)\s*z=(\d+)/);
+    m = line.match(/^WIN (.*?)\s*\[(-?\d+),(-?\d+)\s+(\d+)x(\d+)\]\s*hwnd=(\d+)\s*pid=(\d+)\s*iconic=(\w+)\s*visible=(\w+)\s*topmost=(\w+)\s*cloaked=(\w+)\s*z=(\d+)/);
     if (m) {
       rows.push({
         title: m[1].trim(), x: +m[2], y: +m[3], w: +m[4], h: +m[5],
         hwnd: Number(m[6]), pid: Number(m[7]), iconic: m[8] === 'True', visible: m[9] === 'True',
-        topmost: m[10] === 'True', z: Number(m[11]),
+        topmost: m[10] === 'True', cloaked: m[11] === 'True', z: Number(m[12]),
       });
     }
   }
