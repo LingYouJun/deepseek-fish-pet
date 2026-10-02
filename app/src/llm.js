@@ -248,8 +248,28 @@ function parseReply(text) {
     if (!rest.includes('||')) return '';           // 没有 || 就不算写入类，交给逐行逻辑
     return m[1].toLowerCase() + '|' + rest.trim();
   };
-  const en = find(['en:', 'en：']);
-  const zh = find(['zh:', 'zh：']);
+  /* 【多行 EN/ZH】实测：她念基建排班表时，名单写在 "ZH:" 的**下一行起**，
+     而上面这个 find() 只取标签所在的那一行 —— 于是她每一条回答都停在冒号处，
+     名单整个消失（连着好几轮都这样，看起来像她"不肯说/答不出"，其实是被解析器吃了）。
+     （同一个坑之前只在带 || 的写入类 ACTION 上被发现并修过，EN/ZH 一直漏着。）
+     规则：取标签行剩下的内容 + 之后所有**不是标签**的行，遇到下一个标签就停。 */
+  const LBL = ['en:', 'en：', 'zh:', 'zh：', 'words:', 'words：', 'mood:', 'mood：',
+    'c1:', 'c1：', 'c1zh:', 'c1zh：', 'c2:', 'c2：', 'c2zh:', 'c2zh：', 'action:', 'action：'];
+  const isLabel = (l) => { const low = String(l).toLowerCase(); return LBL.some((x) => low.startsWith(x)); };
+  const findMultiline = (labels) => {
+    for (let i = 0; i < lines.length; i++) {
+      const low = lines[i].toLowerCase();
+      for (const label of labels) {
+        if (!low.startsWith(label.toLowerCase())) continue;
+        const out = [lines[i].slice(label.length).trim()];
+        for (let j = i + 1; j < lines.length; j++) { if (isLabel(lines[j])) break; out.push(lines[j]); }
+        return out.filter(Boolean).join('\n').trim();
+      }
+    }
+    return '';
+  };
+  const en = findMultiline(['en:', 'en：']);
+  const zh = findMultiline(['zh:', 'zh：']);
   const wstr = find(['words:', 'words：']);
   const words = wstr.split(/[,，;；]/).map((seg) => {
     const m = seg.trim().match(/^([^=＝]+?)\s*[=＝]\s*(\/?[^=＝]+?)\s*[=＝]\s*(.+)$/);
