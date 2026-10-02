@@ -256,6 +256,22 @@ function noteAction(tool, arg, result) {
   while (actionLog.length > 40) actionLog.shift();
 }
 
+/* 【重复调用提醒 —— 换成 DSH 的算法】见 src/repeat.js 的注释。
+ * 旧的那套（上面的 noProgressWarning/noteAction）留着不删是因为它带"回执指纹"这一层判断，
+ * 而新算法只看参数 —— 两者判的东西不同，暂时都保留观察；新算法是主路径。
+ * 关键差别（照 dsh-repeat-tool-reminder）：
+ *   · 判定键是【工具名 + 深度排序后的参数】，不是截断字符串；
+ *   · 阈值 [3,5,8] 分三级，**只提醒、不否决**（在工具调用框架里否决会让会话状态对不上）；
+ *   · 第 8 次起是安全阀（我们这边工具预算有限，DSH 没有步数预算这回事）；
+ *   · **真用户消息一到就重置**（主人插话 = 环境变了）；
+ *   · 未登记的工具"透明"：不计数也不清零。
+ * 查询类工具（列目录/列模板/列窗口/截图）设为**不参与计数**，因为重复问一次本来就无害。 */
+const REPEAT = require('./repeat').create({
+  registry: { exclude: ['list_dir', 'template_list', 'windows_list', 'screen_shot', 'skill_ls', 'proj_ls'] },
+  thresholds: [3, 5, 8],
+  blockAt: 8,
+});
+
 /* 真正的执行体改名为 runInner；对外仍是 run（见文件末尾的包装）——
    这样"无进展检测"只需要在一个地方拦、在一个地方记账，不用去改 run 里面几十个 return。 */
 async function runInner(tool, arg) {
@@ -945,10 +961,16 @@ async function runInner(tool, arg) {
 
 /* 对外入口：先查"是不是又在原地打转"，执行完再记一笔（用于下次判重）。
    包一层的好处：runInner 里有几十个 return，不用逐个去加记账代码。 */
+/* 对外入口：先记一次"重复调用"（DSH 算法），执行完把提醒**前置**到回执里。
+   包一层的好处：runInner 里有几十个 return，不用逐个去加记账代码。
+   与旧实现的区别（重要）：
+     · 旧的在第 3 次就**直接阻止**执行 —— 她辛苦想出的一步被吞掉，体验差；
+     · 新的**只把提醒前置到回执**（照 dsh-repeat-tool-reminder 的 additionalContexts 语义），
+       让她自己看到"这个动作重复了"再决定怎么办；只有到第 8 次（安全阀）才真的不执行。 */
 async function run(tool, arg) {
   const t = String(tool == null ? '' : tool);
-  const warn = noProgressWarning(t, arg);
-  if (warn) return warn;
+  const rep = REPEAT.note(t, arg);
+  if (rep.block) return rep.advice;                       // 安全阀（第 8 次起）
   let out;
   try {
     out = await runInner(t, arg);
@@ -957,6 +979,7 @@ async function run(tool, arg) {
     throw e;
   }
   noteAction(t, arg, out);
+  if (rep.advice && typeof out === 'string') return rep.advice + '\n' + out;
   return out;
 }
 
@@ -970,5 +993,8 @@ module.exports = {
   __noProgressWarning: (t, a) => noProgressWarning(t, a),
   __noteAction: (t, a, r) => noteAction(t, a, r),
   __actionLog: () => actionLog,
+  __repeatReset: () => REPEAT.reset(),
+  __repeatNote: (t, a) => REPEAT.note(t, a),
+  __repeatState: () => ({ size: REPEAT.size(), cfg: REPEAT.config }),
   __ocrJson: (p) => ocrJson(p),
 };

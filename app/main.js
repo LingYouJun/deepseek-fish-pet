@@ -799,6 +799,9 @@ ipcMain.handle('chat:send', async (e, payload) => {
   const cfg = config.load();
   const text = String(payload?.text || '').trim();
   if (!text) return { en: '', zh: '', words: [], choices: [] };
+  /* 真用户消息到达 → 重置「重复调用」计数（照 DSH dsh-repeat-tool-reminder 的做法：
+     主人插话代表环境变了，之前的重复计数不该继续累加）。 */
+  try { require('./src/assistant').__repeatReset(); } catch {}
   const messages = [
     { role: 'system', content: buildSystemPrompt(cfg) },
     ...memory.pickHistory(),
