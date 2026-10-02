@@ -31,6 +31,18 @@ async function assertForeground(expectTitle) {
   return { ok, expected: expectTitle, actual: fg.title, hwnd: fg.hwnd };
 }
 
+/* ---------------- 断言：光标真的到了目标（纯逻辑，可测）----------------
+ * 实测事故：input.move() 返回 true，而 Win32 GetCursorPos 一查差 551px ——
+ * 工具层把"命令发出去了"当成了"光标到了"。所以 move/click 之后必须【回读光标】。
+ * 容差默认 6px（鼠标指针有热点偏移，且 DPI 换算可能有 ±1）。 */
+function cursorMatches(target, actual, tolerance) {
+  if (!target || !actual) return { ok: false, reason: 'no-data' };
+  const tol = tolerance == null ? 6 : tolerance;
+  const dx = Math.abs(Number(actual.x) - Number(target.x));
+  const dy = Math.abs(Number(actual.y) - Number(target.y));
+  return { ok: dx <= tol && dy <= tol, dx, dy, tolerance: tol };
+}
+
 /* ---------------- 断言：坐标在窗口内 ---------------- */
 function pointInRect(x, y, rect, margin) {
   if (!rect) return { ok: false, reason: 'no-rect' };
@@ -42,8 +54,21 @@ function pointInRect(x, y, rect, margin) {
 /* ---------------- 组合：确保前台（必要时自己置前并校验）---------------- */
 async function ensureForeground(title, opts) {
   const o = opts || {};
+  /* ★ 不光要求"是前台"，还要求"没被最小化"★
+     实测事故（2026-10-03）：浏览器窗口确实是前台，但处于【最小化】状态，
+     于是 ensureForeground 认为"已经在前台，不用动" → 截图里只剩桌面 → OCR 读到的全是桌面图标，
+     整个探针白跑一轮。最小化的窗口 IsWindowVisible 仍为 true、也仍可能是"前台"，
+     所以必须单独看 iconic。 */
+  let minimized = false;
+  try {
+    const info = await fw.windowRect(title);
+    minimized = !!(info && info.iconic);
+  } catch {}
   const first = await assertForeground(title);
-  if (first.ok) return { ok: true, how: 'already', foreground: first.actual };
+  if (first.ok && !minimized) return { ok: true, how: 'already', foreground: first.actual };
+  if (first.ok && minimized && o.noFocus) {
+    return { ok: false, reason: 'target-is-minimized', expected: title, actual: first.actual };
+  }
   if (o.noFocus) return { ok: false, reason: 'foreground-mismatch', expected: title, actual: first.actual };
   const r = await fw.focusWindowEx(title);
   if (!r.ok) return { ok: false, reason: 'focus-failed', raw: r.raw, foreground: r.foreground || first.actual };
@@ -102,6 +127,13 @@ async function clickSafe(x, y, opts) {
   }
   /* ③ 动作 */
   out.result = await getInput().click(x, y);
+  /* ★ click 也会把光标移过去，所以同样回读 ★ */
+  const pos = await fw.cursorPos();
+  out.cursorAfter = pos;
+  const cm = cursorMatches({ x, y }, pos, o.tolerance);
+  out.cursorVerified = cm.ok;
+  out.cursorDelta = { dx: cm.dx, dy: cm.dy };
+  /* 点击本身不该因为光标没到位就判失败（可能点中了但光标被系统挪走），只记录 */
   out.ok = true;
   return out;
 }
@@ -120,6 +152,17 @@ async function moveSafe(x, y, opts) {
     if (!p.ok) return Object.assign(out, { ok: false, blocked: true, reason: 'point-outside-target-window' });
   }
   out.result = await getInput().move(x, y);
+  /* ★ 效果断言：回读光标真值 ★ */
+  const pos = await fw.cursorPos();
+  out.cursorAfter = pos;
+  const cm = cursorMatches({ x, y }, pos, o.tolerance);
+  out.verified = cm.ok;
+  out.delta = { dx: cm.dx, dy: cm.dy };
+  if (!cm.ok) {
+    return Object.assign(out, { ok: false, reason: 'cursor-did-not-reach-target',
+      note: '命令返回了成功，但回读 GetCursorPos 发现光标在 (' + (pos ? pos.x + ',' + pos.y : '未知') + ')，'
+        + '与目标相差 ' + cm.dx + '/' + cm.dy + ' 像素 —— 这就是"假成功"。' });
+  }
   out.ok = true;
   return out;
 }
@@ -188,9 +231,19 @@ async function target(title, opts) {
   const o = opts || {};
   const list = await fw.listWindows();
   const want = String(title || '');
-  const win = list.windows
-    .filter((w) => w.title.indexOf(want) >= 0)
-    .sort((a, b) => b.w * b.h - a.w * a.h)[0];
+  /* ★ 同名窗口要优先挑【前台那个】★
+     实测：Edge 会为同一个页面暴露多个顶层窗口，标题几乎一样（"公招计算 · 可露希尔基建终端…"），
+     我原来按【面积】挑，挑到了 (16,124) 那个 —— 而实际可见/在前台的是 (101,100)，
+     于是窗口矩形对不上，OCR 结果里滤进来一堆【桌面图标】（白跑一轮）。
+     现在：先看前台窗口标题属于谁，能在候选里对上就优先它；否则再看"可见且非最小化"，最后才按面积。 */
+  const cands = list.windows.filter((w) => w.title.indexOf(want) >= 0);
+  const fgTitle = (list.foregroundTitle || '').replace(/[\u200b-\u200f\ufeff]/g, '');
+  const normT = (x) => String(x).replace(/[\u200b-\u200f\ufeff\s]/g, '');
+  /* ★ 优先用【前台 HWND】精确挑 ★：标题会重复，hwnd 不会。 */
+  let win = (list.foregroundHwnd ? cands.find((w) => w.hwnd === list.foregroundHwnd) : null)
+    || cands.find((w) => fgTitle && normT(w.title) === normT(fgTitle) && w.visible !== false)
+    || cands.filter((w) => w.visible !== false && !w.iconic).sort((a, b) => b.w * b.h - a.w * a.h)[0]
+    || cands.sort((a, b) => b.w * b.h - a.w * a.h)[0];
   if (!win) return { ok: false, reason: 'window-not-found', candidates: list.windows.map((w) => w.title).slice(0, 20) };
   const f = await ensureForeground(want, o);
   /* ★ 聚焦之后必须【重新读矩形】★
@@ -213,7 +266,7 @@ async function target(title, opts) {
 }
 
 module.exports = {
-  assertForeground, assertForegroundOrReport, pointInRect, ensureForeground, diffRegion, target,
+  assertForeground, assertForegroundOrReport, pointInRect, cursorMatches, ensureForeground, diffRegion, target,
   clickSafe, moveSafe, keySafe, typeSafe,
   _internals: { pointInRect },
 };

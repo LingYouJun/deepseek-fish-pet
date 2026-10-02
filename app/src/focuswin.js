@@ -55,8 +55,13 @@ public class FW2 {
   [DllImport("user32.dll")] static extern bool AttachThreadInput(uint a, uint b, bool f);
   [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out R r);
+  [DllImport("user32.dll")] public static extern int GetWindowLong(IntPtr h, int i);
   [DllImport("user32.dll")] static extern void keybd_event(byte vk, byte scan, uint f, IntPtr extra);
   [DllImport("user32.dll")] static extern IntPtr SetProcessDpiAwarenessContext(IntPtr ctx);
+  /* ★ 光标真值 ★ 实测事故：input.move() 返回 true，而 Win32 GetCursorPos 一查差了 551px ——
+     工具层把"命令发出去了"当成了"光标到了"。move/click 的效果断言必须回读它。 */
+  [DllImport("user32.dll")] public static extern bool GetCursorPos(out PT pt);
+  [StructLayout(LayoutKind.Sequential)] public struct PT { public int X; public int Y; }
   [DllImport("user32.dll")] static extern uint GetDpiForSystem();
   [StructLayout(LayoutKind.Sequential)] public struct R { public int L,T,Rr,B; }
 
@@ -74,6 +79,7 @@ public class FW2 {
     DpiOk = SetProcessDpiAwarenessContext(new IntPtr(-4)) != IntPtr.Zero;
   }
   public static uint Dpi() { return GetDpiForSystem(); }
+  public static string Cursor() { PT pt; GetCursorPos(out pt); return pt.X + "," + pt.Y; }
   public static string TitleOf(IntPtr h) { var sb = new StringBuilder(400); GetWindowTextW(h, sb, 400); return sb.ToString(); }
   public static IntPtr Fg() { return GetForegroundWindow(); }
 
@@ -81,11 +87,15 @@ public class FW2 {
     All.Clear(); Hit = IntPtr.Zero; HitTitle = "";
     EnumWindows((h, p) => {
       string t = TitleOf(h);
-      if (t.Length > 0 && IsWindowVisible(h)) {
+      /* 不再用 IsWindowVisible 过滤：实测浏览器（Edge）可能处于 IsWindowVisible=false 的状态，
+         但它照样是【前台窗口】—— 用可见性当过滤条件就会把它整个漏掉，
+         于是 target() 报"找不到窗口"（2026-10-03 白跑一轮）。改成把它当**标志**报出来。 */
+      if (t.Length > 0) {
         R r; GetWindowRect(h, out r);
         uint pid; GetWindowThreadProcessId(h, out pid);
         All.Add(t + " [" + r.L + "," + r.T + " " + (r.Rr - r.L) + "x" + (r.B - r.T) + "] hwnd=" + h + " pid=" + pid
-                + " iconic=" + IsIconic(h));
+                + " iconic=" + IsIconic(h) + " visible=" + IsWindowVisible(h)
+                + " topmost=" + ((GetWindowLong(h, -20) & 0x8) != 0) + " z=" + All.Count);
       }
       if (Want.Length > 0 && t.IndexOf(Want, StringComparison.OrdinalIgnoreCase) >= 0) {
         Hit = h; HitTitle = t; return false;
@@ -143,6 +153,8 @@ if ($mode -eq 'list') {
   }
 } elseif ($mode -eq 'fg') {
   Write-Output ('FG ' + [FW2]::TitleOf([FW2]::Fg()) + ' hwnd=' + [FW2]::Fg())
+} elseif ($mode -eq 'cursor') {
+  Write-Output ('CURSOR ' + [FW2]::Cursor())
 }
 `;
 
@@ -167,15 +179,24 @@ async function listWindows() {
   for (const line of out.split(/\r?\n/)) {
     let m = line.match(/^DPI=(\d+)\s+dpiCtxOk=(\w+)/);
     if (m) { dpi = Number(m[1]); dpiOk = m[2] === 'True'; continue; }
-    m = line.match(/^WIN (.*?)\s*\[(-?\d+),(-?\d+)\s+(\d+)x(\d+)\]\s*hwnd=(\d+)\s*pid=(\d+)\s*iconic=(\w+)/);
+    m = line.match(/^WIN (.*?)\s*\[(-?\d+),(-?\d+)\s+(\d+)x(\d+)\]\s*hwnd=(\d+)\s*pid=(\d+)\s*iconic=(\w+)\s*visible=(\w+)\s*topmost=(\w+)\s*z=(\d+)/);
     if (m) {
       rows.push({
         title: m[1].trim(), x: +m[2], y: +m[3], w: +m[4], h: +m[5],
-        hwnd: Number(m[6]), pid: Number(m[7]), iconic: m[8] === 'True',
+        hwnd: Number(m[6]), pid: Number(m[7]), iconic: m[8] === 'True', visible: m[9] === 'True',
+        topmost: m[10] === 'True', z: Number(m[11]),
       });
     }
   }
-  return { windows: rows, dpi, scale: dpi ? Math.round((dpi / 96) * 100) / 100 : null, dpiContextOk: dpiOk };
+  /* 顺便把前台标题也带回来：调用方常需要"同名窗口里哪个才是当前那个" */
+  let foregroundTitle = '', foregroundHwnd = 0;
+  for (const line of out.split(/\r?\n/)) {
+    const m = line.match(/^FG (.*?) hwnd=(-?\d+)/);
+    if (m) { foregroundTitle = m[1]; foregroundHwnd = Number(m[2]); break; }
+  }
+  /* ★ 必须带 hwnd ★：实测 Edge 为同一页面暴露多个顶层窗口，**标题逐字相同**，
+     只靠标题根本分不出哪个是当前可见的那个 —— 只有前台 HWND 是唯一的。 */
+  return { windows: rows, dpi, scale: dpi ? Math.round((dpi / 96) * 100) / 100 : null, dpiContextOk: dpiOk, foregroundTitle, foregroundHwnd };
 }
 
 /* 当前前台窗口 */
@@ -210,6 +231,13 @@ async function focusWindowEx(title) {
   const first = out.split(/\r?\n/)[0] || '';
   const fgTitle = (out.match(/^FGTITLE (.*)$/m) || [])[1] || '';
   return { ok: first.startsWith('OK'), raw: first, step: first.replace(/^OK /, '').split(' ')[0], foreground: fgTitle };
+}
+
+/* 光标真值（物理像素，PS 已声明 DPI 感知）—— 动作的效果断言要用它回读 */
+async function cursorPos() {
+  const { out } = await runPs('', 'cursor');
+  const m = out.match(/^CURSOR\s+(-?\d+)\s*,\s*(-?\d+)/m);
+  return m ? { x: Number(m[1]), y: Number(m[2]) } : null;
 }
 
 /* 查某个标题的窗口矩形 + 是不是前台（不做任何修改） */
@@ -280,7 +308,7 @@ async function clearAllTop() {
   });
 }
 
-module.exports = { listWindows, foreground, focusWindow, focusWindowEx, windowRect, clearAllTop };
+module.exports = { listWindows, foreground, focusWindow, focusWindowEx, windowRect, clearAllTop, cursorPos };
 
 /* ============================ CLI（方便外部直接驱动）============================ */
 if (require.main === module) {

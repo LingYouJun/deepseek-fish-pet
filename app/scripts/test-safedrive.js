@@ -47,6 +47,20 @@ console.log('=== safedrive.js 单元测试（纯逻辑）===');
   ok(rClamp.ok === true && rClamp.region.w <= 10 && rClamp.region.h <= 10, '§2 越界矩形被夹到图内', JSON.stringify(rClamp.region));
 }
 
+/* §4 cursorMatches：动作【效果断言】的判据
+ *    实测事故：input.move() 返回 true，而 Win32 GetCursorPos 一查差 551px ——
+ *    工具层把"命令发出去了"当成了"光标到了"。这个判据就是用来抓它的。 */
+{
+  ok(SD.cursorMatches({ x: 100, y: 200 }, { x: 100, y: 200 }).ok === true, '§4 完全一致 → 通过');
+  ok(SD.cursorMatches({ x: 100, y: 200 }, { x: 104, y: 202 }).ok === true, '§4 差 4/2 像素 → 默认 6px 容差内通过');
+  ok(SD.cursorMatches({ x: 100, y: 200 }, { x: 107, y: 200 }).ok === false, '§4 差 7 像素 → 超容差 → 判失败');
+  ok(SD.cursorMatches({ x: 100, y: 200 }, { x: 100, y: 200 }, 0).ok === true, '§4 容差可调（0 表示必须精确）');
+  ok(SD.cursorMatches({ x: 100, y: 200 }, null).ok === false, '§4 没读到光标 → 判失败（宁可不认，不假装成功）');
+  ok(SD.cursorMatches(null, { x: 1, y: 1 }).ok === false, '§4 没有目标 → 判失败');
+  const r = SD.cursorMatches({ x: 100, y: 200 }, { x: 651, y: 200 });
+  ok(r.dx === 551 && r.ok === false, '§4 ★能把当年那次"差 551 像素"如实报出来★', 'dx=' + r.dx);
+}
+
 /* §3 断言的语义：assertForeground 在没有 electron 环境时也要能返回结构（失败要显式） */
 {
   const p = SD._internals.pointInRect;

@@ -708,7 +708,28 @@ async function runInner(tool, arg) {
        也就是说之前统计的"坐标漂移 20~120px"，相当一部分是我这个隐藏状态造成的，不是模型飘。 */
     const [x, y] = parseXY(arg);
     const label = { click: '左键点击', rclick: '右键点击', dclick: '双击', move: '移动鼠标' }[tool];
-    input[tool](x, y);
+    /* ★★ 效果断言：click / move 之后【回读光标真值】★★
+       实测事故（2026-10-03）：input.move() 返回 true，而 Win32 GetCursorPos 一查差了 551 像素 ——
+       "命令发出去了"不等于"光标到了"。而原来的回执只写"✅ 已移动鼠标"，看起来是成功的 ✗。
+       现在：move 若回读不一致就直接判失败并说清楚；click 也把回读值写进回执（供核对）。
+       ⚠️ 另外：如果她之前 focus_window 过，键盘/鼠标的目标窗口应当是它 —— 这里顺带回读前台。*/
+    let cursorNote = '';
+    if (tool === 'move' || tool === 'click') {
+      const SDx = require('./safedrive');
+      const rx = (tool === 'move') ? await SDx.moveSafe(x, y, {}) : await SDx.clickSafe(x, y, {});
+      if (tool === 'move' && rx && rx.ok === false) {
+        return '🖱 ❌ 移动鼠标失败：' + (rx.note || rx.reason)
+          + '\n（这是"假成功"——命令发出去了但光标没到。**别当成成功继续往下做**，先查目标窗口有没有被别的窗口挡住/最小化。）';
+      }
+      if (rx && rx.cursorAfter) {
+        const cm = SDx.cursorMatches({ x, y }, rx.cursorAfter, 6);
+        cursorNote = cm.ok
+          ? '  光标已回读确认到位 ✓'
+          : '  ⚠️ 光标回读在 (' + rx.cursorAfter.x + ',' + rx.cursorAfter.y + ')，与目标差 ' + cm.dx + '/' + cm.dy + ' 像素';
+      }
+    } else {
+      input[tool](x, y);
+    }
     /* 【等界面反应完再返回】实测踩到的坑：她点"基建"之后**立刻** screen_look，
        而游戏切界面要 1~2 秒 —— 她看到的是**旧画面**，于是判断"没点进去"、
        换个坐标再点、再点，连点三次（日志里就是 1320,878 → 1512,810 → 1480,830），
@@ -718,9 +739,9 @@ async function runInner(tool, arg) {
     if (tool !== 'move') {
       const settle = Number((config.load().memory || {}).actionSettleMs) || 1500;
       await new Promise((r) => setTimeout(r, settle));
-      return `✅ 已${label}：(${x}, ${y})（已等 ${(settle / 1000).toFixed(1)}s 让界面反应）`;
+      return `✅ 已${label}：(${x}, ${y})（已等 ${(settle / 1000).toFixed(1)}s 让界面反应）` + cursorNote;
     }
-    return `✅ 已${label}：(${x}, ${y})`;
+    return `✅ 已${label}：(${x}, ${y})` + cursorNote;
   }
   if (tool === 'clickz' || tool === 'movez' || tool === 'rclickz' || tool === 'dclickz') {
     if (!ZoomState) return '⚠️ 现在没有有效的放大图（上一次 screen_look 不是放大看）。请先用 screen_look|<问题>||x,y,w,h 放大看一次，或改用普通的 click（整屏坐标）。';
@@ -1093,6 +1114,43 @@ async function runInner(tool, arg) {
     }
     const n2 = M2.delTemplate(app, String(arg || '').trim());
     return n2 ? '🗑 已删除模板「' + String(arg).trim() + '」' : '⚠️ 没有这个模板';
+  }
+  if (tool === 'uia_find') {
+    /* 【UIA 通道】按"元素名字 / AutomationId"找控件 —— 对非游戏应用几乎零误差。
+       参数：uia_find|<窗口标题片段>|<元素名字或 AutomationId>
+       为什么值得单独一个工具：它拿的是**应用自己报告的**元素身份和矩形，
+       没有"识别"这一步，天然抗 DPI / 主题 / 缩放。
+       实测（2026-10-02）：计算器 num3Button (1652,662)、equalButton (1750,724)，
+       与截图空间逐字一致；而 OCR 给的是 (1647,655)，差 5~8px。
+       ⚠️ 对游戏基本无效（控件树是空的）—— 那时改用模板/OCR/Set-of-Marks。 */
+    const seg = String(arg || '').split('|').map((x) => x.trim());
+    if (seg.length < 2 || !seg[0] || !seg[1]) return '用法：uia_find|<窗口标题片段>|<元素名字或 AutomationId>';
+    const r = await require('./uia').locate(seg[0], seg[1]);
+    if (!r.ok) {
+      if (r.reason === 'window-not-found') return '🔍 UIA：没找到标题含「' + seg[0] + '」的窗口。';
+      if (r.reason === 'element-not-found') {
+        return '🔍 UIA：窗口里没有名字/Id 含「' + seg[1] + '」的元素（共读到 ' + (r.count || 0) + ' 个）。'
+          + '可以先用 ACTION: uia_dump|' + seg[0] + ' 看有哪些元素。';
+      }
+      return '🔍 UIA 失败：' + (r.reason || '未知') + (r.raw ? '\n' + String(r.raw).slice(0, 200) : '');
+    }
+    return '🔍 UIA 精确命中：' + (r.extra && r.extra.name ? '「' + r.extra.name + '」' : '')
+      + '  AutomationId=' + ((r.extra && r.extra.automationId) || '-')
+      + '  中心 (' + r.x + ',' + r.y + ')  置信度 ' + r.confidence
+      + '\n（这是应用【自己报告】的坐标，不是识别出来的 —— 可直接 ACTION: click|' + r.x + ',' + r.y + '）';
+  }
+  if (tool === 'uia_dump') {
+    /* 列出某窗口的控件树（探索用） */
+    const r = await require('./uia').listElements(String(arg || '').trim());
+    if (!r.window) {
+      return '🔍 UIA：' + (r.notFound ? '没找到该窗口' : (r.error || '查询失败'))
+        + (r.raw ? '\n' + String(r.raw).slice(0, 200) : '');
+    }
+    const lines = r.elements.slice(0, 40).map((e) => '  [' + e.controlType + '] ' + (e.automationId || '-')
+      + '  "' + e.name + '"  ' + e.cx + ',' + e.cy);
+    return '🔍 UIA 控件树：' + r.window.title + '  ' + r.window.x + ',' + r.window.y + ' ' + r.window.w + 'x' + r.window.h
+      + '\n共 ' + r.count + ' 个元素，列前 ' + Math.min(40, r.elements.length) + ' 个：\n' + lines.join('\n')
+      + '\n（用 uia_find|' + String(arg || '').trim() + '|<名字或Id> 精确定位其中一个）';
   }
   if (tool === 'windows_list') {
     /* 列出可见窗口（标题 + 位置尺寸，**物理像素**，和截图空间一致）。

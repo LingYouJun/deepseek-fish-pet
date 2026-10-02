@@ -202,6 +202,8 @@ const TOOL_DEFS = [
   { name: 'screen_shot', tier: 'full', needsArg: false, timeoutMs: 30000, desc: '截一张全屏图' },
   { name: 'watch_screen', tier: 'full', needsArg: true, timeoutMs: 180000, desc: '连续看屏幕并给逐帧时间线' },
   { name: 'screen_diff', tier: 'full', needsArg: true, timeoutMs: 30000, desc: '抓两帧做像素比对：界面到底变没变（确定性，不靠视觉模型）' },
+  { name: 'uia_find', tier: 'full', needsArg: true, timeoutMs: 45000, desc: 'UIA 控件树：按元素名字/AutomationId 精确拿坐标（非游戏应用，零识别）' },
+  { name: 'uia_dump', tier: 'full', needsArg: true, timeoutMs: 45000, desc: 'UIA 控件树：列出某窗口的所有元素及其坐标' },
   /* 定位（老表都是 full） */
   { name: 'find_template', tier: 'full', needsArg: true, timeoutMs: 40000, desc: '按模板图精确定位' },
   { name: 'find_template_scroll', tier: 'full', needsArg: true, timeoutMs: 150000, desc: '在滚动列表里找模板' },

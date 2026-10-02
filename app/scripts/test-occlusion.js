@@ -1,122 +1,82 @@
-/* 遮挡问题复现 + 修复验证
- * electron.exe app\scripts\test-occlusion.js
- *
- * 用户报"她点不了开始游戏的按钮"。猜测是：桌宠窗是 alwaysOnTop，
- * 而 mouse_event 的点击只落到最上面那个窗口 —— 所以点在按钮位置上，
- * 实际点到的是桌宠窗。这里把这件事**复现出来**，再验证让开逻辑能解决。
+/* occlusion.js 的单元测试（纯逻辑部分；scene() 需要真实窗口枚举，放在 live 探针里验）
+ * 跑法：node app/scripts/test-occlusion.js
  */
-const path = require('path');
-const fs = require('fs');
-const { app, screen, BrowserWindow } = require('electron');
-const REAL = path.join(process.env.APPDATA, 'dayu-pet');
-const T = path.join(process.env.APPDATA, 'dayu-pet-occltest');
-fs.mkdirSync(T, { recursive: true });
-try {
-  fs.copyFileSync(path.join(REAL, 'config.json'), path.join(T, 'config.json'));
-  fs.copyFileSync(path.join(REAL, 'persona.json'), path.join(T, 'persona.json'));
-} catch {}
-try { fs.unlinkSync(path.join(T, 'clock-offset.json')); } catch {}
-app.setPath('userData', T);
-require('../main.js');
+const OC = require('../src/occlusion');
 
-const HTML = '<!doctype html><html><head><meta charset="utf-8"><style>'
-  + 'body{margin:0;background:#123;height:100vh;display:flex;align-items:center;justify-content:center}'
-  + '#go{font-size:28px;padding:30px 70px;background:#2b3a6b;color:#fff;border:3px solid #4d6bfe;border-radius:14px}'
-  + '</style></head><body><button id="go" onclick="document.title=\'CLICKED\'">开始游戏</button></body></html>';
+let pass = 0, fail = 0;
+function ok(c, label, extra) {
+  if (c) { pass++; console.log('  ✅ ' + label + (extra ? '   ' + extra : '')); }
+  else { fail++; console.log('  ❌ ' + label + (extra ? '   ' + extra : '')); }
+}
 
-app.whenReady().then(async () => {
-  const M = require('../main.js');
-  const input = require('../src/input');
-  const out = [];
-  const L = (s) => { out.push(s); try { process.stdout.write(s + '\n'); } catch {} };
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-  let pass = 0, total = 0;
-  const check = (n, ok, d) => { total++; if (ok) pass++; L((ok ? '  ✅ ' : '  ❌ ') + n + (d ? '  ' + d : '')); };
+console.log('=== occlusion.js 单元测试（纯逻辑）===');
 
-  try {
-    await wait(4500);
-    const disp = screen.getPrimaryDisplay();
-    const sp = input.space();
-    const pet = M.win().petWin;
-    check('桌宠窗在', !!(pet && !pet.isDestroyed()));
+/* §1 intersects */
+{
+  const A = { x: 100, y: 100, w: 200, h: 200 };
+  ok(OC.intersects(A, { x: 150, y: 150, w: 50, h: 50 }) === true, '§1 完全包含 → 相交');
+  ok(OC.intersects(A, { x: 250, y: 250, w: 200, h: 200 }) === true, '§1 部分重叠 → 相交');
+  ok(OC.intersects(A, { x: 400, y: 100, w: 50, h: 50 }) === false, '§1 右侧分离 → 不相交');
+  ok(OC.intersects(A, { x: 100, y: 400, w: 50, h: 50 }) === false, '§1 下方分离 → 不相交');
+  ok(OC.intersects(null, A) === false, '§1 缺参数 → 不相交（不抛）');
+}
 
-    const win = new BrowserWindow({ width: 600, height: 400, x: 120, y: 140, title: 'TARGET', alwaysOnTop: true, webPreferences: { nodeIntegration: false } });
-    win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(HTML));
-    await wait(2200);
-    win.show(); win.focus(); await wait(900);
+/* §2 pointCovered */
+{
+  const rects = [{ x: 10, y: 10, w: 100, h: 100, title: 'A' }, { x: 200, y: 200, w: 50, h: 50, title: 'B' }];
+  ok(OC.pointCovered(50, 50, rects).title === 'A', '§2 落在 A 内 → 返回 A');
+  ok(OC.pointCovered(210, 210, rects).title === 'B', '§2 落在 B 内 → 返回 B');
+  ok(OC.pointCovered(150, 150, rects) === null, '§2 都不在 → null');
+  ok(OC.pointCovered(50, 50, []) === null, '§2 空列表 → null');
+}
 
-    const r = await win.webContents.executeJavaScript('(() => { const b = document.getElementById("go").getBoundingClientRect(); return {x:b.x,y:b.y,w:b.width,h:b.height}; })()');
-    check('靶子按钮就位', r.w > 0, JSON.stringify(r));
-    /* ⚠️ 必须用 getContentBounds()（内容区在屏幕上的位置），不能用 getPosition()：
-       后者是**外框**左上角，标题栏还有约 31 DIP，直接用会整体点高一行 ——
-       我第一版就是这么错的，导致"点不中"，白查了一轮。
-       （渲染层的 window.screenX/Y 同样给的是外框，别用。） */
-    const cb = win.getContentBounds();
-    const btnDIP = { x: cb.x + r.x + r.w / 2, y: cb.y + r.y + r.h / 2 };
-    const mx = Math.round(btnDIP.x / disp.size.width * sp.w), my = Math.round(btnDIP.y / disp.size.height * sp.h);
-    L('  内容区原点 ' + JSON.stringify(cb) + '（外框 ' + JSON.stringify(win.getPosition()) + '）');
-    L('  按钮中心: 屏幕DIP(' + Math.round(btnDIP.x) + ',' + Math.round(btnDIP.y) + ') → 模型(' + mx + ',' + my + ')');
+/* §3 ★核心：filterWords 必须把"落在遮挡者区域内的词"丢掉★
+ *    实测事故：我自己窗口里的"水月/阿/温蒂"被当成了页面卡片名 */
+{
+  const covered = [{ x: 1100, y: 0, w: 800, h: 1080, title: '我自己的窗口' }];
+  const words = [
+    { t: '阿', x: 600, y: 500, w: 20, h: 20 },          // 页面里 → 保留
+    { t: '水月', x: 1500, y: 300, w: 40, h: 20 },       // 我自己窗口里 → 丢弃
+    { t: '温蒂', x: 900, y: 700, w: 40, h: 20 },        // 页面里 → 保留
+    { t: '傀影', x: 1180, y: 900, w: 40, h: 20 },       // 压线落在遮挡区 → 丢弃
+  ];
+  const r = OC.filterWords(words, covered);
+  ok(r.kept.length === 2 && r.kept.map((w) => w.t).join() === '阿,温蒂', '§3 只保留页面里的词', JSON.stringify(r.kept.map((w) => w.t)));
+  ok(r.dropped.length === 2, '§3 丢弃了两个被遮挡的词');
+  ok(r.dropped[0].coveredBy === '我自己的窗口', '§3 丢弃时注明"被谁挡的"', r.dropped[0].coveredBy);
+  const r2 = OC.filterWords(words, []);
+  ok(r2.kept.length === 4 && r2.dropped.length === 0, '§3 没有遮挡者时全部保留（不误杀）');
+}
 
-    /* 把桌宠窗搬到按钮正上方（盖住它） */
-    pet.setBounds({ x: Math.round(btnDIP.x) - 60, y: Math.round(btnDIP.y) - 60, width: 120, height: 120 });
-    pet.show(); await wait(900);
-    const pb = pet.getBounds();
-    L('  桌宠窗现在在 ' + JSON.stringify(pb) + '  可见=' + pet.isVisible());
-    const covering = btnDIP.x >= pb.x && btnDIP.x <= pb.x + pb.width && btnDIP.y >= pb.y && btnDIP.y <= pb.y + pb.height;
-    check('桌宠窗确实盖住了按钮（复现前提）', covering, JSON.stringify(pb));
+/* §4 ★核心：computeCovered 必须看 z 序★
+ *    "只按矩形重叠"会把压在目标【下面】的自己也算成遮挡者（我第一版就错） */
+{
+  const target = { hwnd: 100, x: 0, y: 0, w: 1000, h: 800, z: 5, topmost: false };
+  const others = [
+    { hwnd: 200, x: 500, y: 100, w: 400, h: 400, z: 2, topmost: false, title: '压在上面的普通窗' },  // z 更小 → 算
+    { hwnd: 300, x: 500, y: 100, w: 400, h: 400, z: 9, topmost: false, title: '压在下面的窗' },      // z 更大 → 不算
+    { hwnd: 400, x: 500, y: 100, w: 400, h: 400, z: 9, topmost: true, title: '置顶窗' },             // topmost → 算
+    { hwnd: 500, x: 2000, y: 0, w: 100, h: 100, z: 1, topmost: false, title: '不相交' },             // 不相交 → 不算
+    { hwnd: 100, x: 0, y: 0, w: 1000, h: 800, z: 1, topmost: false, title: '目标自己' },             // 自己 → 不算
+    { hwnd: 600, x: 10, y: 10, w: 10, h: 10, z: 1, topmost: false, title: '太小的托盘窗' },           // 太小 → 不算
+  ];
+  const cov = OC.computeCovered(target, others, []);
+  const titles = cov.map((c) => c.title).sort();
+  ok(cov.length === 2, '§4 只算"z 更小 或 置顶"且相交的窗口', '得到 ' + cov.length + ' 个: ' + titles.join(' / '));
+  ok(titles.indexOf('压在上面的普通窗') >= 0 && titles.indexOf('置顶窗') >= 0, '§4 上面那两个被算进来');
+  ok(titles.indexOf('压在下面的窗') < 0, '§4 ★压在目标下面的窗口【不算】遮挡者（这条我第一版错过）★');
+  ok(titles.indexOf('目标自己') < 0 && titles.indexOf('不相交') < 0 && titles.indexOf('太小的托盘窗') < 0, '§4 自己/不相交/微小窗口都不算');
+}
 
-    L('');
-    L('=== A. 不让开 → 应该点不中（复现用户报的现象）===');
-    input.click(mx, my);
-    await wait(1000);
-    L('  靶子标题 = ' + win.getTitle());
-    check('★ 不让开时点不中（标题仍是 TARGET）', win.getTitle() === 'TARGET', win.getTitle());
+/* §5 extraRects（自己进程的窗口，z 序未知时也要算进去） */
+{
+  const target = { hwnd: 100, x: 0, y: 0, w: 1000, h: 800, z: 5 };
+  const cov = OC.computeCovered(target, [], [{ x: 900, y: 0, w: 800, h: 1080, title: '(自己的窗口)' }]);
+  ok(cov.length === 1 && cov[0].title === '(自己的窗口)', '§5 显式传入的自己窗口矩形会被算作遮挡者');
+  const cov2 = OC.computeCovered(target, [], [{ x: 3000, y: 0, w: 100, h: 100 }]);
+  ok(cov2.length === 0, '§5 不相交的自己窗口不算');
+}
 
-    L('');
-    L('=== B. 让开逻辑：目标点被盖住时应返回被藏的窗口 ===');
-    const yielded = M.yieldOwnWindowsAt('click', mx + ',' + my);
-    await wait(500);
-    L('  yieldOwnWindowsAt 返回 ' + (yielded ? yielded.length + ' 个窗口' : 'null') + '，桌宠窗可见=' + pet.isVisible());
-    check('★ 检测到遮挡并让开', !!yielded && yielded.length === 1, String(yielded && yielded.length));
-    check('★ 桌宠窗已经藏起来', pet.isVisible() === false);
-
-    L('');
-    L('=== C. 让开之后 → 应该点得中 ===');
-    input.click(mx, my);
-    await wait(1000);
-    L('  靶子标题 = ' + win.getTitle());
-    check('★ 让开后点中了（标题变 CLICKED）', win.getTitle() === 'CLICKED', win.getTitle());
-
-    L('');
-    L('=== D. 放回来 ===');
-    M.restoreOwnWindows(yielded);
-    await wait(700);
-    check('★ 桌宠窗恢复了', pet.isVisible() === true, 'visible=' + pet.isVisible());
-
-    L('');
-    L('=== E. 目标点没被盖住时不该乱藏 ===');
-    pet.setBounds({ x: 5, y: 5, width: 100, height: 100 });
-    await wait(600);
-    const y2 = M.yieldOwnWindowsAt('click', mx + ',' + my);
-    check('没遮挡时返回 null（不乱藏）', y2 === null, String(y2));
-    check('桌宠窗仍在', pet.isVisible() === true);
-
-    L('');
-    L('=== F. 非鼠标类工具不该触发让开 ===');
-    for (const tool of ['read_file', 'screen_shot', 'type', 'skill_ls']) {
-      const y3 = M.yieldOwnWindowsAt(tool, '1,1');
-      check(tool + ' 不触发让开', y3 === null, String(y3));
-    }
-    check('参数里没坐标也不触发', M.yieldOwnWindowsAt('click', 'nonsense') === null);
-
-    try { win.destroy(); } catch {}
-    try { pet.show(); } catch {}
-    L('');
-    L('  通过 ' + pass + ' / ' + total);
-  } catch (e) {
-    var crashed = String((e && e.stack) || e);
-    L('ERROR: ' + crashed);
-  }
-  console.log(out.join('\n'));
-  setTimeout(() => app.exit((pass === total && !crashed) ? 0 : 1), 300);
-});
+console.log('');
+console.log('通过 ' + pass + ' / ' + (pass + fail));
+process.exit(fail ? 1 : 0);
