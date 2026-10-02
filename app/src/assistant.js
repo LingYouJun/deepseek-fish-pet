@@ -698,23 +698,31 @@ async function runInner(tool, arg) {
     const total = Math.max(1, Math.min(40, Math.floor((secs * 1000) / ivMs) + 1));
     const timeline = [];
     const stamp = Date.now();
+    /* ⚠️ **先连续抓帧、再逐帧分析** —— 我第一版是"抓一帧→问一次视觉"，实测每帧视觉调用约 2 秒，
+       于是"看 45 秒"实际要花 90 秒，**根本跟不上主人的演示节奏**（演示早做完了，她还在分析第 3 帧）。
+       抓帧本身只要几十毫秒，所以先把整段按节奏拍下来（帧图落盘、带真实时间顺序），拍完再慢慢分析。 */
+    const frames = [];
     for (let k = 0; k < total; k++) {
       const capW = await captureScreen(false, false);   // 不画网格、但**画光标**（要看鼠标点了哪）
+      frames.push(capW.dataUrl);
       try {
         fs.writeFileSync(path.join(shotsDir(), 'watch-' + stamp + '-' + String(k).padStart(2, '0') + '.jpg'),
           Buffer.from(capW.dataUrl.split(',')[1], 'base64'));
       } catch {}
-      const qW = '这是同一块屏幕上连续操作中的第 ' + (k + 1) + '/' + total + ' 帧。'
+      if (k < total - 1) await new Promise((r) => setTimeout(r, ivMs));
+    }
+    for (let k = 0; k < frames.length; k++) {
+      const qW = '这是同一块屏幕上连续操作中的第 ' + (k + 1) + '/' + frames.length + ' 帧，'
+        + '相邻两帧大约相隔 ' + (Math.round(ivMs / 100) / 10) + ' 秒。'
         + '请用**一句话**说清三件事：① 鼠标指针此刻在画面什么位置；'
         + '② 这一帧里刚发生或正在发生什么操作（点击、输入、拖动、切界面…）；'
         + '③ 界面因此变了什么（弹窗、高亮、列表变化…）。只描述你看到的，不要推测意图。';
       let one = '';
-      try { one = await vision.describe(cfgW, capW.dataUrl, qW, 'low'); }
+      try { one = await vision.describe(cfgW, frames[k], qW, 'low'); }
       catch (e) { one = '（这一帧视觉失败：' + ((e && e.message) || e) + '）'; }
       timeline.push('【第 ' + (k + 1) + ' 帧 · ' + (Math.round((k * ivMs) / 100) / 10) + 's】' + String(one).replace(/\s+/g, ' ').trim());
-      if (k < total - 1) await new Promise((r) => setTimeout(r, ivMs));
     }
-    return '👀 连续看了 ' + total + ' 帧（约 ' + secs + ' 秒，间隔 ' + ivMs + 'ms），时间线：\n'
+    return '👀 连续看了 ' + frames.length + ' 帧（约 ' + secs + ' 秒，间隔 ' + ivMs + 'ms），时间线：\n'
       + timeline.join('\n')
       + '\n帧图已存在 shots/ 下（watch-' + stamp + '-NN.jpg）。';
   }
