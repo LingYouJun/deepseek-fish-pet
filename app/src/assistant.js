@@ -41,8 +41,8 @@ function shotsDir() {
   return d;
 }
 
-async function captureScreen() {
-  const frame = await screenstream.grabFrame();
+async function captureScreen(withGrid) {
+  const frame = await screenstream.grabFrame({ grid: !!withGrid });
   if (frame && frame.dataUrl) {
     const p = path.join(shotsDir(), 'screen-' + Date.now() + '.jpg');
     fs.writeFileSync(p, Buffer.from(frame.dataUrl.split(',')[1], 'base64'));
@@ -134,7 +134,9 @@ async function run(tool, arg) {
   if (tool.startsWith('web_')) return web.run(tool, arg);
 
   if (tool === 'screen_shot') {
-    const cap = await captureScreen();
+    /* ⚠️ OCR 用图**不要画坐标网格**：那些刻度数字会被 OCR 当成屏幕上的文字读进去。
+       网格只给视觉模型定位用（见下面的 screen_look）。 */
+    const cap = await captureScreen(false);
     const text = await ocr(cap.path);
     const result = '🖥 已截取屏幕（' + cap.width + '×' + cap.height + '）\n'
       + (text ? '屏幕上识别到的文字：\n' + text : '（未识别到文字；截图已展示在对话里，你可以自己看）');
@@ -149,7 +151,10 @@ async function run(tool, arg) {
     const timing = {};
     const tick = () => Date.now();
     const tCap = tick();
-    const cap = await captureScreen();
+    /* 视觉这条路**要画坐标网格**：实测模型"估位置"在贴边处能差近 300px
+       （鹰角启动器右下角按钮真实 (1837,1025)，它给 (1500,807)），
+       有了刻度它就能"读"坐标而不是"估"。 */
+    const cap = await captureScreen(true);
     timing.captureMs = tick() - tCap;
     const cfg = config.load();
     let text = '';
@@ -162,7 +167,9 @@ async function run(tool, arg) {
          之前写成了单引号 → 占位符没被插值，**模型看到的字面就是 "${CAPW}x${CAPH}"**，
          于是它照着写 `click|${CAPW-20},${CAPH-20}` 被拒（"坐标格式应为 x,y"），白费一步。
          这是监视数据里从她的报错里挖出来的，不是什么模型犯傻。 */
-      const q = (arg || '看看屏幕') + `\n\n【输出要求】先用一句中文说明你的判断；如果这一步需要操作屏幕，就在回答的最后单独输出一行：ACTION: 工具|参数（坐标基于 ${CAPW}x${CAPH} 截图，左上角 0,0；工具可选 click/rclick/dclick/move/drag/scroll/type/key，例如 ACTION: click|${CAPEX},${CAPEY}）。如果不需要操作就不要写 ACTION 行。`;
+      const q = (arg || '看看屏幕') + `\n\n【读坐标的方法】图上画了**刻度网格**（每格 240x135），边上黄色数字就是那条线的像素坐标（左上角写着 0,0，右下角写着 ${CAPW},${CAPH}）。请**顺着网格读出**目标在哪一格，再判断它在格内的相对位置 —— 不要凭感觉估：实测凭感觉在贴近屏幕边缘时能差 300 像素。
+
+【输出要求】先用一句中文说明你的判断；如果这一步需要操作屏幕，就在回答的最后单独输出一行：ACTION: 工具|参数（坐标基于 ${CAPW}x${CAPH} 截图，左上角 0,0；工具可选 click/rclick/dclick/move/drag/scroll/type/key，例如 ACTION: click|${CAPEX},${CAPEY}）。如果不需要操作就不要写 ACTION 行。`;
       /* tV 必须声明在 try **外面**：catch 里也要用它算耗时，
          写在 try 内的话失败路径会 ReferenceError（实测被 §6 那条测试抓住）。 */
       let tV = tick();

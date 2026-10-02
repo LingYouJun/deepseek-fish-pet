@@ -101,7 +101,7 @@ async function init() {
  * 桌面捕获本身不含鼠标指针，不画的话模型根本不知道鼠标在哪 ——
  * 用户就报了"她识别光标总是有问题"。
  * 坐标系换算：screen.getCursorScreenPoint() 给的是 DIP，抓帧空间是 CAP_W×CAP_H。 */
-async function grabFrame() {
+async function grabFrame(opts) {
   await init();
   if (!ready) return null;
   try {
@@ -114,7 +114,8 @@ async function grabFrame() {
       cx = Math.round(p.x / d.size.width * cap.w);
       cy = Math.round(p.y / d.size.height * cap.h);
     } catch {}
-    return await w.webContents.executeJavaScript(`window.__grabFrame(${Number.isFinite(cx) ? cx : 'undefined'}, ${Number.isFinite(cy) ? cy : 'undefined'})`);
+    const grid = !(opts && opts.grid === false);
+    return await w.webContents.executeJavaScript(`window.__grabFrame(${Number.isFinite(cx) ? cx : 'undefined'}, ${Number.isFinite(cy) ? cy : 'undefined'}, ${grid})`);
   } catch { return null; }
 }
 

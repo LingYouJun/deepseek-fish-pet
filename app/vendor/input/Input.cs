@@ -69,11 +69,62 @@ class Program
         catch { }
     }
 
+    /* ---------- 点之前先检查：目标窗口是不是"管理员权限"的 ----------
+     * 【用户报的"她点不了开始游戏的按钮"的真正根因】
+     * 鹰角启动器（进程名 Games）**以管理员身份运行**，而桌宠是普通权限。
+     * Windows 的 UIPI（用户界面特权隔离）会**拦掉普通进程发给高完整性窗口的模拟输入** ——
+     * 于是我们发的点击"成功返回"、光标也确实压在按钮上，但**那个窗口根本收不到**，
+     * 表现得就像"这个按钮不响应自动点击"（真实鼠标点击不受影响，所以手动点就能进）。
+     *
+     * 怎么判断：以 PROCESS_QUERY_INFORMATION(0x400) 打开对方进程，
+     * 如果失败且错误号是 5（ACCESS_DENIED），就是对方级别更高。
+     * 实测：Games → err=5（打不开）；explorer / msedge / powershell → 都能打开。
+     * ⚠️ 别用 PROCESS_QUERY_LIMITED_INFORMATION(0x1000)：那个**对高完整性进程是放行的**
+     * （我第一次就写错了，结果检查永远返回"没问题"），0x400 才是被 UIPI 拦的那个。
+     *
+     * 为什么不"照样点一下"：反正送不到，还会让模型以为点了、接着反复重试
+     * （她之前就是这样点了十几次）。**直接报清楚原因，让人去处理权限**才对。 */
+    [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool CloseHandle(IntPtr h);
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+
+    static string BlockedByElevation()
+    {
+        try
+        {
+            POINT p;
+            if (!GetCursorPos(out p)) return null;
+            IntPtr h = WindowFromPoint(p);
+            if (h == IntPtr.Zero) return null;
+            IntPtr root = GetAncestor(h, 2 /* GA_ROOT */);
+            if (root == IntPtr.Zero) root = h;
+            uint pid;
+            GetWindowThreadProcessId(root, out pid);
+            if (pid == 0) return null;
+            IntPtr ph = OpenProcess(0x0400 /* PROCESS_QUERY_INFORMATION */, false, pid);
+            if (ph == IntPtr.Zero)
+            {
+                int err = Marshal.GetLastWin32Error();
+                if (err == 5)
+                    return "目标窗口（进程 pid=" + pid + "）以**管理员身份**运行，"
+                         + "Windows 会拦截普通程序发出的模拟点击（UIPI 安全边界），所以点了它收不到。"
+                         + "解决办法二选一：① 用管理员身份重新启动桌宠；"
+                         + "② 把那个程序改成普通权限启动（右键属性→兼容性→取消“以管理员身份运行”）。";
+                return null;
+            }
+            CloseHandle(ph);
+            return null;
+        }
+        catch { return null; }
+    }
+
     /* 移动 + 激活 + 点击，合成一个动作（click/rclick/dclick/drag 都用它） */
     static void ClickAt(double x, double y, uint down, uint up, int gapMs)
     {
         Move(x, y);
         Sleep(60);
+        string blocked = BlockedByElevation();
+        if (blocked != null) throw new Exception(blocked);
         ActivateUnderCursor();
         mouse_event(down, 0, 0, 0, 0);
         Sleep(gapMs);

@@ -65,6 +65,53 @@ function frameSig() {
   return out;
 }
 
+/* 画一层坐标网格 + 刻度。为什么要画：
+ * 用户报"她点不了开始游戏的按钮"。查下来点击机制完全正常（光标落点误差 1px、
+ * 点击也送达了目标控件），**问题是模型"估位置"估不准** ——
+ * 实测：鹰角启动器右下角的「开始游戏」按钮真实位置约 (1837,1025)（屏幕 96%/95%），
+ * 她给的是 (1500,807)（78%/75%），差了近 300px，而且偏的方向正是"往画面中间缩"。
+ * 这是视觉模型定位的固有弱点，越贴边越不准。
+ * 对策不是让她"再瞄准点"（她已经很努力了），而是**给她一把尺子**：
+ * 在图上画刻度网格，让她能"读"出坐标而不是"估"。
+ * 网格每隔 1/8 一条（240x135），边上一圈标出像素值；线用黑白双描边，任何背景都看得见。 */
+const GRID_DIV = 8;
+function drawGrid(w, h) {
+  const stepX = Math.round(w / GRID_DIV), stepY = Math.round(h / GRID_DIV);
+  ctx.save();
+  const stroke = (x1, y1, x2, y2) => {
+    ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+  };
+  for (let i = 1; i < GRID_DIV; i++) {
+    stroke(i * stepX, 0, i * stepX, h);
+    stroke(0, i * stepY, w, i * stepY);
+  }
+  /* 刻度标签：沿上下边标 x，沿左右边标 y（值就是该线在抓帧空间的像素坐标） */
+  const fs = Math.max(16, Math.round(w / 90));
+  ctx.font = 'bold ' + fs + 'px sans-serif';
+  ctx.textBaseline = 'top';
+  const label = (text, x, y) => {
+    const tw = ctx.measureText(text).width;
+    ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+    ctx.strokeText(text, x, y);
+    ctx.fillStyle = 'rgba(255,255,60,0.98)';
+    ctx.fillText(text, x, y);
+    return tw;
+  };
+  for (let i = 1; i < GRID_DIV; i++) {
+    label(String(i * stepX), i * stepX + 3, 4);
+    label(String(i * stepX), i * stepX + 3, h - fs - 4);
+    label(String(i * stepY), 4, i * stepY + 3);
+    label(String(i * stepY), w - fs * 4, i * stepY + 3);
+  }
+  /* 四个角标出整幅尺寸，给模型一个"这张图有多大"的锚点 */
+  label('0,0', 4, 4);
+  label(w + ',' + h, w - fs * 5, h - fs - 4);
+  ctx.restore();
+}
+
 /* 抓帧。cursor 是主进程读到的光标位置（已经是这个抓帧空间的坐标），传进来就画在图上。
  *
  * ⚠️ 为什么要自己画光标：Electron 的桌面捕获（getUserMedia chromeMediaSource=desktop）
@@ -76,9 +123,10 @@ function frameSig() {
  * 也就是说我们知道它在哪，只是没画出来。这里补上。
  *
  * 画法用"白底 + 黑边 + 十字"：任何背景色上都看得清，且不遮挡周围内容太多。 */
-window.__grabFrame = (cursorX, cursorY) => {
+window.__grabFrame = (cursorX, cursorY, withGrid) => {
   if (!ctx || !video) return null;
   ctx.drawImage(video, 0, 0, CAP_W, CAP_H);
+  if (withGrid !== false) drawGrid(CAP_W, CAP_H);   // 坐标网格（默认开，见 drawGrid 注释）
   if (Number.isFinite(cursorX) && Number.isFinite(cursorY)) {
     const x = Math.max(0, Math.min(CAP_W - 1, cursorX));
     const y = Math.max(0, Math.min(CAP_H - 1, cursorY));
