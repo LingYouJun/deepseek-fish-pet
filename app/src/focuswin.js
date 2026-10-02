@@ -10,7 +10,9 @@
  */
 const { execFile } = require('child_process');
 
-const PS = `Add-Type -TypeDefinition @'
+const PS = `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
+Add-Type -TypeDefinition @'
 using System;using System.Text;using System.Runtime.InteropServices;using System.Collections.Generic;
 public class FW {
   [DllImport("user32.dll")] static extern bool EnumWindows(EP cb, IntPtr p);
@@ -87,16 +89,32 @@ if ([FW]::Hit -ne '') {
 } else { Write-Output ('NOTFOUND'); foreach ($w in [FW]::All) { Write-Output ('  visible: ' + $w) } }
 `;
 
+/* 【占位符替换集中在一处】—— 这个函数是血泪教训换来的：
+ * PowerShell 脚本模板里有 __WANT__ 和 __OWNPID__ 两个占位符，谁忘了替换哪一个，
+ * 谁就会把字面量送进 PowerShell → 语法错误 → 那个工具整个失效，而 `node --check` 完全查不出来。
+ * 实测在同一个下午连续踩了三次：
+ *   ① clearAllTop 忘了传自己的 pid（导致桌宠自己的置顶被抹掉 → 用户"切窗口桌宠就不见了"）
+ *   ② focusWindow 加了 __OWNPID__ 后忘了替换（她报"focus_window is broken"）
+ *   ③ listWindows 同样忘了（返回 0 个窗口）
+ * 所以：**只保留这一个组装入口**，任何新加的 PS 调用都必须走它。 */
+function buildScript(want) {
+  return PS.replace('__WANT__', String(want == null ? '' : want).replace(/'/g, "''"))
+           .replace('__OWNPID__', String(process.pid));
+}
+
+function runPs(want, timeoutMs) {
+  return new Promise((resolve) => {
+    const script = buildScript(want);
+    execFile('powershell.exe', ['-NoProfile', '-Command', script], { timeout: timeoutMs || 25000, windowsHide: true },
+      (e, so) => resolve(String(so || '').trim() || (e ? 'ERR ' + e.message : '')));
+  });
+}
+
 function focusWindow(title) {
   return new Promise((resolve) => {
     const want = String(title || '').trim();
     if (!want) return resolve('（没给窗口名）');
-    const script = PS.replace('__WANT__', want.replace(/'/g, "''"));
-    execFile('powershell.exe', ['-NoProfile', '-Command', script], { timeout: 25000, windowsHide: true }, (e, so, se) => {
-      const out = String(so || '').trim();
-      if (e && !out) return resolve('调用失败：' + e.message);
-      resolve(out);
-    });
+    runPs(want).then((out) => (out ? resolve(out) : resolve('调用失败：没有输出')));
   });
 }
 
@@ -110,12 +128,7 @@ function clearAllTop() {
      PowerShell 根本不会跑 —— 我第一版就是这么写的，等于没清。这里直接跑脚本。
      ⚠️ 必须把自己的 pid 传进去：这样桌宠/对话窗自己的置顶不会被抹掉
      （用户报"一切到别的界面桌宠就不见了"，就是这个抹掉的后果）。 */
-  return new Promise((resolve) => {
-    const script = PS.replace('__WANT__', '').replace('__OWNPID__', String(process.pid));
-    execFile('powershell.exe', ['-NoProfile', '-Command', script], { timeout: 25000, windowsHide: true }, (e, so) => {
-      resolve(String(so || '').trim() || (e ? 'ERR ' + e.message : 'done'));
-    });
-  });
+  return runPs('', 25000).then((out) => out || 'done');
 }
 
 /* 列出当前可见窗口（标题 + 位置尺寸）。
@@ -129,8 +142,7 @@ function clearAllTop() {
  */
 function listWindows() {
   return new Promise((resolve) => {
-    const script = PS.replace('__WANT__', '');
-    execFile('powershell.exe', ['-NoProfile', '-Command', script], { timeout: 25000, windowsHide: true }, (e, so) => {
+    runPs('', 25000).then((so) => {
       const out = String(so || '');
       const rows = [];
       const re = /visible:\s*(.+?)\s*\[(-?\d+),(-?\d+)\s+(\d+)x(\d+)\]/g;
