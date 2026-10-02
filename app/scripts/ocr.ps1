@@ -1,4 +1,4 @@
-param([Parameter(Mandatory = $true)][string]$Path)
+﻿param([Parameter(Mandatory = $true)][string]$Path, [switch]$Json)
 # Windows 自带 OCR（WinRT OcrEngine），离线，支持系统里已安装的语言（中/英）。
 # 用法：powershell -NoProfile -ExecutionPolicy Bypass -File ocr.ps1 -Path <图片路径>
 #
@@ -36,9 +36,51 @@ try {
     if ($null -eq $engine) { throw 'OCR engine unavailable (no language pack installed)' }
 
     $result = Await ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
-    Write-Output $result.Text
+
+    if ($Json) {
+        # 【JSON 模式】输出每行每词的文字与包围盒，供 find_text 定位用。
+        # ⚠️ 为什么把坐标一起输出：Windows OCR 的 $result.Text 会把每个汉字之间插空格
+        #    （CJK 没空格，它当"词"处理），而且**完全丢掉行的位置** ——
+        #    只知道"读到了什么"，不知道"在哪"。要"文字的模板匹配"必须有 BoundingRect。
+        # ⚠️ 为什么用 ConvertTo-Json：PowerShell 5.1 会把非 ASCII 自动转义成 \uXXXX，
+        #    于是输出**纯 ASCII**，彻底绕开 stdout 编码问题（之前那版就是在这里踩的坑）。
+        # 注意：BoundingRect 的坐标系是**送入图片的像素坐标**（我们的抓帧就是 1920x1080 全屏），
+        #    所以直接可用，不需要再换算。
+        # ⚠️ 用管道 + ForEach-Object 构造，**不要用 `+=`** ——
+        #    实测 `$words += [pscustomobject]@{...}` 在 Windows PowerShell 5.1 上会报
+        #    "Method invocation failed because [System.Management.Automation.PSObject]
+        #     does not contain a method named 'op_Addition'"，整个 JSON 输出失败。
+        $outLines = @($result.Lines | ForEach-Object {
+            $ln = $_
+            [pscustomobject]@{
+                text  = $ln.Text
+                words = @($ln.Words | ForEach-Object {
+                    $r = $_.BoundingRect
+                    [pscustomobject]@{
+                        t = $_.Text
+                        x = [int][math]::Round($r.X); y = [int][math]::Round($r.Y)
+                        w = [int][math]::Round($r.Width); h = [int][math]::Round($r.Height)
+                    }
+                })
+            }
+        })
+        $obj = [pscustomobject]@{
+            ok = $true
+            imgW = $bitmap.PixelWidth; imgH = $bitmap.PixelHeight
+            text = $result.Text
+            lines = $outLines
+        }
+        Write-Output ($obj | ConvertTo-Json -Depth 6 -Compress)
+    }
+    else {
+        Write-Output $result.Text
+    }
 }
 catch {
-    Write-Error $_.Exception.Message
+    if ($Json) {
+        Write-Output (([pscustomobject]@{ ok = $false; error = $_.Exception.Message } | ConvertTo-Json -Compress))
+    } else {
+        Write-Error $_.Exception.Message
+    }
     exit 1
 }

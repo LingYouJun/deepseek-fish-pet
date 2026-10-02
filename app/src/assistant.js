@@ -23,6 +23,7 @@ const TOOL_TIER = {
   make_template: 'full', // 从当前画面裁一块存成模板
   find_template: 'full', // 用模板匹配精确定位（替代让模型估坐标）
   template_list: 'read', template_del: 'normal',
+  find_text: 'full',   // OCR 当前画面找一段文字并返回坐标（文字的模板匹配）
   proj_ls: 'read', proj_read: 'read', tag_list: 'read',
   open_path: 'normal', open_url: 'normal', skill_write: 'normal', skill_rm: 'normal', proj_rm: 'normal', proj_open: 'normal', proj_run: 'normal', proj_write: 'normal',
   tag_set: 'normal', tag_rm: 'normal',
@@ -78,6 +79,73 @@ async function captureScreenFallback() {
   fs.writeFileSync(p, png);
   const _s2 = require('./input').space();
   return { path: p, width: _s2.w, height: _s2.h, dataUrl: 'data:image/png;base64,' + png.toString('base64') };
+}
+
+/* OCR 的 JSON 模式：除了文字，还要每个词的包围盒 —— 这是 find_text 定位的依据。
+ * Windows OCR 的 $result.Text 有个坑：CJK 会被它当"词"，于是在每个汉字之间插空格，
+ * 而且**完全丢掉了位置**。所以定位必须走 ocr.ps1 -Json（Lines/ Words/ BoundingRect）。
+ * 坐标系：包围盒是**送进图片的像素坐标**，我们送的就是 1920x1080 的全屏抓帧 → 直接可用。 */
+function ocrJson(pngPath) {
+  return new Promise((resolve) => {
+    const script = path.join(__dirname, '..', 'scripts', 'ocr.ps1');
+    let child, done = false, out = '', err = '';
+    const fin = (v) => { if (!done) { done = true; resolve(v); } };
+    try {
+      child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-Path', pngPath, '-Json'],
+        { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch { return fin(null); }
+    const timer = setTimeout(() => { try { child.kill(); } catch {} fin(null); }, 25000);
+    const dec = new StringDecoder('utf8');
+    child.stdout.on('data', (d) => { if (out.length < 400000) out += dec.write(d); });
+    child.stderr.on('data', (d) => { if (err.length < 4000) err += dec.write(d); });
+    child.on('error', () => { clearTimeout(timer); fin(null); });
+    child.on('close', () => {
+      clearTimeout(timer);
+      const s = String(out || '').trim();
+      const i = s.indexOf('{');
+      if (i < 0) return fin(null);
+      try { const j = JSON.parse(s.slice(i)); return fin(j && j.ok ? j : null); } catch { fin(null); }
+    });
+  });
+}
+
+/* 在 OCR 结果里找一段文字，返回它的中心坐标（截图空间）。
+ * 为什么要做这个：模板匹配能精确找"图"，但**不认字** —— 而游戏里大量目标只有文字
+ * （干员名、设施名、列表项）。这个函数就是"文字的模板匹配"。
+ * 匹配规则：把每行的词**首尾相连**（OCR 会在汉字间插空格，所以要先归一化），
+ *   在归一化后的行文本里找目标子串，再把命中的字符区间映射回对应词的包围盒并求并集。
+ * 这样即使目标被 OCR 拆成多个"词"（"进驻" + "总览"），也能整体命中。 */
+function findTextInOcr(j, needle) {
+  const target = String(needle || '').replace(/\s+/g, '');
+  if (!target) return null;
+  const lines = (j && j.lines) || [];
+  for (const ln of lines) {
+    const words = ln.words || [];
+    if (!words.length) continue;
+    /* 归一化：拼出"字符 -> 词索引"的映射 */
+    let joined = '';
+    const map = [];
+    for (let wi = 0; wi < words.length; wi++) {
+      const t = String(words[wi].t || '').replace(/\s+/g, '');
+      for (let ci = 0; ci < t.length; ci++) { joined += t[ci]; map.push(wi); }
+    }
+    const at = joined.indexOf(target);
+    if (at < 0) continue;
+    const w0 = map[at], w1 = map[Math.min(map.length - 1, at + target.length - 1)];
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (let wi = w0; wi <= w1 && wi < words.length; wi++) {
+      const w = words[wi];
+      x0 = Math.min(x0, w.x); y0 = Math.min(y0, w.y);
+      x1 = Math.max(x1, w.x + w.w); y1 = Math.max(y1, w.y + w.h);
+    }
+    if (!Number.isFinite(x0)) continue;
+    return {
+      x: Math.round((x0 + x1) / 2), y: Math.round((y0 + y1) / 2),
+      box: { x: x0, y: y0, w: x1 - x0, h: y1 - y0 },
+      line: String(ln.text || ''), chars: target.length,
+    };
+  }
+  return null;
 }
 
 /* Windows 自带 OCR（离线，支持中英文）。失败返回空串，不影响截图展示。
@@ -568,6 +636,37 @@ async function run(tool, arg) {
     if (r.startsWith('NOTFOUND')) return '🪟 没找到标题含「' + arg + '」的窗口。当前可见窗口：\n' + r.slice(8);
     return '🪟 ' + r;
   }
+  if (tool === 'find_text') {
+    /* 【文字的模板匹配】OCR 当前画面，找出那段文字在哪，返回中心坐标。
+       用途：游戏里大量目标只有文字没有图标 —— 干员名、设施名、列表项、按钮上的字。
+       （模板匹配 find_template 认图不认字，正好互补。）
+       用法：find_text|要找的文字       或   find_text|要找的文字| x,y,w,h（只在这块区域里找）
+       找不到时会把**整屏 OCR 到的文字**列给她 —— 这样她能看到屏幕上真实写了什么，
+       而不是继续瞎猜（今天反复出现"她以为界面上有某个词、其实没有"）。 */
+    const sp0 = String(arg || '').split('|').map((s) => s.trim());
+    const needle = sp0[0] || '';
+    if (!needle) return '⚠️ 用法：find_text|要找的文字';
+    const cap4 = await captureScreenFallback();     // OCR 用无损 PNG（比 JPEG 帧更利于小字识别）
+    const j = await ocrJson(cap4.path);
+    if (!j) return '⚠️ OCR 没有返回结果（可能没有中文识别包，或这一步超时了）。可以改用 find_template 找图标，或 screen_look 自己看。';
+    let hit = findTextInOcr(j, needle);
+    /* 可选：限定区域（先整体命中再用区域过滤，避免"区域外有同名文字"干扰） */
+    if (hit && sp0[1]) {
+      const n = sp0[1].split(/[,，]/).map((v) => Number(v.trim()));
+      if (n.length === 4 && n.every((v) => Number.isFinite(v))) {
+        const inRoi = hit.x >= n[0] && hit.x <= n[0] + n[2] && hit.y >= n[1] && hit.y <= n[1] + n[3];
+        if (!inRoi) hit = null;
+      }
+    }
+    if (hit) {
+      return '🔤 找到「' + needle + '」：中心 (' + hit.x + ',' + hit.y + ')，它所在的那一行是「' + hit.line
+        + '」。现在可以直接 ACTION: click|' + hit.x + ',' + hit.y + '。';
+    }
+    const onScreen = ((j.lines || []).map((l) => String(l.text || '').replace(/\s+/g, '')).filter(Boolean)).slice(0, 12);
+    return '⚠️ 当前画面上没找到「' + needle + '」。OCR 实际读到的文字是：\n'
+      + (onScreen.length ? onScreen.map((t) => '- ' + t).join('\n') : '（这一屏没识别到任何文字）')
+      + '\n请照这个真实结果判断：也许这一屏确实没有这个词，或者需要先切到另一屏 / 往下滚。';
+  }
   if (tool === 'make_template') {
     /* 从**当前画面**裁一块存成模板（存 PNG 给人看 + 原始 BGRA 给 match.exe 用）。
        用法：make_template|按钮名| x,y,w,h
@@ -686,4 +785,6 @@ module.exports = {
   run, allowed, TOOL_TIER, RANK,
   __captureForTest: (grid, noCursor) => captureScreen(grid, noCursor),
   __captureFallbackForTest: () => captureScreenFallback(),
+  __findTextInOcr: (j, needle) => findTextInOcr(j, needle),
+  __ocrJson: (p) => ocrJson(p),
 };
