@@ -118,6 +118,36 @@ const VOCAB = {
   cet6: 'CET-6 level'
 };
 
+/* 【立绘窗隐藏的看门狗】用户报"启动不了桌宠" —— 实际是**她一直在跑、但立绘窗被藏起来了**：
+ * 日志里 `visibility {"hidden":true}` / `false` 交替出现，最后一次停在 true。
+ * 根因：所有"临时藏一下"的地方（看屏幕时藏立绘、把窗口让给点击目标、游戏托管时收起）
+ * 都是"藏 → setTimeout 放回"，**一旦在这两步之间被打断（热重载 / 异常 / 进程被杀），
+ * 窗口就永远藏着** —— 用户看到的就是"双击没反应、桌宠不见了"，而且单实例锁还被这个
+ * 活着的实例占着，所以重新启动也没用。
+ * 做法：每次隐藏都登记时间戳；看门狗每 3 秒查一次，只要**没有隐藏操作正在进行**
+ * （最近 4 秒内没登记过）却还是不可见，就无条件 show 回来。
+ * 为什么敢无条件 show：这个应用里**没有**"用户主动隐藏桌宠"的功能，隐藏都是内部临时行为。
+ * 例外：游戏托管（gameagent）会长时间收起桌宠 —— 那种情况用 petHideSticky 标记，
+ * 看门狗不去抢（否则会把桌宠塞回游戏画面上挡住点击）。 */
+let lastPetHideAt = 0;
+let petHideSticky = false;
+function markPetHidden(why) {
+  lastPetHideAt = Date.now();
+  try { dbg('[pet] 临时隐藏立绘窗（' + (why || '') + '）'); } catch {}
+}
+function startPetVisibilityWatchdog() {
+  setInterval(() => {
+    try {
+      if (!petWin || petWin.isDestroyed()) return;
+      if (petWin.isVisible()) return;
+      if (petHideSticky) return;                          // 游戏托管期间收起，是正常状态
+      if (Date.now() - lastPetHideAt < 4000) return;       // 正常的临时隐藏，别抢
+      petWin.show();
+      dbg('[pet] 看门狗：立绘窗被藏太久（上次隐藏于 ' + Math.round((Date.now() - lastPetHideAt) / 1000) + ' 秒前），已强制显示回来');
+    } catch {}
+  }, 3000);
+}
+
 function buildSystemPrompt(cfg) {
   const p = loadPersona();
   const mo = mood.load();
@@ -1432,7 +1462,7 @@ ipcMain.handle('assistant:run', async (_e, a) => {
   const LOOK_TOOLS = ['screen_look', 'screen_shot'];
   let petHiddenForLook = false;
   if (LOOK_TOOLS.includes(String(a && a.tool)) && petWin && !petWin.isDestroyed() && petWin.isVisible()) {
-    try { petWin.hide(); petHiddenForLook = true; await new Promise((r2) => setTimeout(r2, 350)); } catch {}
+    try { petWin.hide(); petHiddenForLook = true; markPetHidden('look'); await new Promise((r2) => setTimeout(r2, 350)); } catch {}
   }
   const yielded = yieldOwnWindowsAt(a && a.tool, a && a.arg);
   /* 【让开对话窗】用户反复强调了 4 次："以后你每次开始做事第一件事情就是最小化对话框"。
@@ -1504,7 +1534,7 @@ function yieldOwnWindowsAt(tool, arg) {
     if (w && !w.isDestroyed() && w.isVisible()) {
       const b = w.getBounds();
       if (dipX >= b.x && dipX <= b.x + b.width && dipY >= b.y && dipY <= b.y + b.height) {
-        w.hide(); hidden.push(w);
+        w.hide(); hidden.push(w); markPetHidden('yield');
         dbg('[pet] 目标点(' + Math.round(dipX) + ',' + Math.round(dipY) + ')被桌宠窗遮挡 → 临时让开');
       }
     }
@@ -1596,8 +1626,8 @@ function bubbleOnPetIfChatHidden(reply) {
    平时完全关闭；用户对她说"打游戏"→ 她按 play-game 技能调 game_start 才会跑。 */
 gameagent.init({
   onLog: (e) => { if (chatWin && !chatWin.isDestroyed()) chatWin.webContents.send('game:log', e); },
-  onStart: () => { if (petWin && !petWin.isDestroyed()) petWin.hide(); },   // 开打先把桌宠收起来，免得挡住点击
-  onStop: () => { if (petWin && !petWin.isDestroyed()) petWin.show(); },    // 循环自己结束时把桌宠放回来
+  onStart: () => { petHideSticky = true; if (petWin && !petWin.isDestroyed()) petWin.hide(); },   // 开打先把桌宠收起来（sticky：托管期间看门狗不抢）
+  onStop: () => { petHideSticky = false; if (petWin && !petWin.isDestroyed()) petWin.show(); },  // 结束把桌宠放回来并解除 sticky
   onFinish: (r) => {
     // 这趟的过程与结论进会话，交给已有的"经验提炼"在会话结束时消化，不另外造经验
     try {
@@ -1672,6 +1702,7 @@ if (!gotLock) {
        启动后几秒强制 show/restore 一次，把这种状态纠正回来。 */
     setTimeout(() => {
       try { if (petWin && !petWin.isDestroyed()) { if (!petWin.isVisible()) petWin.show(); } } catch {}
+      try { startPetVisibilityWatchdog(); dbg('[boot] 立绘窗可见性看门狗已启动'); } catch (e) { dbg('[boot] 看门狗启动失败 ' + e); }
       try { if (chatWin && !chatWin.isDestroyed() && chatWin.isMinimized()) chatWin.restore(); } catch {}
       dbg('[boot] 启动兜底：确认自己的窗口可见');
       /* 顺手把"被卡成永久置顶"的窗口放下来（第一版 focus_window 的遗留问题）。
@@ -1749,6 +1780,9 @@ if (!gotLock) {
  * 然后直接调这些函数驱动对话 —— 比走 IPC 少一层，也拿得到内部状态。
  * 正常运行时这些导出没有任何副作用。 */
 module.exports = {
+  petWinForTest: () => petWin,
+  markPetHiddenForTest: (w) => markPetHidden(w),
+  setPetHideStickyForTest: (v) => { petHideSticky = !!v; },
   buildSystemPrompt, buildContinuePrompt, genReply, logTurn, createChat, createPet, bubbleOnPetIfChatHidden, yieldOwnWindowsAt, restoreOwnWindows, loadPosition, savePosition, posFile,
   config, llm, memory, mood, stats, persona, personatags, petactions, speak,
   assistant, skills, projects, tts, asr, testlog, clock, userinput,

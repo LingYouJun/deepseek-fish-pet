@@ -12,6 +12,9 @@ const skills = require('./skills');
 const style = require('./style');
 const projects = require('./projects');
 const personatags = require('./personatags');
+/* ⚠️ 必须显式 require：find_template_scroll 里用了 userinput.waitUntilFree，
+   而这里以前只在个别分支里内联 require —— 漏了就是运行时 ReferenceError（语法检查查不出来）。 */
+const userinput = require('./userinput');
 
 // 每个工具所需的最低权限档
 const TOOL_TIER = {
