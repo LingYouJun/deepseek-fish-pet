@@ -511,6 +511,24 @@ async function runInner(tool, arg) {
       const facts = s.memory.slice().sort((a, b) => (Number(b.weight) || 0) - (Number(a.weight) || 0)).slice(0, 10);
       out += '\n\n【这个技能积累下来的经验】\n' + facts.map((f) => '- ' + f.text).join('\n');
     }
+    /* 【技能 × 记忆 联动的闭环】她归档经验时写的是**技能文件夹里的文件**
+       （例如 skills/play-game/网页排班/经验.md），而这里原来只给 SKILL.md 正文 ——
+       于是攒下来的经验下次加载**根本看不到**，同一个坑反复踩。
+       现在：小文件直接把内容带上；大文件只列清单（附字节数），她想看再 read_file。
+       （预算刻意压小：技能正文本身已可达 12000 字符，经验是补充而不是主体。） */
+    if (s.extras && s.extras.length) {
+      const shown = s.extras.filter((f) => f.text);
+      const listed = s.extras.filter((f) => !f.text);
+      if (shown.length) {
+        out += '\n\n【这个技能文件夹里积累的经验（已带内容）】';
+        for (const f of shown) out += '\n--- ' + f.rel + ' ---\n' + f.text;
+      }
+      if (listed.length) {
+        out += '\n\n【这个技能文件夹里还有这些文件（要看内容就 read_file）】\n'
+          + listed.map((f) => '- ' + f.rel + '（' + (f.bytes || '?') + ' 字节' + (f.note ? '，' + f.note : '') + '）').join('\n');
+        try { out += '\n  绝对路径：' + require('path').join(skills.userDir(), s.id); } catch {}
+      }
+    }
     // 界面风格这一个技能要跟"记忆"联动：加载时按当前好感度/心情微调冷暖
     if (s.id === style.SKILL_ID) {
       try {

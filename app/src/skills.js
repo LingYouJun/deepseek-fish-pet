@@ -95,7 +95,11 @@ function catalog() {
   return items.map((s) => '- ' + s.id + '：' + (s.description || s.name)).join('\n');
 }
 
-/* 某个技能独有经验库里的要点（阶段 2 写入；没有就返回空） */
+/* 某个技能独有经验库里的要点（阶段 2 写入；没有就返回空）
+ * ⚠️ 实测发现：**没有任何代码往这个文件里写** —— 归档时她写的是 Markdown 文件
+ *    （例如 skills/play-game/网页排班/经验.md，那文件真的存在），而这个结构化的
+ *    memory.json 读取路径一直是空的。所以真正该做的是**把技能文件夹里她攒的经验
+ *    一并给出来**（见下面的 extras），这个函数保留是为了兼容可能已经存在的旧文件。 */
 function memoryFacts(id) {
   try {
     const p = path.join(userDir(), id, 'memory.json');
@@ -104,12 +108,51 @@ function memoryFacts(id) {
   } catch { return []; }
 }
 
-/* 按需读取：完整说明 + 该技能的经验 */
+/* 技能文件夹里**除 SKILL.md 之外**的文件（她归档进来的经验就在这些文件里）。
+ * 为什么需要它：归档写的是文件，而 use_skill 原来只给 SKILL.md 正文 →
+ * 攒下来的经验下次加载时**根本看不到**，同一个坑会反复踩。
+ * 返回 [{ rel, bytes, text? }]，text 只在文件小、预算够时带上（其余只给清单，让她按需 read_file）。 */
+function extras(id, opts) {
+  const o = Object.assign({ maxFiles: 12, maxTotalChars: 3000, maxOneFileChars: 1500 }, opts || {});
+  const base = path.join(userDir(), String(id || ''));
+  const out = [];
+  let budget = o.maxTotalChars;
+  const walk = (dir, rel) => {
+    let items;
+    try { items = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const it of items) {
+      if (out.length >= o.maxFiles) return;
+      const abs = path.join(dir, it.name);
+      const r = rel ? rel + '/' + it.name : it.name;
+      if (it.isDirectory()) { walk(abs, r); continue; }
+      if (!it.isFile()) continue;
+      if (/^SKILL\.md$/i.test(it.name)) continue;           // 正文由 body 负责
+      if (/^memory\.json$/i.test(it.name)) continue;        // 结构化经验由 memoryFacts 负责（否则会重复贴一遍）
+      if (/\.(png|jpg|jpeg|webp|gif|bin|exe|zip)$/i.test(it.name)) { out.push({ rel: r, bytes: 0, note: '（二进制，不读内容）' }); continue; }
+      let text = '';
+      let bytes = 0;
+      try {
+        const st = fs.statSync(abs);
+        bytes = st.size;
+        if (bytes <= o.maxOneFileChars && budget > 0) {
+          text = fs.readFileSync(abs, 'utf8').slice(0, Math.min(bytes, budget));
+          budget -= text.length;
+        }
+      } catch {}
+      out.push({ rel: r, bytes, text });
+    }
+  };
+  walk(base, '');
+  return out;
+}
+
+/* 按需读取：完整说明 + 该技能的经验（结构化的 memory.json + 文件夹里归档的经验文件） */
 function read(id) {
   const key = String(id || '').trim();
   const s = list().find((x) => x.id === key || x.name === key || x.id.toLowerCase() === key.toLowerCase());
   if (!s) return null;
   s.memory = memoryFacts(s.id);
+  try { s.extras = extras(s.id); } catch { s.extras = []; }
   return s;
 }
 
@@ -170,4 +213,4 @@ function remove(rel) {
   return { path: rel };
 }
 
-module.exports = { list, catalog, read, memoryFacts, openFolder, userDir, builtinDir, ensureBuiltins, parseFront, safePath, ls, readFile, writeFile, remove, NS };
+module.exports = { list, catalog, read, memoryFacts, extras, openFolder, userDir, builtinDir, ensureBuiltins, parseFront, safePath, ls, readFile, writeFile, remove, NS };

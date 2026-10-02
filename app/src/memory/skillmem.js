@@ -16,7 +16,10 @@ function load() {
   const v = store.read(NS, EMPTY);
   return { cand: Array.isArray(v && v.cand) ? v.cand : [] };
 }
-function save(v) { store.write(NS, v); bus.emit('memory:changed', NS); }
+/* ⚠️ 实测踩到：save() 不传参数时原来会把 undefined 写下去，
+   store.write 里 JSON.stringify(undefined) 得到 undefined，直接抛类型错误。
+   现在不传参数就写当前状态（load()），保证不会因为一个疏忽把库写坏。 */
+function save(v) { store.write(NS, v === undefined ? load() : v); bus.emit('memory:changed', NS); }
 
 const norm = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, '');
 
