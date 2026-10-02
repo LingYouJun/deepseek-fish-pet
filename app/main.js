@@ -1511,7 +1511,12 @@ ipcMain.handle('assistant:run', async (_e, a) => {
   // 工具结果可能很长（列目录 / 抓网页 / 截屏文字），入库前先截断，别把上下文撑爆。
   // 但「读」类工具的结果**就是模型要读的内容**，按普通上限截等于没读到
   // （技能说明被砍到 250 字，模型就会说"说明被截断了"然后乱找路）——所以按工具给不同上限。
-  const READ_CAPS = { use_skill: 5000, skill_read: 5000, proj_read: 5000, read_file: 2500, skill_ls: 1200, proj_ls: 1200, list_dir: 2000 };
+  /* ⚠️ 这些上限决定"一次工具调用能给模型多少东西"。原来的 read_file=2500 太小：
+   她要查一份 21KB 的干员总表得读 9 次（每次还占一轮对话），实测体验很差。
+   调大到：技能正文 12000 字符（≈6000 token，技能是"刻意加载"的，值得）、
+   普通读文件 6000（≈3000 token，比历史预算略小，不至于把上下文挤爆）。
+   （另一条路是让文件方拆成小片，那边也做了 —— 两条一起用最稳。） */
+      const READ_CAPS = { use_skill: 12000, skill_read: 12000, proj_read: 8000, read_file: 6000, skill_ls: 3000, proj_ls: 2000, list_dir: 3000 };
   const cap = READ_CAPS[a.tool] || ((config.load().memory || {}).toolResultChars) || 500;
   const cut = memory.tokens.clip(text, cap);
   memory.session.push({ role: 'user', content: `[系统] 我刚执行了操作 ${a.tool}（${a.arg}），结果如下：\n${cut}` });
