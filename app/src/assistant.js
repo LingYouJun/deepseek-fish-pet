@@ -16,6 +16,15 @@ const personatags = require('./personatags');
    而这里以前只在个别分支里内联 require —— 漏了就是运行时 ReferenceError（语法检查查不出来）。 */
 const userinput = require('./userinput');
 
+/* 【前台断言的状态】记住最近一次 focus_window 成功的目标窗口。
+   为什么需要：Windows 把**键盘输入发给前台窗口**，而不是"最上层窗口"。
+   2026-10-02 实测：她调 key|ctrl+f 得到 true，实际 Ctrl+F 发给了别的窗口；
+   type|数据目录 得到 true，字打进了另一个程序的输入框 —— 而所有工具都报成功，
+   她做错了却无从知道。
+   现在：key/type/click 会检查"前台是不是还是那次 focus 的目标"，
+   不一致就**明确报错并说明实际前台是谁**，而不是闷头执行再返回 true。 */
+let lastFocus = null;
+
 // 每个工具所需的最低权限档
 const TOOL_TIER = {
   list_dir: 'read', read_file: 'read', use_skill: 'read', skill_ls: 'read', skill_read: 'read',
@@ -775,13 +784,26 @@ async function runInner(tool, arg) {
       + '——**包括我自己的桌宠窗**——挡住，或者先点一下目标窗口的空白处让它获得焦点，然后再滚。）';
   }
   if (tool === 'focus_window') {
-    /* 把目标窗口抬到最前。她自己反复被'游戏被别的窗口盖住'挡住（看不到就点不准），
-       而 Windows 不允许后台进程改前台 —— 但 SetWindowPos(HWND_TOPMOST) 不需要那个权限，
-       抬到最上面就够（截图和点击都是按最上面的窗口算的）。 */
+    /* 把目标窗口真正置到前台（并且回读校验）。
+       ⚠️ 旧注释写的是"用 SetWindowPos(HWND_TOPMOST) 抬到最上面就够（截图和点击都按最上面的算）"
+       —— **这是错的**，2026-10-02 实测：
+         · HWND_TOPMOST 只让窗口**看得到**，`GetForegroundWindow()` 一个字都不变 ✗
+         · 而 Windows 把**键盘输入发给前台窗口**，不是"最上层窗口" ✗
+         → 于是 key / type 全部打到了别的窗口上，而工具还返回 true。
+       现在 focuswin v2 做的是：分层尝试（直接设 → 空按 Alt 解锁 → AttachThreadInput → 最小化再恢复）
+       + **回读 GetForegroundWindow 确认**，不成功就返回 FAIL（绝不假成功）。
+       ★ 它还会记下这次的目标窗口，供 key/type/click 做"前台断言"★（见下面的 lastFocus）。 */
     const r = await require('./focuswin').focusWindow(arg);
-    if (r.startsWith('OK')) return '🪟 已把窗口抬到最前：' + r.slice(3) + '（现在截图/点击都以它为准）';
+    if (r.startsWith('OK')) {
+      lastFocus = String(arg || '').trim();            // 记下来：后续键鼠动作要断言前台还是它
+      return '🪟 已把窗口置到前台并通过回读校验：' + r.slice(3)
+        + '\n（键盘输入现在会发给它。若屏幕上仍被别的窗口视觉遮挡，说明那是置顶窗口 —— 但输入已经能到达目标了。）';
+    }
     if (r.startsWith('NOTFOUND')) return '🪟 没找到标题含「' + arg + '」的窗口。当前可见窗口：\n' + r.slice(8);
-    return '🪟 ' + r;
+    /* FAIL：明确告诉她是哪一步没成、现在的前台是谁 —— 不许含糊过去 */
+    return '🪟 ❌ 没能把「' + arg + '」置到前台（' + r + '）\n'
+      + '这说明接下来的 key / type / click 会作用在**别的窗口**上 —— 所以先别继续操作，'
+      + '要么换一个标题片段重试，要么先让主人把它点到前面。';
   }
   if (tool === 'watch_screen') {
     /* 【连续看屏幕】给"主人演示一遍、她跟着学"这种场景用。
@@ -1073,32 +1095,42 @@ async function runInner(tool, arg) {
     return n2 ? '🗑 已删除模板「' + String(arg).trim() + '」' : '⚠️ 没有这个模板';
   }
   if (tool === 'windows_list') {
-    /* 列出可见窗口（标题+位置尺寸，**换算成截图空间的像素**）。
+    /* 列出可见窗口（标题 + 位置尺寸，**物理像素**，和截图空间一致）。
        抄自参考项目 Coopanion 的 cua_windows：给模型一条"结构化通道"，
        这样"哪个窗口在哪、该切哪个"就不必靠模型猜坐标。
-       ⚠️ 坐标换算：跑 PowerShell 的子进程不是 DPI-aware，Windows 给它的是虚拟化坐标
-       （物理 ÷ scaleFactor），而截图空间是物理像素 —— 所以用"截图宽 ÷ DIP 宽"这个比值乘回去。
-       本机实测 1920/1536 = 1.25；不乘的话她会按偏小 25% 的坐标去点。 */
-    const rows = await require('./focuswin').listWindows();
+
+       ⚠️⚠️ 坐标换算的责任在【底层】而不是这里 —— 这里**绝对不能再乘任何系数**。
+       历史：旧版 `focuswin.listWindows` 的注释写着"返回前必须乘回 scaleFactor"，
+       但代码里根本没乘（返回的是 PowerShell 子进程被虚拟化的坐标，物理÷1.25），
+       于是这里用 capK = 截图宽/逻辑宽 补乘了一次 —— 工具因此是对的，但底层是错的。
+       2026-10-02 我把底层改成**声明 DPI 感知**（DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2），
+       它现在直接返回物理像素（实测：浏览器 16,124 1074x665，与 UIA 真值逐字一致）。
+       所以这里那次补乘必须删掉 —— 否则又会偏大 25%（同一个 bug 换个方向再犯一次）。
+       验收判据：本工具输出的窗口坐标，必须和 UI Automation 报的 BoundingRectangle 一致。 */
+    const list = await require('./focuswin').listWindows();
+    const rows = (list && list.windows) || [];
     if (!rows.length) return '🪟 没读到任何可见窗口（可能被权限挡了）。';
-    let capK = 1;
-    try {
-      const { screen } = require('electron');
-      const d = screen.getPrimaryDisplay();
-      const s = require('./input').space();
-      if (d && d.size && d.size.width) capK = s.w / d.size.width;
-    } catch {}
+    const fg = await require('./focuswin').foreground();
     const lines = rows.slice(0, 30).map((r) => '- 「' + r.title + '」 左上('
-      + Math.round(r.x * capK) + ',' + Math.round(r.y * capK) + ') 大小 '
-      + Math.round(r.w * capK) + 'x' + Math.round(r.h * capK));
-    return '🪟 当前可见窗口（坐标已换算成截图空间，可以直接用来 click/focus_window）：\n' + lines.join('\n');
+      + r.x + ',' + r.y + ') 大小 ' + r.w + 'x' + r.h
+      + (r.iconic ? '  【最小化】' : '')
+      + (fg && fg.title === r.title ? '  ★当前前台★' : ''));
+    return '🪟 当前可见窗口（坐标是**物理像素**，可直接用于 click / focus_window）：\n'
+      + lines.join('\n')
+      + '\n（★标的是当前前台窗口 —— 键盘输入只会发给它。要让别的窗口收键盘，先 focus_window。）';
   }
   if (tool === 'type') {
     /* 【分段可中断输入】抄自参考项目 Coopanion（packages/cortico-world-cua/src/engine-child.ts:113-126）：
        长文本按 16 字符一段发，**每段之间再查一次主人是否在用键鼠**，他一动就停手，
        并**如实回报实际打出了几个字符**（它的 cua_type 回执就写"只输入了 x/y 个字符：
        用户开始操作，停了下来"）。原来是一次性把整段发进 Input.exe —— 主人中途接手时
-       她的输入会继续灌进去，把人正在打的字搅乱。 */
+       她的输入会继续灌进去，把人正在打的字搅乱。
+
+       ★ 前台断言（2026-10-02 加）★：输入只会进【前台窗口】。如果最近一次 focus_window
+       的目标窗口现在不是前台了，就**拒绝输入并报明实情** —— 否则字会打进别的程序里，
+       而她还以为成功了（这一天实测过两次）。 */
+    const gate = await require('./safedrive').assertForegroundOrReport(lastFocus);
+    if (!gate.ok) return gate.message;
     const text = String(arg);
     const CHUNK = 16;
     let done = 0;
@@ -1125,11 +1157,17 @@ async function runInner(tool, arg) {
     return `✅ 已输入文字：${text.slice(0, 50)}（已等 ${(settle / 1000).toFixed(1)}s）`;
   }
   if (tool === 'key') {
+    /* ★ 前台断言（2026-10-02 加）★：按键只会进【前台窗口】。
+       实测事故：她调 key|ctrl+f 得到 true，而 Ctrl+F 发给了别的窗口。
+       现在若最近一次 focus_window 的目标已经不是前台，就拒绝执行并报明实情。 */
+    const gateK = await require('./safedrive').assertForegroundOrReport(lastFocus);
+    if (!gateK.ok) return gateK.message;
     input.key(arg);
     /* 按键（回车/ESC/方向键）常常触发界面跳转（比如登录、确认对话框），同样要等 */
     const settle = Number((config.load().memory || {}).actionSettleMs) || 1500;
     await new Promise((r) => setTimeout(r, settle));
-    return `✅ 已按键：${arg}（已等 ${(settle / 1000).toFixed(1)}s）`;
+    return `✅ 已按键：${arg}（已等 ${(settle / 1000).toFixed(1)}s，发给了前台「${gateK.foreground}」）`
+      + (gateK.warn ? '\n' + gateK.warn : '');
   }
 }
 
