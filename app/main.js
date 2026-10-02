@@ -131,7 +131,7 @@ function buildSystemPrompt(cfg) {
   } catch {}
   let actionSec = '';
   if (tier !== 'off') {
-    let tools = '- open_url|https://...  (open a web page in the user\'s browser)\n- open_path|C:\\...  (open a file or app)\n- list_dir|C:\\...  (list a folder)\n- read_file|C:\\...  (read a text file)\n- use_skill|<skill id>  (load a skill\'s full instructions before doing the task)\n- tag_list  (看到你的人格词汇表：tier1 核心人格决定你的立绘)\n- tag_set|{"id":"yandere","label":"病娇","tier":1,"moodDir":1,"words":["病娇","偏执"]}  (补/改人格词条；tier1=核心人格)\n- tag_rm|<id>\n';
+    let tools = '- open_url|https://...  (open a web page in the user\'s browser)\n- open_path|C:\\...  (open a file or app)\n- list_dir|C:\\...  (list a folder)\n- run_file|C:\\full\\path\\script.py  (run a script/file at an ABSOLUTE path; use it when the user names a file outside your project sandbox)\n- write_file|C:\\full\\path\\name.txt||<content>  (write a file to an ABSOLUTE path; use this — not proj_write — when the user names a folder outside your project sandbox. Multi-line content is fine: just keep writing on the following lines, the ACTION parser preserves them)\n- read_file|C:\\...  (read a text file)\n- use_skill|<skill id>  (load a skill\'s full instructions before doing the task)\n- tag_list  (看到你的人格词汇表：tier1 核心人格决定你的立绘)\n- tag_set|{"id":"yandere","label":"病娇","tier":1,"moodDir":1,"words":["病娇","偏执"]}  (补/改人格词条；tier1=核心人格)\n- tag_rm|<id>\n';
     if (tier === 'web' || tier === 'full') {
       tools += '- web_open|<url>  (open a page in a controlled browser and read its content)\n- web_click|<CSS selector>  (click an element on the current page)\n- web_type|<selector>||<text>  (type text into an input)\n- web_read  (read the current page content again)\n';
     }
@@ -186,7 +186,7 @@ function buildSystemPrompt(cfg) {
       + '<<<WRITE: <project>/index.html\n<the complete file content, real line breaks>\n>>>\n'
       + '(several blocks = several files; nothing is written until the user approves)\n'
       + 'Tools (paths are relative to the project folder): proj_ls|<path>  proj_read|<path>  proj_rm|<path>  proj_open|<path>  proj_run|<path>  proj_write|<path>||<content>\n'
-      + 'proj_write creates/overwrites one file under the project folder (use it mid-task, where a multi-line WRITE block is awkward). For several files at once, the WRITE block above is still fine.\n'
+      + 'proj_write creates/overwrites one file **under your own project sandbox** (a relative path). If the user names a folder outside that sandbox, use write_file with an ABSOLUTE path instead - do NOT quietly write into the sandbox and then report success: the user will look in the folder they named and find nothing (this really happened). If no tool can do what was asked, SAY SO plainly instead of doing something else and calling it done. proj_write is also handy mid-task, where a multi-line WRITE block is awkward. For several files at once, the WRITE block above is still fine.\n'
       + 'proj_run actually EXECUTES a file and returns its stdout/stderr — use it to test and debug your own scripts (.py .js .mjs .cjs .bat .cmd .ps1) and then fix them. For .html use proj_open (browser) instead.\n'
       + 'proj_open opens a file with the default app — for .html that is the browser, which is how you "run" a web app.\n'
       + 'Whenever you build an interface, follow your 「界面风格」 skill. Keep apps self-contained: one HTML file when possible, no CDN, no external images.\n';
@@ -1470,9 +1470,10 @@ function restoreOwnWindows(list) {
 function buildContinuePrompt(cfg) {
   const p = loadPersona();
   const tier = cfg.assistant || 'off';
-  let tools = '- open_url|https://...   - open_path|C:\\...   - list_dir|C:\\...   - read_file|C:\\...   - use_skill|<skill id>\n';
+  let tools = '- open_url|https://...   - open_path|C:\\...   - list_dir|C:\\...   - read_file|C:\\...   - run_file|C:\\abs\\path（跑绝对路径的脚本）   - write_file|C:\\abs\\path||<content>（绝对路径写入；主人指定目录时用它，别用 proj_write）   - use_skill|<skill id>\n';
   tools += '- skill_ls|<path>   - skill_read|<path>   - skill_write|<path>||<text>   - skill_rm|<path>\n';
   tools += '- proj_ls|<path>   - proj_read|<path>   - proj_rm|<path>   - proj_open|<path>   - proj_run|<path>   - proj_write|<path>||<content>\n';
+    tools += 'Note: proj_* only works inside your own sandbox. When the user names another folder, use write_file with an ABSOLUTE path. If nothing can do it, say so plainly instead of doing something else and reporting success.\n';
   if (tier === 'web' || tier === 'full') tools += '- web_open|<url>   - web_click|<css selector>   - web_type|<selector>||<text>   - web_read\n';
   if (tier === 'full') tools += '- screen_shot   - screen_look|<question>   - click|x,y   - rclick|x,y   - dclick|x,y   - move|x,y   - drag|x1,y1|x2,y2   - scroll|x,y|down|5  (滚轮；方向用 up/down 词写，别用正负号)   - type|<text>   - key|<name>   - game_start|<game+goal+strategy>   - game_stop   - game_status\n';
   return `You are "${p.name || '大肥鱼'}", a desktop pet (${p.personality || '傲娇、温柔、嘴硬'}). Stay in character.

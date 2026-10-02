@@ -225,13 +225,28 @@ function parseReply(text) {
     return '';
   };
   /* ACTION 不要求在行首：模型常把标记或说明和 ACTION 挤在同一行。
-     只要行内出现 "action:" 就取它后面的内容（真伪交给 assistant.allowed/run 判）。 */
+     只要行内出现 "action:" 就取它后面的内容（真伪交给 assistant.allowed/run 判）。
+     ⚠️ 但**参数里可能含换行**：parseReply 在开头就把整段按行切了，所以
+     `write_file|C:\x.py||第一行\n第二行` 里的第二行会被切掉 —— 实测她因此写不出
+     任何多行脚本（"the write tool keeps cutting my content at the newline"，
+     calc.py 只剩 14 字节）。所以：**权限表里带 || 的写入类 ACTION 要按"整段原文"取**，
+     不能只看那一行。 */
   const findAction = () => {
     for (const l of lines) {
       const m = l.match(/(?:^|\s)action\s*[:：]\s*(.+)$/i);
       if (m) return m[1].trim();
     }
     return '';
+  };
+  /* 带 || 的写入类 ACTION：从原文里定位，取到**文末**（保留其中的换行）。
+     只在确实出现 "||" 时才这么干，避免把普通 ACTION 后面的闲聊也吞进来。 */
+  const findActionMultiline = () => {
+    const re = /(?:^|\s)action\s*[:：]\s*([a-z][a-z0-9_]*)\s*\|([\s\S]*)$/i;
+    const m = raw.match(re);
+    if (!m) return '';
+    const rest = m[2];
+    if (!rest.includes('||')) return '';           // 没有 || 就不算写入类，交给逐行逻辑
+    return m[1].toLowerCase() + '|' + rest.trim();
   };
   const en = find(['en:', 'en：']);
   const zh = find(['zh:', 'zh：']);
@@ -248,7 +263,8 @@ function parseReply(text) {
   if (c2) choices.push({ en: c2, zh: c2zh, ipa: '' });
 
   // 可选：电脑操作请求 ACTION: tool|arg
-  const actLine = findAction();
+  // 先试「整段多行」版本（写入类必须用它，否则内容会在第一个换行处被切断），没有再退回逐行版本
+  const actLine = findActionMultiline() || findAction();
   let action = null;
   if (actLine) {
     const i = actLine.indexOf('|');

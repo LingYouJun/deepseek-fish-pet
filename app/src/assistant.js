@@ -16,6 +16,8 @@ const personatags = require('./personatags');
 // 每个工具所需的最低权限档
 const TOOL_TIER = {
   list_dir: 'read', read_file: 'read', use_skill: 'read', skill_ls: 'read', skill_read: 'read',
+  write_file: 'full',
+  run_file: 'full',     // 跑任意绝对路径的脚本（和 type/key/screen 同级，只在 full 档可用）   // 写任意绝对路径 —— 和 type/key/screen 同级，只在 full 档可用
   proj_ls: 'read', proj_read: 'read', tag_list: 'read',
   open_path: 'normal', open_url: 'normal', skill_write: 'normal', skill_rm: 'normal', proj_rm: 'normal', proj_open: 'normal', proj_run: 'normal', proj_write: 'normal',
   tag_set: 'normal', tag_rm: 'normal',
@@ -231,6 +233,31 @@ async function run(tool, arg) {
     const text = readHead(arg, 3000);
     return `📄 ${arg}：\n${text}`;
   }
+  if (tool === 'write_file') {
+    /* 【为什么加它】实测发现的能力缺口：
+     * 主人说"在 C:\deepseek\pet-test 下新建 hello.txt"，
+     * 而当时**只有** proj_write 能写文件，它是**沙盒内**的（相对路径、落在
+     * %APPDATA%\<app>\projects\ 下）—— 于是她"换个地方写完 + 报成功"，
+     * 主人去指定目录一看什么都没有，就成了"她说了做了其实没做"。
+     * 现在补一个**绝对路径**的写入（和 read_file/list_dir 同一族，权限档 full），
+     * 让"写到主人指定的目录"这件事真的做得成。
+     *
+     * 安全边界：只允许绝对路径（相对路径一律拒绝，免得又落进沙盒让人误解）；
+     * 单次内容上限 200KB；写入前把父目录建出来；返回**绝对路径**，让主查看得见落点。 */
+    const raw = String(arg || '');
+    const i = raw.indexOf('||');
+    if (i < 0) throw new Error('格式：write_file|C:\\完整\\路径\\文件名||文件内容');
+    const p = raw.slice(0, i).trim().replace(/^["']|["']$/g, '');
+    const content = raw.slice(i + 2);
+    if (!path.isAbsolute(p)) {
+      throw new Error('write_file 需要**绝对路径**（例如 C:\\deepseek\\pet-test\\hello.txt）。'
+        + '如果你是想写到自己的项目沙盒里，请改用 proj_write|<相对路径>||<内容>。收到的是：' + p);
+    }
+    if (Buffer.byteLength(content, 'utf8') > 200 * 1024) throw new Error('内容超过 200KB，太大了');
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, content, 'utf8');
+    return '💾 已写入：' + p + '（' + Buffer.byteLength(content, 'utf8') + ' 字节）';
+  }
 
   /* ---------------- 技能：按需加载完整说明 ---------------- */
   if (tool === 'use_skill') {
@@ -332,9 +359,14 @@ async function run(tool, arg) {
     const r = await projects.open(arg || '');
     return '🌐 已用默认程序打开：' + r.path;
   }
-  if (tool === 'proj_run') {
+  if (tool === 'proj_run' || tool === 'run_file') {
     const cfgR = config.load();
-    const r = await projects.run(arg || '', (cfgR.memory || {}).projRunTimeout || 60000);
+    /* run_file = 同一套执行器，但**允许绝对路径**（权限档 full 才挂得上）。
+       为什么加：实测主人说"帮我跑一下 C:\deepseek\pet-test\calc.py"，
+       而当时只有沙盒内的 proj_run —— 她把绝对路径传进去只收到"路径越界"，
+       于是判断"文件不存在"，最后如实告诉主人"文件不在"（其实是错的）。
+       现在「跑主人指定的脚本」这件事有了正确出口。 */
+    const r = await projects.run(arg || '', (cfgR.memory || {}).projRunTimeout || 60000, tool === 'run_file');
     const head = r.timeout
       ? '⏱ 运行超时被强制结束（' + Math.round(r.ms / 1000) + 's）'
       : (r.code === 0 ? '✅ 运行成功（' + Math.round(r.ms / 1000) + 's，退出码 0）' : '❌ 运行出错（退出码 ' + r.code + '，' + Math.round(r.ms / 1000) + 's）');

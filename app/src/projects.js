@@ -23,7 +23,17 @@ function safePath(rel) {
   const base = path.resolve(rootDir());
   const cleaned = String(rel == null ? '' : rel).replace(/\\/g, '/').replace(/^\/+/, '').trim();
   const full = path.resolve(base, cleaned);
-  if (full !== base && !full.startsWith(base + path.sep)) throw new Error('路径越界（只能在项目文件夹里操作）');
+  if (full !== base && !full.startsWith(base + path.sep)) {
+    /* ⚠️ 报错必须**可行动**：实测她把主人给的绝对路径（C:\deepseek\pet-test\calc.py）
+       传给了 proj_run / proj_read，只收到一句"路径越界"，于是推断"文件不存在"，
+       最后如实告诉主人"文件不在"（其实是错的，文件就在那儿）。
+       所以这里直接点名该换成哪个工具，她下一轮就能自己改对。 */
+    throw new Error('路径越界：proj_* 系列只能操作**你自己的项目沙盒**'
+      + '（userData\\projects\\ 下、用相对路径）。'
+      + '要处理主人指定的**绝对路径**，请改用：'
+      + 'read_file|<绝对路径> / list_dir|<绝对路径> / write_file|<绝对路径>||<内容> / run_file|<绝对路径>。'
+      + '收到的是：' + String(rel).slice(0, 80));
+  }
   /* 上面只挡了 ".."、绝对路径、UNC、C:evil 这类字符串花招，挡不住**重解析点**：
      AI 可以用 proj_run 跑一个 `mklink /J out C:\Users` 的 bat，
      之后 proj_ls / proj_read / WRITE 块全都会跟着 junction 落到项目目录外。
@@ -164,9 +174,12 @@ function clipOut(s, max) {
   return t.length > cap ? t.slice(0, cap) + '\n…（输出过长已截断，共 ' + t.length + ' 字）' : t;
 }
 
-function run(rel, timeoutMs) {
+/* allowAbs=true 时接受**绝对路径**（给 run_file 用，权限档 full 才能调）。
+ * 沙盒语义靠参数控制，而不是改 safePath —— 这样 proj_* 的隔离原样保留，
+ * 只有显式走 run_file 的调用才越过沙盒。 */
+function run(rel, timeoutMs, allowAbs) {
   return new Promise((resolve, reject) => {
-    const p = safePath(rel);
+    const p = (allowAbs && path.isAbsolute(String(rel || ''))) ? String(rel) : safePath(rel);
     if (!fs.existsSync(p)) {
       /* 常见误用：把"命令 + 参数"整串当路径传（实测 proj_run|python calc/mul.py）。
          proj_run 只接受**一个文件路径**，解释器按扩展名自动选 —— 这里直接点破。 */
