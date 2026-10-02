@@ -377,11 +377,33 @@ async function run(tool, arg) {
     return `✅ 已拖拽：(${x1},${y1}) → (${x2},${y2})`;
   }
   if (tool === 'scroll') {
-    const parts = String(arg).split('|');
+    const parts = String(arg).split('|').map((s) => s.trim());
     const [x, y] = parseXY(parts[0]);
-    const delta = Number(parts[1]) || 120;
+    /* 支持三种写法，意思一样：
+     *   scroll|x,y|down          向下滚一屏（默认 5 格 = 600）
+     *   scroll|x,y|down|10       向下滚 10 格
+     *   scroll|x,y|-600          直接给滚轮量（**正数 = 向上**，Windows 原生约定）
+     *
+     * 为什么要加 up/down 这种写法：原来只收裸数字，而"正数向上"和很多人的直觉
+     * （网页里 scrollTop 正数是往下）**相反** —— 实测模型会搞反，用户就报了
+     * "滚动工具反了，不能自由滚动"。用词表达方向就没有歧义了。
+     * 另外原来默认只有 120（一格），一次滚一丁点，多步任务里光滚屏就把步数耗光，
+     * 这也是"不能自由滚动"的来源。现在默认向下滚一屏，还可以一次给格数。 */
+    const dirWord = String(parts[1] || '').toLowerCase();
+    let delta;
+    if (['up', 'down', '上', '下'].includes(dirWord)) {
+      const n = Math.max(1, Math.min(20, Number(parts[2]) || 5));
+      delta = (dirWord === 'up' || dirWord === '上' ? 1 : -1) * n * 120;
+    } else {
+      delta = Number(parts[1]) || 0;
+      if (!delta) delta = -600;                     // 什么都不给 → 向下滚一屏
+    }
+    delta = Math.max(-6000, Math.min(6000, delta));  // 封顶，别一滚到底
     input.scroll(x, y, delta);
-    return `✅ 已滚动：(${x},${y}) ${delta > 0 ? '向上' : '向下'}`;
+    const up = delta > 0;
+    return `✅ 已滚动：(${x},${y}) 向${up ? '上' : '下'} ${Math.abs(delta) / 120} 格\n`
+      + '（滚轮只会作用于**光标下/当前有焦点**的那个窗口。要是没反应：先确认目标窗口没被别的窗口'
+      + '——**包括我自己的桌宠窗**——挡住，或者先点一下目标窗口的空白处让它获得焦点，然后再滚。）';
   }
   if (tool === 'type') {
     input.type(arg);

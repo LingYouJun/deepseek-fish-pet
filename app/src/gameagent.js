@@ -22,6 +22,8 @@ const PROTOCOL = '\n\n【协议】每次观察后：'
   + '\n   ACTION: 工具|参数     —— 坐标基于 ' + (() => { try { const s = require('./input').space(); return s.w + 'x' + s.h; } catch { return '1920x1080'; } })() + ' 截图，左上角 0,0，取你要点的元素中心'
   + '\n   DONE                  —— 目标已达成，或当前确实没有任何可做的操作（就写 DONE，别写成 ACTION: DONE）'
   + '\n可用工具：click / dclick / rclick / drag / scroll / type / key / move。'
+  + '\n滚轮写法：scroll|x,y|down 或 scroll|x,y|up|5 —— **方向用 up/down 词写，别用正负号**（正数其实是向上，容易搞反）。'
+  + '\n滚轮只作用于光标下／有焦点的那个窗口：没反应就先点一下目标窗口的空白处让它获得焦点，再滚。'
   + '\n注意：一次只做一个动作；看不清就先点开看得清的地方，别乱点。';
 
 let onLog = () => {};
