@@ -172,8 +172,11 @@ async function run(tool, arg) {
        她自己报的："放大后视觉模型说编辑队列在约 (2200,600)，已经超出 1920 宽的屏幕范围"。
        放大图只让她按【放大图自己的像素坐标】报，换算由程序做（见 ZoomState / zoomConvert）。 */
     const zoomPre = (function () { try { return /\|\|\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*\d+\s*$/.test(String(arg || '')); } catch { return false; } })();
-    const cap = await captureScreen(!zoomPre);
-    if (!zoomPre) ZoomState = null;   // 普通看屏幕：清掉上一次的放大参数，免得之后点击被错误换算
+    /* 放大看时**走无损的 PNG 路径**：帧流是 JPEG，把它的压缩噪点放大 3 倍只会更糊 ——
+       实测她的原话："这几张放大图太糊，我定不准卡片坐标"。PNG 那条路径
+       （desktopCapturer 原生图 → resize → PNG）是无损的，放大出来的字是锐利的。 */
+    const cap = zoomPre ? await captureScreenFallback() : await captureScreen(true);
+    if (!zoomPre) ZoomState = null;   // 普通看屏幕：清掉上一次的放大参数
     timing.captureMs = tick() - tCap;
     /* 【局部放大】用户点出的真问题："这不是游戏问题，而是你给她分辨率太低了"。
        实测：抓帧确实是 1920x1080（= 物理屏 1:1，不能再高），但**整屏只有 207 万像素**，

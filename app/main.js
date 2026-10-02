@@ -1508,7 +1508,7 @@ function buildContinuePrompt(cfg) {
   let tools = '- open_url|https://...   - open_path|C:\\...   - list_dir|C:\\...   - read_file|C:\\...   - focus_window|<标题片段>（把那个窗口抬到最前，被挡住时用）   - run_file|C:\\abs\\path（跑绝对路径的脚本）   - write_file|C:\\abs\\path||<content>（绝对路径写入；主人指定目录时用它，别用 proj_write）   - use_skill|<skill id>\n';
   tools += '- skill_ls|<path>   - skill_read|<path>   - skill_write|<path>||<text>   - skill_rm|<path>\n';
   tools += '- proj_ls|<path>   - proj_read|<path>   - proj_rm|<path>   - proj_open|<path>   - proj_run|<path>   - proj_write|<path>||<content>\n';
-    tools += 'DRIFT in the continue prompt: dense UIs give slightly different coords for the same button each look (20-120px). If a click changes nothing, do NOT repeat the same coordinate - try ~30-50px around it, and stop after 2-3 tries with an honest report.\n';
+    tools += 'DRIFT in the continue prompt: dense UIs give slightly different coords for the same button each look. If a click changes nothing, do NOT repeat the same coordinate - try ~30-60px around it, or zoom in with screen_look|<question>||x,y,w,h first. **Do not give up early** (the user asked for this): keep trying DIFFERENT approaches up to 4-5 times (shifted coords, zoomed look, go back a level and re-enter, another entry point). Only after several different approaches failed, report honestly what you tried.\n';
     tools += 'Note: proj_* only works inside your own sandbox. When the user names another folder, use write_file with an ABSOLUTE path. If nothing can do it, say so plainly instead of doing something else and reporting success.\n';
   if (tier === 'web' || tier === 'full') tools += '- web_open|<url>   - web_click|<css selector>   - web_type|<selector>||<text>   - web_read\n';
   if (tier === 'full') tools += '- screen_shot   - screen_look|<问题>||x,y,w,h（**看不清小字/小按钮时用它放大那块区域**，坐标仍按整屏算）   - screen_look|<问题>||x,y,w,h  (ZOOM: crop that screen region and blow it up - use it whenever small text/buttons are hard to read; coordinates you output are still full-screen 1920x1080)   - screen_look|<question>   - click|x,y   - rclick|x,y   - dclick|x,y   - move|x,y   - drag|x1,y1|x2,y2   - scroll|x,y|down|5  (滚轮；方向用 up/down 词写，别用正负号)   - type|<text>   - key|<name>   - game_start|<game+goal+strategy>   - game_stop   - game_status\n';
@@ -1534,7 +1534,14 @@ ipcMain.handle('chat:continue', async (e, _payload) => {
   const messages = [
     { role: 'system', content: buildContinuePrompt(cfg) },
     ...memory.pickHistory(),
-    { role: 'user', content: '请继续。规则：\n① 如果上一步**失败或报错**了：先自己分析原因（参数/路径写错？环境缺东西？没权限？），能换个做法解决就再给一行 ACTION: <工具>|<参数> 重试（同一条路最多撞两次，别死磕）；确实解决不了，就用正常格式（EN/ZH/WORDS/C1/C2）上报——语气照旧，但 **ZH 必须照实讲清**：哪一步失败了、真实原因是什么（把报错的关键信息说出来，别只说"出错了"）、需要主人做什么。\n② 如果还没做完、还需要操作，就再给一行 ACTION: <工具>|<参数>（并在 EN: 里用一句简短说明）。\n③ 如果已经完成，直接按正常格式回答（EN/ZH/WORDS/C1/C2），不要带 ACTION。' }
+    { role: 'user', content: '请继续。规则：\n① 如果上一步**失败或报错**了：先自己分析原因（参数/路径写错？环境缺东西？没权限？），能换个做法解决就再给一行 ACTION: <工具>|<参数> 重试。'
+      + '**别轻易放弃**（用户明确要求）：同一条路可以试到 4~5 次，而且每次要**换一种办法**再试，'
+      + '比如：换个坐标（±30~60px 的邻居位置）、先用 screen_look|<问题>||x,y,w,h 放大看清再点、'
+      + '退回上一层重新进、换一个入口、先把看不清的那块读出来再决定。'
+      + '只有在**换过几种办法都无效**之后才停下来上报；上报时用正常格式（EN/ZH/WORDS/C1/C2），语气照旧，'
+      + '但 **ZH 必须照实讲清**：做到哪一步了、试过哪几种办法、每种的结果是什么、真实原因是什么（把报错关键信息说出来）、需要主人做什么。\n'
+      + '② 如果还没做完、还需要操作，就再给一行 ACTION: <工具>|<参数>（并在 EN: 里用一句简短说明）。\n'
+      + '③ 如果已经完成，直接按正常格式回答（EN/ZH/WORDS/C1/C2），不要带 ACTION。' }
   ];
   const { reply, raw } = await genReply(cfg, messages);
   if (reply.en) memory.onAssistant(raw, reply.en);
