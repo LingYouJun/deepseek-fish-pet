@@ -92,4 +92,11 @@ function focusWindow(title) {
   });
 }
 
-module.exports = { focusWindow };
+/* 只清"置顶"、不抬任何窗口 —— 启动时调一次，救"已经被卡成永久置顶"的情况。
+ * 复用 focusWindow('')：它内部的 PowerShell 一开始就会 [FW]::ClearAllTop()，
+ * 而 want 为空时 Go() 不会匹配任何窗口，等于纯清理。
+ * ⚠️ 为什么必须由她（提权运行）在启动时做：只有管理员权限的进程动得了管理员窗口。
+ *    我这个普通权限的会话实测 SetWindowPos(NOTOPMOST) 对"明日方舟"返回 err=5（Access Denied）。 */
+function clearAllTop() { return focusWindow(''); }
+
+module.exports = { focusWindow, clearAllTop };
