@@ -778,9 +778,31 @@ function reportTask() {
 }
 
 // 多步任务：执行 → 把结果喂回模型 → 看下一步，直到收尾或到步数上限
+/* 【只看不动的自转闸门】实测事故：用户看到她一秒回两次、连回十几条
+   "好，先不瞎点了，老老实实看一眼屏幕…"，而她自己都说"我卡住了、现在什么都不做" ——
+   但循环没停。根因在下面第 786 行：视觉工具（screen_look）会**直接给出下一步动作**并
+   跳过文本模型，如果那个动作又是 screen_look，就形成"看屏幕→又想看屏幕"的自转；
+   而唯一的闸门是 depth > stepBudget —— 用户刚把步数上限调到 400，于是空转 400 次
+   （按每 0.6 秒一次算，能刷好几分钟、同时飞快烧 token）。
+   这里的闸门跟"工具是否真的改变了什么"无关，只看**连续多少次都只是在看**：
+   连续 LOOK_STREAK_MAX 次没有实际动作（点击/按键/输入/滚轮这类），就停下来。 */
+const LOOK_ONLY_TOOLS = ['screen_look', 'screen_shot', 'windows_list', 'template_list', 'find_template', 'find_text', 'find_template_scroll'];
+const LOOK_STREAK_MAX = 6;
+let lookStreak = 0;
 async function runTask(msgEl, action, depth) {
-  if (depth === 1) taskFailed = false;
+  if (depth === 1) { taskFailed = false; lookStreak = 0; }
   if (depth > stepBudget) { addSys('⏸ 已达到本次任务的步数上限（' + stepBudget + '），先停下来'); reportTask(); return; }
+  if (LOOK_ONLY_TOOLS.indexOf(action.tool) >= 0) {
+    lookStreak++;
+    if (lookStreak > LOOK_STREAK_MAX) {
+      addSys('⏸ 连续 ' + lookStreak + ' 次都只是在看屏幕（' + action.tool + '）、没有任何实际动作，先停下来。'
+        + '这通常意味着卡在"看→再看→再看"的自转里 —— 需要换个办法（点一下试试、放大看清、裁模板、退回上一层），或者告诉主人卡在哪。');
+      reportTask();
+      return;
+    }
+  } else {
+    lookStreak = 0;
+  }
   const r = await execAction(action);
   if (!r) { reportTask(); return; }   // 视觉一步到位：工具（如 screen_look）直接给出了下一步动作，就跳过文本模型，直接执行
   if (r.action) {

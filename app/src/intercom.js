@@ -41,12 +41,13 @@ function install(ctx) {
       const seq = Number(spec && spec.seq) || 0;
       const text = String((spec && spec.text) || '').trim();
       if (!seq || seq <= lastSeq || !text) return;
-      /* 【投递前再核对一次 done 文件】即使进程里不小心有多个实例同时跑，
-         这条也能把重复投递压回一次（先写 done 再投递：抢到写入权的那个才算赢）。 */
+      /* 【投递前核对 done 文件】多实例并存时把重复压回一次。
+         ⚠️ 但**必须在投递成功之后才写 done** —— 我第一版为了抢锁把写入挪到了投递之前，
+         结果投递失败（对话窗开不出来等）的消息被永久标记为已完成，再也不会重试
+         （实测 seq=290 就是这么丢的）。进程内锁已经解决了竞争，不需要这个顺序。 */
       let doneOnDisk = 0;
       try { doneOnDisk = Number(fs.readFileSync(donePath(), 'utf8')) || 0; } catch {}
       if (doneOnDisk >= seq) { lastSeq = doneOnDisk; return; }
-      try { fs.writeFileSync(donePath(), String(seq)); } catch {}
       let w = chatWinOf();
       if (!w || w.isDestroyed()) {
         /* 对话窗没开就没地方投递。钩子跑在她自己进程里（管理员），有权限自己开窗。 */
@@ -59,6 +60,7 @@ function install(ctx) {
       const js = 'typeof send === "function" ? (send(' + JSON.stringify(text) + '), "ok") : "no-send"';
       const r = await w.webContents.executeJavaScript(js);
       lastSeq = seq;
+      try { fs.writeFileSync(donePath(), String(seq)); } catch {}
       dbg('[intercom] 已把第 ' + seq + ' 条喂给她（' + r + '）：' + text.slice(0, 80));
     } catch (e) {
       try { ctx.dbg('[intercom] 出错: ' + ((e && e.message) || e)); } catch {}
