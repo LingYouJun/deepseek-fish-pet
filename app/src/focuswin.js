@@ -97,6 +97,15 @@ function focusWindow(title) {
  * 而 want 为空时 Go() 不会匹配任何窗口，等于纯清理。
  * ⚠️ 为什么必须由她（提权运行）在启动时做：只有管理员权限的进程动得了管理员窗口。
  *    我这个普通权限的会话实测 SetWindowPos(NOTOPMOST) 对"明日方舟"返回 err=5（Access Denied）。 */
-function clearAllTop() { return focusWindow(''); }
+function clearAllTop() {
+  /* ⚠️ 不能转调 focusWindow('')：那个函数对空标题会**早退**（"没给窗口名"），
+     PowerShell 根本不会跑 —— 我第一版就是这么写的，等于没清。这里直接跑脚本。 */
+  return new Promise((resolve) => {
+    const script = PS.replace('__WANT__', '');
+    execFile('powershell.exe', ['-NoProfile', '-Command', script], { timeout: 25000, windowsHide: true }, (e, so) => {
+      resolve(String(so || '').trim() || (e ? 'ERR ' + e.message : 'done'));
+    });
+  });
+}
 
 module.exports = { focusWindow, clearAllTop };
