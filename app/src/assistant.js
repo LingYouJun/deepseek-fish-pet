@@ -24,6 +24,7 @@ const TOOL_TIER = {
   find_template: 'full', // 用模板匹配精确定位（替代让模型估坐标）
   template_list: 'read', template_del: 'normal',
   find_text: 'full',   // OCR 当前画面找一段文字并返回坐标（文字的模板匹配）
+  find_template_scroll: 'full',  // 在列表里边滚边找模板，找不到会滚回原位
   proj_ls: 'read', proj_read: 'read', tag_list: 'read',
   open_path: 'normal', open_url: 'normal', skill_write: 'normal', skill_rm: 'normal', proj_rm: 'normal', proj_open: 'normal', proj_run: 'normal', proj_write: 'normal',
   tag_set: 'normal', tag_rm: 'normal',
@@ -636,6 +637,55 @@ async function run(tool, arg) {
     if (r.startsWith('NOTFOUND')) return '🪟 没找到标题含「' + arg + '」的窗口。当前可见窗口：\n' + r.slice(8);
     return '🪟 ' + r;
   }
+  if (tool === 'find_template_scroll') {
+    /* 【滚动列表里找模板】模板匹配的三个天生短板之一：目标在列表里、当前屏看不到。
+       做法（学 MaaAssistantArknights 的 Scroll + next 循环重扫）：
+         把光标移到列表区域中心（滚轮只作用于光标下的窗口，不移动光标滚轮就打到别处）→
+         抓帧找模板 → 没找到就滚一屏 → 再找 … → 找到为止或次数用尽。
+       ⚠️ **找不到时必须滚回原位**：不能把界面留在被改动过的状态（否则她下一步看到的是一个
+          和之前不一样的列表，会基于错误画面做判断）。
+       用法：find_template_scroll|<模板名>|<列表区域 x,y,w,h>[|down|up][|最大次数] */
+    const spS = String(arg || '').split('|').map((s) => s.trim());
+    const nmS = spS[0] || '';
+    const roiS = (spS[1] || '').split(/[,，]/).map((v) => Number(v.trim()));
+    if (!nmS || roiS.length !== 4 || !roiS.every((v) => Number.isFinite(v))) {
+      return '⚠️ 用法：find_template_scroll|<模板名>|<列表区域 x,y,w,h>[|down|up][|最大次数]';
+    }
+    const dirS = (spS[2] || 'down').toLowerCase().startsWith('u') ? 'up' : 'down';
+    const timesS = Math.max(1, Math.min(12, Number(spS[3]) || 5));
+    const [rxS, ryS, rwS, rhS] = roiS;
+    const cxS = Math.round(rxS + rwS / 2), cyS = Math.round(ryS + rhS / 2);
+    const { nativeImage } = require('electron');
+    const MS = require('./matcher');
+    input.move(cxS, cyS);                       // 光标必须先落在列表上（滚轮作用于光标下的窗口）
+    await new Promise((r) => setTimeout(r, 220));
+    let scrolledS = 0;
+    let lastS = null;
+    for (let k = 0; k <= timesS; k++) {
+      const capS = await captureScreen(false, true);
+      lastS = await MS.findTemplate(app, nativeImage, nmS, capS.dataUrl, [rxS, ryS, rwS, rhS]);
+      if (lastS.ok) {
+        return '🎯 找到「' + nmS + '」：中心 (' + lastS.x + ',' + lastS.y + ')，相似度 ' + lastS.score.toFixed(3)
+          + '（滚了 ' + scrolledS + ' 屏' + (lastS.ms != null ? '，本次匹配 ' + lastS.ms + 'ms' : '') + '）。'
+          + '现在可以直接 ACTION: click|' + lastS.x + ',' + lastS.y + '。';
+      }
+      if (!lastS.low && !lastS.ok) return '⚠️ ' + (lastS.error || '匹配失败');
+      if (k === timesS) break;
+      await userinput.waitUntilFree(30000);      // 主人一动就等，和别的键鼠操作一致
+      input.scroll(cxS, cyS, dirS === 'up' ? 'up' : 'down');
+      scrolledS++;
+      await new Promise((r) => setTimeout(r, 420));   // 等滚动动画结束
+    }
+    /* 没找到 → 滚回原位，别把界面留在改动过的状态 */
+    for (let k = 0; k < scrolledS; k++) {
+      input.scroll(cxS, cyS, dirS === 'up' ? 'down' : 'up');
+      await new Promise((r) => setTimeout(r, 260));
+    }
+    return '⚠️ 在这个列表里滚了 ' + scrolledS + ' 屏也没找到「' + nmS + '」'
+      + '（最佳相似度只有 ' + (lastS && lastS.score != null ? lastS.score.toFixed(2) : '?') + '，低于阈值 0.70）。'
+      + '**我已经把列表滚回原来的位置了**，界面和你交给我时一样。'
+      + '可能原因：模板截自别的皮肤/缩放比例，或者这个列表里确实没有它 —— 先用 screen_look 或 find_text 确认。';
+  }
   if (tool === 'find_text') {
     /* 【文字的模板匹配】OCR 当前画面，找出那段文字在哪，返回中心坐标。
        用途：游戏里大量目标只有文字没有图标 —— 干员名、设施名、列表项、按钮上的字。
@@ -697,7 +747,9 @@ async function run(tool, arg) {
     }
     const { nativeImage } = require('electron');
     const cap3 = await captureScreen(false, true);
-    const r3 = await require('./matcher').findTemplate(app, nativeImage, nm, cap3.dataUrl, roi);
+    /* 级联多尺度：先按 1.0 找（快路径），分数低才依次试 0.9/1.1/0.8/1.25 ——
+       治"用户改了系统缩放 / 模板截自别的尺寸"这个天生短板。 */
+    const r3 = await require('./matcher').findTemplateScaled(app, nativeImage, nm, cap3.dataUrl, roi);
     if (!r3.ok && !r3.low) return '⚠️ ' + (r3.error || '匹配失败，原因未知');
     if (r3.low) {
       return '⚠️ 没找到「' + nm + '」（最佳分数只有 ' + r3.score.toFixed(2) + '，低于阈值 0.70）。'

@@ -126,4 +126,86 @@ function findTemplate(app, nativeImage, name, frameDataUrl, roi, minScore) {
   });
 }
 
-module.exports = { saveTemplate, findTemplate, listTemplates, delTemplate, toBgra, EXE, tplDir };
+/* 【多尺度级联】治"主题/缩放变化"这个天生短板。
+ *
+ * 背景：模板与搜索帧必须**同尺度**，所以用户改了系统缩放（125% → 100%）、
+ * 或者模板是在别的窗口尺寸下截的，1.0 尺度就会匹配不上。
+ *
+ * 为什么用**级联**而不是一上来就多尺度：调研（MaaFramework）明确不做多尺度，
+ * 因为成本是倍数增长。我们的做法是：**先按 1.0 找一次**（快路径，命中率最高），
+ * 只有分数低于阈值时才依次尝试其它尺度 —— 正常情况下耗时完全不变。
+ *
+ * 缩放怎么做：模板的原始 BGRA 就在 .bin 里，用**最近邻重采样**生成缩放后的临时文件
+ * （模板只有几十×几十像素，重采样开销可以忽略），再让 match.exe 去找。
+ * 用最近邻而不是双线性：模板是 UI 图标/文字，最近邻不会引入新的插值模糊，
+ * 对归一化相关的干扰更小。
+ *
+ * 返回里带上用的尺度和尝试次数，让她（和我）知道"为什么这次是 1.2 倍才找到"。
+ */
+function resampleBgra(buf, w, h, nw, nh) {
+  const out = Buffer.alloc(nw * nh * 4, 0);
+  for (let y = 0; y < nh; y++) {
+    const sy = Math.min(h - 1, Math.floor((y * h) / nh));
+    for (let x = 0; x < nw; x++) {
+      const sx = Math.min(w - 1, Math.floor((x * w) / nw));
+      const s = (sy * w + sx) * 4, d = (y * nw + x) * 4;
+      out[d] = buf[s]; out[d + 1] = buf[s + 1]; out[d + 2] = buf[s + 2]; out[d + 3] = 255;
+    }
+  }
+  return out;
+}
+
+/* 在多个尺度上找。scales 里 1.0 必须排第一（快路径），其余只在低分时才会被用到。 */
+async function findTemplateScaled(app, nativeImage, name, frameDataUrl, roi, opts) {
+  const scales = (opts && opts.scales) || [1.0, 0.9, 1.1, 0.8, 1.25];
+  const minScore = (opts && opts.minScore) != null ? opts.minScore : 0.7;
+  const dir = tplDir(app);
+  const nm = safeName(name);
+  const bin = path.join(dir, nm + '.bin');
+  let meta = null;
+  try { meta = JSON.parse(fs.readFileSync(bin + '.meta.json', 'utf8')); } catch {}
+  if (!meta) return { ok: false, error: '没有名为「' + nm + '」的模板（先用 make_template 建一个）' };
+  let tplBuf = null;
+  try { tplBuf = fs.readFileSync(bin); } catch (e) { return { ok: false, error: '读模板失败：' + e.message }; }
+
+  let best = null;
+  let lastErr = null;      // ★ 保留最后一次的真实错误（原来写死 error:null，把原因吞了）
+  const tried = [];
+  for (const sc of scales) {
+    let res;
+    if (sc === 1.0) {
+      res = await findTemplate(app, nativeImage, name, frameDataUrl, roi, minScore);
+    } else {
+      const nw = Math.max(6, Math.round(meta.w * sc)), nh = Math.max(6, Math.round(meta.h * sc));
+      const scaled = resampleBgra(tplBuf, meta.w, meta.h, nw, nh);
+      const tmp = path.join(os.tmpdir(), 'tpl-scaled-' + process.pid + '-' + Date.now() + '-' + sc + '.bin');
+      try { fs.writeFileSync(tmp, scaled); } catch (e) { continue; }
+      /* 复用 findTemplate 的整套流程：临时把 .bin 换成缩放版，跑完再换回来。
+         这样只有一处调用 match.exe 的代码，逻辑不会分叉。 */
+      const bak = bin + '.orig-' + process.pid;
+      try {
+        fs.renameSync(bin, bak);
+        fs.writeFileSync(bin, scaled);
+        fs.writeFileSync(bin + '.meta.json', JSON.stringify({ name: nm, w: nw, h: nh, at: Date.now() }));
+        res = await findTemplate(app, nativeImage, name, frameDataUrl, roi, minScore);
+      } catch (e) {
+        res = { ok: false, error: '缩放尝试失败：' + e.message };
+      } finally {
+        try { fs.unlinkSync(bin); } catch {}
+        try { fs.renameSync(bak, bin); } catch {}
+        try { fs.writeFileSync(bin + '.meta.json', JSON.stringify(meta)); } catch {}
+        try { fs.unlinkSync(tmp); } catch {}
+      }
+    }
+    tried.push({ scale: sc, score: res && res.score != null ? Number(res.score.toFixed(4)) : null, ok: !!(res && res.ok), err: (res && res.error) || null });
+    if (res && res.error) lastErr = res.error;
+    if (res && res.ok && (!best || res.score > best.score)) best = Object.assign({}, res, { scale: sc });
+    if (best && best.scale === 1.0) break;        // 1.0 命中就立刻收工 —— 快路径不被拖慢
+    if (best && best.score >= 0.92) break;        // 已经非常像了，没必要再试别的尺度
+  }
+  if (best) { best.tried = tried; return best; }
+  const last = tried[tried.length - 1] || {};
+  return { ok: false, low: true, score: last.score, tried, error: lastErr };
+}
+
+module.exports = { saveTemplate, findTemplate, findTemplateScaled, listTemplates, delTemplate, toBgra, EXE, tplDir };
