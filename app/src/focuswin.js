@@ -86,6 +86,9 @@ public class FW2 {
   }
   public static uint Dpi() { return GetDpiForSystem(); }
   public static string Cursor() { PT pt; GetCursorPos(out pt); return pt.X + "," + pt.Y; }
+  /* ★ 按一下 ESC：用来收掉"空按 Alt"可能打开的开始菜单/菜单栏 ★
+     不加这一下的话，连续聚焦多个窗口会在屏幕上留下一个开始菜单（实测踩过）。 */
+  public static void SendEsc() { keybd_event(0x1B, 0, 0, UIntPtr.Zero); Thread.Sleep(20); keybd_event(0x1B, 0, 2, UIntPtr.Zero); }
   public static bool Cloaked(IntPtr h) { int v = 0; try { DwmGetWindowAttribute(h, 14, out v, 4); } catch {} return v != 0; }
   public static string TitleOf(IntPtr h) { var sb = new StringBuilder(400); GetWindowTextW(h, sb, 400); return sb.ToString(); }
   public static IntPtr Fg() { return GetForegroundWindow(); }
@@ -119,11 +122,18 @@ public class FW2 {
     if (IsIconic(Hit)) { ShowWindow(Hit, 9); tried += "restore1,"; }   /* SW_RESTORE */
     ShowWindow(Hit, 5); tried += "show5,";                             /* SW_SHOW */
     if (SetForegroundWindow(Hit) && Fg() == Hit) return "OK step1 " + tried;
-    /* Unlock: tap Alt. Windows only lets the foreground process set the foreground;
-       injecting one real user input releases that lock. */
-    keybd_event(0x12, 0, 0, IntPtr.Zero);
-    keybd_event(0x12, 0, 2, IntPtr.Zero);
-    if (SetForegroundWindow(Hit) && Fg() == Hit) return "OK step2-alt " + tried;
+    /* Unlock: tap a modifier key. Windows only lets the foreground process set the
+       foreground; injecting one real user input releases that lock.
+       ★ 用 Shift(0x10) 而不是 Alt(0x12) ★
+       实测事故（2026-10-03）：原来这里按的是 Alt —— 空按 Alt 会**打开开始菜单 / 菜单栏** ✗。
+       我对着 11 个同名候选窗口连续聚焦之后，屏幕上多了一个开始菜单，
+       把浏览器和桌宠窗口都盖住了（现场更难收拾）。
+       Shift 同样被 Windows 算作"真实用户输入"，但不触发任何菜单，没有副作用。 */
+    keybd_event(0x10, 0, 0, IntPtr.Zero);
+    keybd_event(0x10, 0, 2, IntPtr.Zero);
+    if (SetForegroundWindow(Hit) && Fg() == Hit) return "OK step2-shift " + tried;
+    /* 万一还是被菜单之类的挡了，补一下 ESC 收尾（只关菜单，不动前台） */
+    SendEsc();
     /* Attach to the current foreground thread's input queue (classic trick). */
     IntPtr fg = Fg();
     uint tidFg = GetWindowThreadProcessId(fg, IntPtr.Zero);
