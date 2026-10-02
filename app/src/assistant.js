@@ -213,18 +213,24 @@ async function run(tool, arg) {
          之前写成了单引号 → 占位符没被插值，**模型看到的字面就是 "${CAPW}x${CAPH}"**，
          于是它照着写 `click|${CAPW-20},${CAPH-20}` 被拒（"坐标格式应为 x,y"），白费一步。
          这是监视数据里从她的报错里挖出来的，不是什么模型犯傻。 */
+      /* ⚠️ 坐标空间必须**随放大与否切换**：这一段原来写死"坐标基于 1920x1080 截图"，
+         结果放大时模型仍按整屏空间报数（实测：480x360 的裁剪区，它报了 (530,580)），
+         换算除下来就是 (177,193) 那种落在左上角的错点 —— 她连续两次点错就卡住了。
+         这正是她自己报出来的："裁剪区是 480×360，但模型报的是 (530,580)，已经超出裁剪区"。 */
+      const SPACE = zoomInfo
+        ? { w: zoomInfo.outW, h: zoomInfo.outH, name: '放大图', ex: Math.round(zoomInfo.outW / 2) + ',' + Math.round(zoomInfo.outH / 2) }
+        : { w: CAPW, h: CAPH, name: '整屏截图', ex: CAPEX + ',' + CAPEY };
       const _zoomNote = zoomInfo
         ? ('\n\n【重要】这一张是**放大图**：它是屏幕区域 (' + zoomInfo.x + ',' + zoomInfo.y + ') 起 '
            + zoomInfo.w + 'x' + zoomInfo.h + ' 裁出来放大的，放大倍数约 ' + zoomInfo.scale
-           + '，图本身的尺寸是 ' + zoomInfo.outW + 'x' + zoomInfo.outH + '。\n'
-           + '**请直接按这张放大图自己的像素坐标输出**（图的左上角就是 0,0），'
-           + '例如"按钮在图里约 (900,400) 处"就写 ACTION: click|900,400。\n'
-           + '**不要自己换算成整屏坐标**（实测自己换算会算出 (2200,600) 这种超出屏幕的值）。'
-           + '换算由程序负责，你只要把在放大的图里看到的位置读准就行。')
+           + '，**这张图本身的尺寸是 ' + zoomInfo.outW + 'x' + zoomInfo.outH + '**。\n'
+           + '**请只按这张放大图自己的像素坐标输出**（图的左上角就是 0,0，右下角是 '
+           + zoomInfo.outW + ',' + zoomInfo.outH + '），例如"按钮在图里约 (900,400)"就写 ACTION: click|900,400。\n'
+           + '**不要换算成整屏坐标，也不要用 1920x1080 这个数字** —— 换算由程序做。')
         : '';
       const q = (arg || '看看屏幕') + _zoomNote + `\n\n【读坐标的方法】图上画了**刻度网格**（每格 240x135），边上黄色数字就是那条线的像素坐标（左上角写着 0,0，右下角写着 ${CAPW},${CAPH}）。请**顺着网格读出**目标在哪一格，再判断它在格内的相对位置 —— 不要凭感觉估：实测凭感觉在贴近屏幕边缘时能差 300 像素。
 
-【输出要求】先用一句中文说明你的判断；如果这一步需要操作屏幕，就在回答的最后单独输出一行：ACTION: 工具|参数（坐标基于 ${CAPW}x${CAPH} 截图，左上角 0,0；工具可选 click/rclick/dclick/move/drag/scroll/type/key，例如 ACTION: click|${CAPEX},${CAPEY}）。如果不需要操作就不要写 ACTION 行。`;
+【输出要求】先用一句中文说明你的判断；如果这一步需要操作屏幕，就在回答的最后单独输出一行：ACTION: 工具|参数（坐标基于 ${SPACE.name}，这个空间的尺寸是 ${SPACE.w}x${SPACE.h}，左上角 0,0；工具可选 click/rclick/dclick/move/drag/scroll/type/key，例如 ACTION: click|${SPACE.ex}）。如果不需要操作就不要写 ACTION 行。`;
       /* tV 必须声明在 try **外面**：catch 里也要用它算耗时，
          写在 try 内的话失败路径会 ReferenceError（实测被 §6 那条测试抓住）。 */
       let tV = tick();
