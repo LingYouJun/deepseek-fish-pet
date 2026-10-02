@@ -1643,6 +1643,9 @@ if (!gotLock) {
       try { if (petWin && !petWin.isDestroyed()) { if (!petWin.isVisible()) petWin.show(); } } catch {}
       try { if (chatWin && !chatWin.isDestroyed() && chatWin.isMinimized()) chatWin.restore(); } catch {}
       dbg('[boot] 启动兜底：确认自己的窗口可见');
+      /* 顺手把"被卡成永久置顶"的窗口放下来（第一版 focus_window 的遗留问题）。
+         只有管理员权限的进程做得到，所以由她启动时替用户清一次。 */
+      try { require('./src/focuswin').clearAllTop(); dbg('[boot] 已清理所有窗口的置顶状态'); } catch (e) { dbg('[boot] 清置顶失败 ' + e); }
     }, 6000);
     /* 【临时】对讲机：外部普通权限进程没法给她发消息（UIPI），于是让她自己进程里的小钩子读文件转发。 */
     try { require('./src/intercom').install({ chatWin: () => chatWin, createChat, dbg }); } catch (e) { dbg('[intercom] install failed ' + e); }

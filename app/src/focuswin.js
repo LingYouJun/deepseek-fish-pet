@@ -23,11 +23,16 @@ public class FW {
   public delegate bool EP(IntPtr h, IntPtr p);
   [StructLayout(LayoutKind.Sequential)] public struct R { public int L,T,Rr,B; }
   public static IntPtr TOP = new IntPtr(-1);
+  public static IntPtr NOTOP = new IntPtr(-2);
   public static uint NOMOVE = 0x2, NOSIZE = 0x1, SHOW = 0x40;
   public static List<string> All = new List<string>();
   public static string Hit = "";
+  public static IntPtr HitH = IntPtr.Zero;
+  /* 抬起来之后**必须放回去**：第一版只做了 TOPMOST、没有 NOTOPMOST，
+     结果游戏被**永久置顶** —— 用户报"我的游戏一直顶窗口，导致我很难和桌宠对话和你对话"。
+     现在抬完登记一下，8 秒后自动取消置顶（够她截一张图、点一下，然后就把画面还给你）。 */
   public static void Go(string want) {
-    All.Clear(); Hit = "";
+    All.Clear(); Hit = ""; HitH = IntPtr.Zero;
     EnumWindows((h,p) => {
       var sb = new StringBuilder(300); GetWindowText(h, sb, 300);
       string t = sb.ToString();
@@ -39,17 +44,39 @@ public class FW {
         if (IsIconic(h)) ShowWindow(h, 9);
         ShowWindow(h, 5);
         SetWindowPos(h, TOP, 0, 0, 0, 0, NOMOVE | NOSIZE | SHOW);
-        Hit = t;
+        Hit = t; HitH = h;
         return false;
       }
       return true;
     }, IntPtr.Zero);
   }
+  public static void UnTop() {
+    if (HitH != IntPtr.Zero) SetWindowPos(HitH, NOTOP, 0, 0, 0, 0, NOMOVE | NOSIZE);
+  }
+  /* 不管找没找到，先把所有置顶窗口取消置顶（救"已经被卡住"的情况） */
+  public static List<string> ClearAllTop() {
+    var o = new List<string>();
+    EnumWindows((h,p) => {
+      var sb = new StringBuilder(300); GetWindowText(h, sb, 300);
+      string t = sb.ToString();
+      if (t.Length > 0 && IsWindowVisible(h)) {
+        SetWindowPos(h, NOTOP, 0, 0, 0, 0, NOMOVE | NOSIZE);
+        o.Add(t);
+      }
+      return true;
+    }, IntPtr.Zero);
+    return o;
+  }
 }
 '@
+[FW]::ClearAllTop() | Out-Null
 [FW]::Go('__WANT__')
-if ([FW]::Hit -ne '') { Write-Output ('OK ' + [FW]::Hit) }
-else { Write-Output ('NOTFOUND'); foreach ($w in [FW]::All) { Write-Output ('  visible: ' + $w) } }
+if ([FW]::Hit -ne '') {
+  Write-Output ('OK ' + [FW]::Hit)
+  Start-Sleep -Seconds 8
+  [FW]::UnTop()
+  Write-Output ('UNTOP done')
+} else { Write-Output ('NOTFOUND'); foreach ($w in [FW]::All) { Write-Output ('  visible: ' + $w) } }
 `;
 
 function focusWindow(title) {
