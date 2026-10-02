@@ -275,6 +275,12 @@ const REPEAT = require('./repeat').create({
 /* 【统一超时表】见 src/timeout.js —— 一处声明、所有工具生效。 */
 const { withTimeout, timeoutFor } = require('./timeout');
 
+/* 【读后写 / CAS】见 src/obs.js —— 抄自 DSH dsh-fs-observation-policy。
+   记"我读过哪些文件、读到时它是什么版本"，写之前校验，防**盲写覆盖**与**覆盖掉中间那次改动**。
+   statOf：拿不到就当不存在（拿不到有两个原因：文件真不存在、或路径非法 —— 后者会在 checkWrite 里被拒）。 */
+const OBS = require('./obs').create();
+function statOf(p) { try { return fs.statSync(String(p == null ? '' : p)); } catch { return null; } }
+
 /* 真正的执行体改名为 runInner；对外仍是 run（见文件末尾的包装）——
    这样"无进展检测"只需要在一个地方拦、在一个地方记账，不用去改 run 里面几十个 return。 */
 async function runInner(tool, arg) {
@@ -436,6 +442,8 @@ async function runInner(tool, arg) {
        （C:\Windows\Logs\CBS\CBS.log、视频、hiberfil.sys）主进程就同步卡死+内存暴涨，
        而且 read 档就能调用，用户很容易点"允许"。 */
     const text = readHead(arg, 3000);
+    /* 记下"我观测过这个文件"（连同它当时的版本）—— 写的时候用它做 CAS 检查 */
+    OBS.noteObserved(String(arg || ''), statOf(arg), 'read');
     return `📄 ${arg}：\n${text}`;
   }
   if (tool === 'write_file') {
@@ -459,8 +467,18 @@ async function runInner(tool, arg) {
         + '如果你是想写到自己的项目沙盒里，请改用 proj_write|<相对路径>||<内容>。收到的是：' + p);
     }
     if (Buffer.byteLength(content, 'utf8') > 200 * 1024) throw new Error('内容超过 200KB，太大了');
+    /* 【读后写 / CAS】照 DSH dsh-fs-observation-policy：
+       · 目标是新建（不存在）→ 只允许 createIfAbsent；
+       · 目标已存在 → 必须**先读过**它，而且**版本要和读到时一致**（mtime+size）——
+         否则说明它在读过之后被别人改过，这时写下去会把那次改动**静默覆盖**掉。
+       拒绝时返回一句能指导下一步的话（附带错误码便于排查），而不是直接抛异常。 */
+    const _st = statOf(p);
+    const _ck = OBS.checkWrite({ path: p, mode: _st ? 'replaceIfVersion' : 'createIfAbsent', stat: _st });
+    if (!_ck.ok) return '🚫 没有写入（' + _ck.code + '）：' + _ck.message;
     fs.mkdirSync(path.dirname(p), { recursive: true });
     fs.writeFileSync(p, content, 'utf8');
+    /* 写完立刻重新登记新版本，否则"连着改两次"会被自己的 CAS 拦下 */
+    OBS.noteObserved(p, statOf(p), 'write');
     return '💾 已写入：' + p + '（' + Buffer.byteLength(content, 'utf8') + ' 字节）';
   }
 
@@ -521,7 +539,14 @@ async function runInner(tool, arg) {
     if (i < 0) throw new Error('格式：proj_write|子路径/文件.py||文件内容');
     const rel = s.slice(0, i).trim();
     const content = s.slice(i + 2).replace(/\\n/g, '\n');   // ACTION 只能一行，允许用 \n 写换行
+    /* 沙盒内的写入同样走"读后写 / CAS"（路径先算成绝对路径再登记，才能和 proj_read 对上） */
+    let abs = rel;
+    try { abs = projects.safePath(rel); } catch {}
+    const _st = statOf(abs);
+    const _ck = OBS.checkWrite({ path: abs, mode: _st ? 'replaceIfVersion' : 'createIfAbsent', stat: _st });
+    if (!_ck.ok) return '🚫 没有写入（' + _ck.code + '）：' + _ck.message;
     const r = projects.writeOne(rel, content);
+    OBS.noteObserved(abs, statOf(abs), 'write');
     return '💾 已写入项目文件：' + r.path + '（' + r.bytes + ' 字节）';
   }
 
@@ -554,6 +579,8 @@ async function runInner(tool, arg) {
   }
   if (tool === 'proj_read') {
     const r = projects.readFile(arg || '');
+    /* 记下观测（和 proj_write 的 CAS 检查配对） */
+    try { OBS.noteObserved(projects.safePath(String(arg || '')), statOf(projects.safePath(String(arg || ''))), 'read'); } catch {}
     return '📄 ' + arg + (r.truncated ? '（只显示前 8000 字，共 ' + r.size + ' 字）' : '') + '：\n' + r.text;
   }
   if (tool === 'proj_rm') {
@@ -1011,6 +1038,8 @@ module.exports = {
   __noProgressWarning: (t, a) => noProgressWarning(t, a),
   __noteAction: (t, a, r) => noteAction(t, a, r),
   __actionLog: () => actionLog,
+  __obs: () => OBS.stats(),
+  __obsClear: () => OBS.clear(),
   __repeatReset: () => REPEAT.reset(),
   __repeatNote: (t, a) => REPEAT.note(t, a),
   __repeatState: () => ({ size: REPEAT.size(), cfg: REPEAT.config }),
