@@ -154,6 +154,7 @@ console.log('=== registry.js 单元测试（纯 Node）===');
     tag_set: 'normal', tag_rm: 'normal',
     web_open: 'web', web_click: 'web', web_type: 'web', web_read: 'web',
     screen_shot: 'full', screen_look: 'full',
+    screen_diff: 'full',   // 新增：像素级帧比对（用户要求的那条）
     click: 'full', rclick: 'full', dclick: 'full', move: 'full', drag: 'full', scroll: 'full', type: 'full', key: 'full',
     clickz: 'full', movez: 'full', rclickz: 'full', dclickz: 'full',
     game_start: 'full', game_stop: 'read', game_status: 'read',

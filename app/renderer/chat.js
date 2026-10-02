@@ -796,12 +796,16 @@ let lookStreak = 0;
    每次任务开始时重建 —— 这样步数预算（stepBudget 会随 IQ 变化）能按当前值生效。 */
 let LOOP = null;
 let taskStopReason = null;
+/* 【防"只承诺不动作"冻死】她说过"我这就去排""找到了"却**没给 ACTION**时，
+   原来这里直接判 completed 收尾 → 任务静默死掉（实测 4 次，用户两次问"她怎么不动了"）。
+   现在最多把循环续 2 次、催她要 ACTION。 */
+let promiseNudge = 0;
 function newLoop() {
   if (!window.PetLoop) return null;
   return window.PetLoop.create({ lookOnlyTools: LOOK_ONLY_TOOLS, lookStreakMax: LOOK_STREAK_MAX, stepBudget: stepBudget });
 }
 async function runTask(msgEl, action, depth) {
-  if (depth === 1) { taskFailed = false; lookStreak = 0; taskStopReason = null; LOOP = newLoop(); }
+  if (depth === 1) { taskFailed = false; lookStreak = 0; taskStopReason = null; promiseNudge = 0; LOOP = newLoop(); }
   if (LOOP) {
     const d = LOOP.beforeStep({ tool: action.tool });
     if (d.kind === 'stop') {
@@ -839,6 +843,27 @@ async function runTask(msgEl, action, depth) {
     // 中间步骤：只显示不朗读，继续下一步
     renderAction(pe, next.action, () => runTask(pe, next.action, depth + 1), () => {});
   } else {
+    /* ★ 她这条只说话、没给 ACTION —— 以前直接当"做完了"收尾，任务就静默冻死。
+       如果她那句话**听起来还在继续做**（"我这就去/找到了/再看一眼/稍等"），
+       就把循环续上、明确催她要 ACTION（最多 2 次，避免死循环）。 */
+    const said = String(next.zh || '') + ' ' + String(next.en || '');
+    const PROMISE = /这就|马上|稍等|我去|我先|继续|接下来|现在去|正在|让我|再看|再找|再滚|再看一眼|我去看|I'll|I will|let me|on it|continuing|next I|give me a (sec|moment)|hold on/i;
+    if (promiseNudge < 2 && PROMISE.test(said)) {
+      promiseNudge++;
+      addSys('⏳ 你这条只说了话、**没给 ACTION** —— 循环会以为你做完了。我替你续上：请立刻给出下一步 ACTION。');
+      try {
+        const nn = await window.petAPI.chatContinue({
+          tool: 'screen_look', arg: '（续）',
+          result: '⏳ 你上一条回复里**没有 ACTION**，任务还没做完。请**立刻给出下一步 ACTION**（不要只说"我去做/稍等/找到了"）。如果确实全部做完并回读验证过了，就把结果说清楚。',
+        });
+        if (nn && nn.en) {
+          const ne = addPet(nn.en, nn.zh, nn.words);
+          renderChoices(nn.choices);
+          if (nn.action) { renderAction(ne, nn.action, () => runTask(ne, nn.action, depth + 1), () => {}); return; }
+          speak(nn.en);
+        }
+      } catch {}
+    }
     if (LOOP) taskStopReason = LOOP.finish('completed').reason;
     speak(next.en);   // 最后一句才朗读
     reportTask();

@@ -201,6 +201,7 @@ const TOOL_DEFS = [
   { name: 'screen_look', tier: 'full', needsArg: true, timeoutMs: 30000, desc: '看屏幕并回答问题' },
   { name: 'screen_shot', tier: 'full', needsArg: false, timeoutMs: 30000, desc: '截一张全屏图' },
   { name: 'watch_screen', tier: 'full', needsArg: true, timeoutMs: 180000, desc: '连续看屏幕并给逐帧时间线' },
+  { name: 'screen_diff', tier: 'full', needsArg: true, timeoutMs: 30000, desc: '抓两帧做像素比对：界面到底变没变（确定性，不靠视觉模型）' },
   /* 定位（老表都是 full） */
   { name: 'find_template', tier: 'full', needsArg: true, timeoutMs: 40000, desc: '按模板图精确定位' },
   { name: 'find_template_scroll', tier: 'full', needsArg: true, timeoutMs: 150000, desc: '在滚动列表里找模板' },

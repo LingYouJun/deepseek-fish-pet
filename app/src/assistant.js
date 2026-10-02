@@ -975,6 +975,35 @@ async function runInner(tool, arg) {
       + '现在可以直接 ACTION: click|' + r3.x + ',' + r3.y + '（坐标就是截图空间，和 screen_look 一致）。';
   }
 
+  /* ---------------- 帧比对：客观回答"界面到底变没变" ----------------
+     用户点出的问题：她滚动了好几次、界面明明变了，她却说"没变" —— 因为她用的是**视觉模型的总结**，
+     而视觉模型会说谎（今天它谎报过"两个槽位都已进驻"，也报过"滚了没变化"）。
+     像素比对是确定性的、几毫秒、免费、不会说谎，还能告诉你变在哪一块。
+     用法：screen_diff|<秒数>      例如 screen_diff|1   或  screen_diff|2
+     典型用法：做完一个动作 → screen_diff|1 → 变了就是生效了、没变就换做法（别再用同一个动作重复）。 */
+  if (tool === 'screen_diff') {
+    const secs = Math.max(0.2, Math.min(10, Number(String(arg || '').trim()) || 1));
+    const a = await captureScreen(false, true);
+    await new Promise((r) => setTimeout(r, Math.round(secs * 1000)));
+    const b = await captureScreen(false, true);
+    const { nativeImage } = require('electron');
+    const FD = require('./framediff');
+    let res;
+    try {
+      /* 缩到 480 宽再比：够灵敏（一行的开关变化都能看出来），又足够快 */
+      const scaleTo = 480;
+      const ia = nativeImage.createFromDataURL(a.dataUrl).resize({ width: scaleTo });
+      const ib = nativeImage.createFromDataURL(b.dataUrl).resize({ width: scaleTo });
+      const sa = ia.getSize(), sb = ib.getSize();
+      const w = Math.min(sa.width, sb.width), h = Math.min(sa.height, sb.height);
+      res = FD.diffBgra(ia.toBitmap(), ib.toBitmap(), w, h);
+      if (res.ok) res.k = (a.width || 1920) / w;      // 缩小倍率，用于把区域还原成整屏坐标
+    } catch (e) { res = { ok: false, error: (e && e.message) || String(e) }; }
+    /* 是否要连带把"变后的那一帧"发给她看？这里不发 —— 她要看可以用 screen_look，
+       这个工具的职责就是给一个**客观的是/否**，避免她被自己的感觉带偏。 */
+    return FD.summarize(res, secs, res.k);
+  }
+
   /* ---------------- 确定性流程（录制回放里的"回放"那一半，见 src/flow.js / src/flows.js） ----------------
      调研结论：对"每天做同样一套点击"这种重复任务，业界公认的最佳架构是
      **确定性回放为主 + LLM 只做异常兜底**（Power Automate Desktop 自愈 / workflow-use / Skyvern 三家一致）。
