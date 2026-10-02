@@ -272,6 +272,9 @@ const REPEAT = require('./repeat').create({
   blockAt: 8,
 });
 
+/* 【统一超时表】见 src/timeout.js —— 一处声明、所有工具生效。 */
+const { withTimeout, timeoutFor } = require('./timeout');
+
 /* 真正的执行体改名为 runInner；对外仍是 run（见文件末尾的包装）——
    这样"无进展检测"只需要在一个地方拦、在一个地方记账，不用去改 run 里面几十个 return。 */
 async function runInner(tool, arg) {
@@ -406,7 +409,11 @@ async function runInner(tool, arg) {
   }
 
   // 这几个允许空参数（列根目录 / 停手 / 查状态），其它需要参数的工具才拦
-  const NOARG = { skill_ls: 1, proj_ls: 1, game_stop: 1, game_status: 1, screen_shot: 1, web_read: 1 };
+  // 这几个允许空参数（列根目录 / 停手 / 查状态 / 列窗口 / 列模板 / 列流程），其它需要参数的工具才拦。
+  // ⚠️ 实测踩过：今天新加的 windows_list / template_list 忘了登记在这里，
+  //    结果**不带参数调用必然抛「操作参数为空」**——她之前能用只是因为 ACTION 里带了个空格（空格是 truthy）侥幸绕过。
+  //    教训：新增"不需要参数的工具"时，必须同时登记到这里（重构时应改成每个工具自己声明 needsArg，而不是靠这张表）。
+  const NOARG = { skill_ls: 1, proj_ls: 1, game_stop: 1, game_status: 1, screen_shot: 1, web_read: 1, windows_list: 1, template_list: 1, flow_list: 1 };
   if (!arg && !NOARG[tool]) throw new Error('操作参数为空');
   if (tool === 'open_url') {
     if (!/^https?:\/\//i.test(arg)) throw new Error('网址需以 http(s):// 开头');
@@ -971,13 +978,24 @@ async function run(tool, arg) {
   const t = String(tool == null ? '' : tool);
   const rep = REPEAT.note(t, arg);
   if (rep.block) return rep.advice;                       // 安全阀（第 8 次起）
-  let out;
-  try {
-    out = await runInner(t, arg);
-  } catch (e) {
-    noteAction(t, arg, 'ERR ' + ((e && e.message) || e));
-    throw e;
+  /* 【统一超时】照 DSH 的 dsh-tool-call-timeout-policy：超时表集中声明（src/timeout.js），
+     这里对**每个工具**套一层。语义是"只通知、不抛弃"：
+       · 超时 → 返回结构化的 TOOL_TIMEOUT 文案（模型知道该怎么办），原操作继续跑完；
+       · 正常失败 → 异常原样抛回（保持原有语义，不改变调用方的 catch 行为）。
+     两层配合：外层负责"告诉模型这个工具超时了"，各调用点自己的 execFile timeout
+     负责真正杀死卡住的子进程、不留孤儿。 */
+  const r = await withTimeout(runInner(t, arg), timeoutFor(t), t, (toolName, ms) => {
+    try { dbg('[' + toolName + '] 超过 ' + ms + 'ms 没返回，已按 TOOL_TIMEOUT 处理（操作仍在跑）'); } catch {}
+  });
+  if (r.timedOut) {
+    noteAction(t, arg, 'TIMEOUT');
+    return r.message;
   }
+  if (r.error) {
+    noteAction(t, arg, 'ERR ' + ((r.error && r.error.message) || r.error));
+    throw r.error;
+  }
+  const out = r.value;
   noteAction(t, arg, out);
   if (rep.advice && typeof out === 'string') return rep.advice + '\n' + out;
   return out;
