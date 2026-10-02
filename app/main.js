@@ -1599,6 +1599,7 @@ if (!gotLock) {
      * 现在每次启动先松一遍修饰键，等于自动治好 —— 不用再重启。
      * 放启动早期：用户很可能一开机就发现键盘不对。 */
     try { input.releaseAll(); dbg('[input] 启动时释放卡键'); } catch (e) { dbg('[input] releaseAll 失败 ' + e); }
+
     memory.onAppStart().catch((e) => dbg('[memory] onAppStart err ' + e));
     // 隐藏数值：时间效应（多久没见）+ 性格慢回归，然后按需补判一次
     setTimeout(() => {
