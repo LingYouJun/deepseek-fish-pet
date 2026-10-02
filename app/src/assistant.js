@@ -159,6 +159,30 @@ async function run(tool, arg) {
        有了刻度它就能"读"坐标而不是"估"。 */
     const cap = await captureScreen(true);
     timing.captureMs = tick() - tCap;
+    /* 【局部放大】用户点出的真问题："这不是游戏问题，而是你给她分辨率太低了"。
+       实测：抓帧确实是 1920x1080（= 物理屏 1:1，不能再高），但**整屏只有 207 万像素**，
+       游戏里一个小按钮才 ~40px，经视觉 API 再压一次就剩 ~30px
+       → 于是同一个按钮她连续几次读出的坐标差 20~120px，怎么点都打不中。
+       修法不是提高抓帧（已经到顶），而是**把要看的区域裁出来放大**：
+       例如裁 640x360 放大到 1920 → 那个按钮在模型眼里变成 ~120px，坐标精度上一个数量级。
+       用法：screen_look|<问题>||<x,y,w,h>   （x,y,w,h 是全屏 1920x1080 坐标） */
+    let capDataUrl = cap.dataUrl;
+    let zoomInfo = null;
+    try {
+      const mm = String(arg || '').match(/\|\|\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*$/);
+      if (mm) {
+        const _s = require('./input').space();
+        const rx = Math.max(0, Math.min(_s.w - 40, Number(mm[1])));
+        const ry = Math.max(0, Math.min(_s.h - 40, Number(mm[2])));
+        const rw = Math.max(40, Math.min(_s.w - rx, Number(mm[3])));
+        const rh = Math.max(40, Math.min(_s.h - ry, Number(mm[4])));
+        const { nativeImage } = require('electron');
+        const img = nativeImage.createFromDataURL(cap.dataUrl).crop({ x: rx, y: ry, width: rw, height: rh });
+        const scaled = img.resize({ width: Math.min(1920, rw * 3), quality: 'best' });
+        capDataUrl = scaled.toDataURL();
+        zoomInfo = { x: rx, y: ry, w: rw, h: rh, scale: Math.round(Math.min(1920, rw * 3) / rw * 10) / 10 };
+      }
+    } catch (e) { zoomInfo = null; }
     const cfg = config.load();
     let text = '';
     let usedVision = false;
@@ -170,14 +194,15 @@ async function run(tool, arg) {
          之前写成了单引号 → 占位符没被插值，**模型看到的字面就是 "${CAPW}x${CAPH}"**，
          于是它照着写 `click|${CAPW-20},${CAPH-20}` 被拒（"坐标格式应为 x,y"），白费一步。
          这是监视数据里从她的报错里挖出来的，不是什么模型犯傻。 */
-      const q = (arg || '看看屏幕') + `\n\n【读坐标的方法】图上画了**刻度网格**（每格 240x135），边上黄色数字就是那条线的像素坐标（左上角写着 0,0，右下角写着 ${CAPW},${CAPH}）。请**顺着网格读出**目标在哪一格，再判断它在格内的相对位置 —— 不要凭感觉估：实测凭感觉在贴近屏幕边缘时能差 300 像素。
+      const _zoomNote = zoomInfo ? ('\n\n【注意】这是你看的屏幕区域 (' + zoomInfo.x + ',' + zoomInfo.y + ') 起 ' + zoomInfo.w + 'x' + zoomInfo.h + ' 的**放大图**（放大约 ' + zoomInfo.scale + ' 倍，所以字变大了）。请**按整屏 1920x1080 的绝对坐标**输出。算法：这张图的左上角 = 整屏 (X,Y)（见上文数字）；图上每一格 = 整屏 240x135 像素，所以「区域左上角往右 n 格、往下 m 格」就是整屏 (X+n*240, Y+m*135)。若刻度数字可见，它写的就是整屏绝对坐标，直接读。') : '';
+      const q = (arg || '看看屏幕') + _zoomNote + `\n\n【读坐标的方法】图上画了**刻度网格**（每格 240x135），边上黄色数字就是那条线的像素坐标（左上角写着 0,0，右下角写着 ${CAPW},${CAPH}）。请**顺着网格读出**目标在哪一格，再判断它在格内的相对位置 —— 不要凭感觉估：实测凭感觉在贴近屏幕边缘时能差 300 像素。
 
 【输出要求】先用一句中文说明你的判断；如果这一步需要操作屏幕，就在回答的最后单独输出一行：ACTION: 工具|参数（坐标基于 ${CAPW}x${CAPH} 截图，左上角 0,0；工具可选 click/rclick/dclick/move/drag/scroll/type/key，例如 ACTION: click|${CAPEX},${CAPEY}）。如果不需要操作就不要写 ACTION 行。`;
       /* tV 必须声明在 try **外面**：catch 里也要用它算耗时，
          写在 try 内的话失败路径会 ReferenceError（实测被 §6 那条测试抓住）。 */
       let tV = tick();
       try {
-        text = await vision.describe(cfg, cap.dataUrl, q, cfg.visionDetail || 'high');
+        text = await vision.describe(cfg, capDataUrl, q, cfg.visionDetail || 'high');
         timing.visionMs = tick() - tV;
         usedVision = true;
         const m = text.match(/ACTION\s*[:：]\s*([a-z_]+)\s*\|\s*(.+)/i);

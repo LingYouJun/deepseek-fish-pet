@@ -1511,7 +1511,7 @@ function buildContinuePrompt(cfg) {
     tools += 'DRIFT in the continue prompt: dense UIs give slightly different coords for the same button each look (20-120px). If a click changes nothing, do NOT repeat the same coordinate - try ~30-50px around it, and stop after 2-3 tries with an honest report.\n';
     tools += 'Note: proj_* only works inside your own sandbox. When the user names another folder, use write_file with an ABSOLUTE path. If nothing can do it, say so plainly instead of doing something else and reporting success.\n';
   if (tier === 'web' || tier === 'full') tools += '- web_open|<url>   - web_click|<css selector>   - web_type|<selector>||<text>   - web_read\n';
-  if (tier === 'full') tools += '- screen_shot   - screen_look|<question>   - click|x,y   - rclick|x,y   - dclick|x,y   - move|x,y   - drag|x1,y1|x2,y2   - scroll|x,y|down|5  (滚轮；方向用 up/down 词写，别用正负号)   - type|<text>   - key|<name>   - game_start|<game+goal+strategy>   - game_stop   - game_status\n';
+  if (tier === 'full') tools += '- screen_shot   - screen_look|<问题>||x,y,w,h（**看不清小字/小按钮时用它放大那块区域**，坐标仍按整屏算）   - screen_look|<问题>||x,y,w,h  (ZOOM: crop that screen region and blow it up - use it whenever small text/buttons are hard to read; coordinates you output are still full-screen 1920x1080)   - screen_look|<question>   - click|x,y   - rclick|x,y   - dclick|x,y   - move|x,y   - drag|x1,y1|x2,y2   - scroll|x,y|down|5  (滚轮；方向用 up/down 词写，别用正负号)   - type|<text>   - key|<name>   - game_start|<game+goal+strategy>   - game_stop   - game_status\n';
   return `You are "${p.name || '大肥鱼'}", a desktop pet (${p.personality || '傲娇、温柔、嘴硬'}). Stay in character.
 You are IN THE MIDDLE of a multi-step task the user asked for. Keep every line short.
 
