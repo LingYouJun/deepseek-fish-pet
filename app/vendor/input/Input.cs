@@ -73,8 +73,47 @@ class Program
             case "alt": return 0x12;
             case "shift": return 0x10;
             case "win": return 0x5B;
+            /* 符号键名（模型会写 key|ctrl+plus 这种）。
+               注意 "+" 本身在 VK 层面就是 shift+"="，所以 plus 由 Node 侧翻成 shift+equal，
+               这里只管把名字映射到 VK。 */
+            case "equal": return 0xBB;
+            case "minus": return 0xBD;
+            case "comma": return 0xBC;
+            case "period": case "dot": return 0xBE;
+            case "slash": return 0xBF;
+            case "backslash": return 0xDC;
+            case "semicolon": return 0xBA;
+            case "quote": case "apostrophe": return 0xDE;
+            case "backtick": case "grave": return 0xC0;
+            case "bracketleft": case "lbracket": return 0xDB;
+            case "bracketright": case "rbracket": return 0xDD;
+            case "add": case "numpadplus": return 0x6B;
+            case "subtract": case "numpadminus": return 0x6D;
             default:
-                if (n.Length == 1) return (ushort)char.ToUpper(n[0]);
+                if (n.Length == 1)
+                {
+                    char c = char.ToUpper(n[0]);
+                    if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) return (ushort)c;
+                    /* ⚠️ 符号不能拿 ASCII 当 VK：',' 是 44，而它的 VK 是 0xBC(188)。
+                       以前一律 `return (ushort)char.ToUpper(n[0])` —— 对字母数字成立，
+                       对符号就是发了个不存在的键，**静默无效**（用户/模型都看不出原因）。
+                       实测模型会写 key|+ 想按加号。 */
+                    switch (n[0])
+                    {
+                        case '=': case '+': return 0xBB;
+                        case '-': case '_': return 0xBD;
+                        case ',': case '<': return 0xBC;
+                        case '.': case '>': return 0xBE;
+                        case '/': case '?': return 0xBF;
+                        case '\\': case '|': return 0xDC;
+                        case ';': case ':': return 0xBA;
+                        case '\'': case '"': return 0xDE;
+                        case '`': case '~': return 0xC0;
+                        case '[': case '{': return 0xDB;
+                        case ']': case '}': return 0xDD;
+                    }
+                    return (ushort)c;
+                }
                 int f;
                 if (n.Length >= 2 && n[0] == 'f' && int.TryParse(n.Substring(1), out f) && f >= 1 && f <= 24) return (ushort)(0x6F + f);
                 throw new Exception("unknown key: " + n);

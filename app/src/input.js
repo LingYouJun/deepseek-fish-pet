@@ -71,20 +71,64 @@ function type(text) { return run('type', [String(text)]); }
  * 更重要的是**在 spawn 之前就拒绝** —— 坏键名根本不会碰到键盘。
  * （键盘卡死那个事故就是坏键名引起的，见 Input.cs 里 key 分支的注释。） */
 const KEY_NAMES = ['enter', 'esc', 'escape', 'tab', 'space', 'backspace', 'delete', 'del', 'insert', 'ins',
-  'up', 'down', 'left', 'right', 'home', 'end', 'pageup', 'pagedown', 'ctrl', 'control', 'alt', 'shift', 'win'];
+  'up', 'down', 'left', 'right', 'home', 'end', 'pageup', 'pagedown', 'ctrl', 'control', 'alt', 'shift', 'win',
+  /* 符号键的**名字**：模型很自然会写 `key|ctrl+plus`（想按 Ctrl++ 缩放），实测她就这么发过，
+   被拒后白跑一步。这些名字在 Input.cs 的 Vk() 里都有对应 VK。 */
+  'equal', 'minus', 'comma', 'period', 'dot', 'slash', 'backslash', 'semicolon', 'quote', 'apostrophe',
+  'backtick', 'grave', 'bracketleft', 'lbracket', 'bracketright', 'rbracket',
+  'add', 'numpadplus', 'subtract', 'numpadminus'];
+
+/* 别名 → 规范写法。为什么需要：VK 层面 "+" 其实是 **shift + "=" 键**；
+   而符号单字符（+ _ < > ? : " { } | ~）也都要带 shift 才是那个符号本身。
+   以前这些要么被拒、要么更糟 —— 直接把 ASCII 当 VK 发出去（见 Input.cs 的修复），静默按错键。 */
+const KEY_ALIAS = {
+  plus: 'shift+equal', '+': 'shift+equal', underscore: 'shift+minus', '_': 'shift+minus',
+  equal: 'equal', '=': 'equal', minus: 'minus', '-': 'minus',
+  comma: 'comma', ',': 'comma', less: 'shift+comma', '<': 'shift+comma',
+  period: 'period', dot: 'period', '.': 'period', greater: 'shift+period', '>': 'shift+period',
+  slash: 'slash', '/': 'slash', question: 'shift+slash', '?': 'shift+slash',
+  backslash: 'backslash', '\\': 'backslash', pipe: 'shift+backslash', '|': 'shift+backslash',
+  semicolon: 'semicolon', ';': 'semicolon', colon: 'shift+semicolon', ':': 'shift+semicolon',
+  quote: 'quote', apostrophe: 'quote', "'": 'quote', dquote: 'shift+quote', '"': 'shift+quote',
+  backtick: 'backtick', grave: 'backtick', '`': 'backtick', tilde: 'shift+backtick', '~': 'shift+backtick',
+  bracketleft: 'bracketleft', lbracket: 'bracketleft', '[': 'bracketleft',
+  braceleft: 'shift+bracketleft', '{': 'shift+bracketleft',
+  bracketright: 'bracketright', rbracket: 'bracketright', ']': 'bracketright',
+  braceright: 'shift+bracketright', '}': 'shift+bracketright',
+  add: 'add', numpadplus: 'add', subtract: 'subtract', numpadminus: 'subtract',
+};
+const KEY_HELP = '可用：enter / esc / tab / space / backspace / delete / up,down,left,right / home / end / '
+  + 'pageup / pagedown / f1~f24 / 单个字母或数字 / 符号用名字写（plus minus equal comma period slash '
+  + 'backslash semicolon quote backtick bracketleft bracketright add subtract）/ '
+  + '组合键用 ctrl+alt+shift+win 加号连接（例如 ctrl+plus、ctrl+c）';
 function validateKey(name) {
-  const raw = String(name == null ? '' : name).toLowerCase();
-  const parts = raw.split('+').map((x) => x.trim());
-  if (!parts.length || parts.some((p) => !p)) throw new Error('按键名写错了（是不是多了个 + ？）：' + raw);
-  const okOne = (n) => KEY_NAMES.includes(n) || n.length === 1 || /^f([1-9]|1[0-9]|2[0-4])$/.test(n);
-  for (const p of parts) {
-    if (!okOne(p)) {
-      throw new Error('不认识的按键名「' + p + '」。可用：enter / esc / tab / space / backspace / delete / '
-        + 'up,down,left,right / home / end / pageup / pagedown / f1~f24 / 单个字母或数字 / '
-        + '组合键用 ctrl+alt+shift+win 加号连接（例如 ctrl+c）');
+  const raw = String(name == null ? '' : name).toLowerCase().trim();
+  if (!raw) throw new Error('按键名为空');
+  /* 特例：整串就是 "+"。它同时是分隔符，split('+') 会得到两个空串、被当成格式错误 ——
+     但模型很可能就写 key|+ 想按加号。这里直接按符号处理。 */
+  if (raw === '+') return 'shift+equal';
+  /* 逐段翻译，**允许别名展开成多段**并递归展开（plus → shift+equal）。
+     第一版我加了"别名里含 + 就不翻译"想防重复展开，结果恰好把 plus 挡住了 ——
+     因为 plus 的正确展开本来就带 +。最多展开 3 轮，防止别名互相引用时无限增长。 */
+  let parts = [raw];
+  for (let round = 0; round < 3; round++) {
+    const next = [];
+    let changed = false;
+    for (const seg of parts) {
+      for (const p of String(seg).split('+').map((x) => x.trim())) {
+        if (!p) throw new Error('按键名写错了（是不是多了个 + ？）：' + raw);
+        const a = KEY_ALIAS[p];
+        if (a && a !== p) { next.push(a); changed = true; } else next.push(p);
+      }
     }
+    parts = next;
+    if (!changed) break;
   }
-  return raw;
+  const okOne = (n) => KEY_NAMES.includes(n) || /^[a-z0-9]$/.test(n) || /^f([1-9]|1[0-9]|2[0-4])$/.test(n);
+  for (const p of parts) {
+    if (!okOne(p)) throw new Error('不认识的按键名「' + p + '」。' + KEY_HELP);
+  }
+  return parts.join('+');
 }
 function key(name) { return run('key', [validateKey(name)]); }
 

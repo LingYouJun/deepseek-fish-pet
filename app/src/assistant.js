@@ -158,7 +158,11 @@ async function run(tool, arg) {
     let action = null;
     if (cfg.visionEnabled) {
       const _sp = require('./input').space(); const CAPW = _sp.w, CAPH = _sp.h; const CAPEX = Math.round(_sp.w / 2), CAPEY = Math.round(_sp.h / 2);
-      const q = (arg || '看看屏幕') + '\n\n【输出要求】先用一句中文说明你的判断；如果这一步需要操作屏幕，就在回答的最后单独输出一行：ACTION: 工具|参数（坐标基于 ${CAPW}x${CAPH} 截图，左上角 0,0；工具可选 click/rclick/dclick/move/drag/scroll/type/key，例如 ACTION: click|${CAPEX},${CAPEY}）。如果不需要操作就不要写 ACTION 行。';
+      /* ⚠️ 这段必须是**模板串（反引号）**：里面用了 ${CAPW}/${CAPH}/${CAPEX}/${CAPEY}。
+         之前写成了单引号 → 占位符没被插值，**模型看到的字面就是 "${CAPW}x${CAPH}"**，
+         于是它照着写 `click|${CAPW-20},${CAPH-20}` 被拒（"坐标格式应为 x,y"），白费一步。
+         这是监视数据里从她的报错里挖出来的，不是什么模型犯傻。 */
+      const q = (arg || '看看屏幕') + `\n\n【输出要求】先用一句中文说明你的判断；如果这一步需要操作屏幕，就在回答的最后单独输出一行：ACTION: 工具|参数（坐标基于 ${CAPW}x${CAPH} 截图，左上角 0,0；工具可选 click/rclick/dclick/move/drag/scroll/type/key，例如 ACTION: click|${CAPEX},${CAPEY}）。如果不需要操作就不要写 ACTION 行。`;
       /* tV 必须声明在 try **外面**：catch 里也要用它算耗时，
          写在 try 内的话失败路径会 ReferenceError（实测被 §6 那条测试抓住）。 */
       let tV = tick();
@@ -370,9 +374,24 @@ async function run(tool, arg) {
     return `✅ 已${label}：(${x}, ${y})`;
   }
   if (tool === 'drag') {
-    const parts = String(arg).split('|');
-    const [x1, y1] = parseXY(parts[0]);
-    const [x2, y2] = parseXY(parts[1]);
+    /* 两种写法都收：
+     *   drag|x1,y1|x2,y2   （提示词里的标准写法）
+     *   drag|x1,y1,x2,y2   （模型很自然会写成四段逗号 —— 实测她就这么发过
+     *                        "960,540,960,200"，被拒后白费一步）
+     * 不能直接用 parseXY 切，那个函数要求整串恰好是一对坐标。 */
+    const s = String(arg || '');
+    let a, b;
+    if (s.includes('|')) {
+      const parts = s.split('|');
+      a = parseXY(parts[0]); b = parseXY(parts[1]);
+    } else {
+      const all = s.split(/[,，]/).map((x) => Number(String(x).trim()));
+      if (all.length !== 4 || all.some((n) => !Number.isFinite(n))) {
+        throw new Error('拖拽格式应为 drag|x1,y1|x2,y2（也接受 x1,y1,x2,y2 四段写法），收到的是：' + s.slice(0, 40));
+      }
+      a = [all[0], all[1]]; b = [all[2], all[3]];
+    }
+    const [x1, y1] = a, [x2, y2] = b;
     input.drag(x1, y1, x2, y2);
     return `✅ 已拖拽：(${x1},${y1}) → (${x2},${y2})`;
   }
