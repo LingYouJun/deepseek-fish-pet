@@ -5,6 +5,7 @@ fs.mkdirSync(T, { recursive: true });
 try { fs.copyFileSync(path.join(process.env.APPDATA,'dayu-pet','config.json'), path.join(T,'config.json')); } catch {}
 app.setPath('userData', T);
 app.whenReady().then(() => {
+  // main.js keeps these compatibility exports, now backed by src/prompt-builder.js.
   const M = require('../main.js');
   const out = [];
   const sys = M.buildSystemPrompt(M.config.load());
