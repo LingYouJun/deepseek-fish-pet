@@ -81,7 +81,29 @@ try {
 let allowChatClose = false;
 
 const posFile = () => path.join(app.getPath('userData'), 'position.json');
-const loadPosition = () => { try { return JSON.parse(fs.readFileSync(posFile(), 'utf8')); } catch { return null; } };
+/* 读窗口位置，并**夹进可见工作区**。
+ * 为什么必须夹：用户实际遇到过 —— 位置被存成 {"x":-107,"y":588}，
+ * 于是她的窗口有 107px 在屏幕左边外面、立绘基本看不到，
+ * 而用户又没法拖一个看不见的窗口，就卡在"她不见了"的状态，
+ * 只能手工去改 position.json 才救回来。
+ * 这里按主显示器的可用区（去掉任务栏）把它拉回屏幕内，保证永远看得见。
+ * 注：窗口尺寸此时还不知道，所以只保证左上角落在工作区内、
+ * 并留一点余量（不让它完全贴边）。 */
+const loadPosition = () => {
+  let p = null;
+  try { p = JSON.parse(fs.readFileSync(posFile(), 'utf8')); } catch { return null; }
+  if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) return null;
+  try {
+    const wa = screen.getPrimaryDisplay().workAreaSize;   // 不含任务栏
+    const x = Math.max(0, Math.min(wa.width - 80, Math.round(p.x)));
+    const y = Math.max(0, Math.min(wa.height - 60, Math.round(p.y)));
+    if (x !== Math.round(p.x) || y !== Math.round(p.y)) {
+      try { fs.writeFileSync(posFile(), JSON.stringify({ x, y })); } catch {}
+      return { x, y, clampedFrom: { x: Math.round(p.x), y: Math.round(p.y) } };
+    }
+    return { x, y };
+  } catch { return { x: Math.round(p.x), y: Math.round(p.y) }; }
+};
 const savePosition = (x, y) => { try { fs.writeFileSync(posFile(), JSON.stringify({ x, y })); } catch {} };
 const loadPersona = () => persona.load();   // 人设现在放在 userData（AI 要能改它）
 
@@ -1645,7 +1667,7 @@ if (!gotLock) {
  * 然后直接调这些函数驱动对话 —— 比走 IPC 少一层，也拿得到内部状态。
  * 正常运行时这些导出没有任何副作用。 */
 module.exports = {
-  buildSystemPrompt, buildContinuePrompt, genReply, logTurn, createChat, createPet, bubbleOnPetIfChatHidden, yieldOwnWindowsAt, restoreOwnWindows,
+  buildSystemPrompt, buildContinuePrompt, genReply, logTurn, createChat, createPet, bubbleOnPetIfChatHidden, yieldOwnWindowsAt, restoreOwnWindows, loadPosition, savePosition, posFile,
   config, llm, memory, mood, stats, persona, personatags, petactions, speak,
   assistant, skills, projects, tts, asr, testlog, clock, userinput,
   win: () => ({ petWin, chatWin }),

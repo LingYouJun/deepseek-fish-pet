@@ -36,3 +36,7 @@ desktop.ini
 # ---- Python 缓存（DTW 实验脚本用）----
 __pycache__/
 *.pyc
+
+# convenience files placed for the user at repo root (shortcut + readme), not source
+*.lnk
+qidong-shuoming.txt
