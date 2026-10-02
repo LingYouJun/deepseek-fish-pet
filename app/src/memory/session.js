@@ -5,11 +5,16 @@
  */
 const store = require('../store');
 const bus = require('../bus');
+const fmt = require('../sessionfmt');
 
 const NS = 'session';
 const MAX_DRAFT_MSGS = 300;   // 草稿最多留多少条，防文件无限大
 
 let state = null;
+/* 磁盘上那个会话文件的版本比本程序还新 → 拒绝加载。此时**绝不能写盘**：
+   否则会用空会话覆盖掉用户那个"更高版本"的文件，而那是不可逆的数据丢失。
+   （照 DSH dsh-session-format:134 的语义：旧程序不猜新格式。） */
+let readOnly = false;
 
 function newId() { return 's-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7); }
 function blank() { return { id: newId(), startedAt: Date.now(), messages: [], resumed: false }; }
@@ -23,25 +28,36 @@ function scheduleSave() {
 function saveNow() {
   clearTimeout(saveTimer);
   if (!state) return;
+  if (readOnly) return;          // 见上面 readOnly 的说明：拒绝加载期间一律不写
   try {
     const msgs = state.messages.slice(-MAX_DRAFT_MSGS);
-    store.write(NS, { id: state.id, startedAt: state.startedAt, savedAt: Date.now(), messages: msgs });
+    /* 写盘前统一包上当前格式版本 —— 这是迁移的另一半，见 src/sessionfmt.js */
+    store.write(NS, fmt.wrap({ id: state.id, startedAt: state.startedAt, savedAt: Date.now(), messages: msgs }));
   } catch {}
 }
 
-/* 启动时恢复：有草稿 → 当成还没结束的会话继续；没有 → 开新会话 */
+/* 启动时恢复：有草稿 → 当成还没结束的会话继续；没有 → 开新会话。
+ * 读出来的数据**先过迁移**（老格式 → 当前格式），迁移失败就拒绝加载并保护原文件。 */
 function restore() {
   const d = store.read(NS, null);
-  if (d && Array.isArray(d.messages) && d.messages.length) {
-    // 老草稿的 compact 是 'EN: ...'（看起来像正常回复，会把模型教坏）→ 就地改成历史标记
-    for (const m of d.messages) {
-      if (m && typeof m.compact === 'string' && /^EN\s*[:：]/.test(m.compact)) {
-        m.compact = '(earlier reply, abridged) ' + m.compact.replace(/^EN\s*[:：]\s*/, '');
-      }
+  if (d != null) {
+    const m = fmt.migrate(d);
+    if (!m.ok) {
+      /* 迁移不了（例如文件是更高版本写的）→ 开新会话，但**只读**，绝不覆盖原文件 */
+      readOnly = true;
+      try { console.error('[session] 拒绝加载会话草稿：' + m.error); } catch {}
+      state = blank();
+      bus.emit('session:start', info());
+      return state;
     }
-    state = { id: d.id || newId(), startedAt: d.startedAt || Date.now(), messages: d.messages, resumed: true };
-    bus.emit('session:start', info());
-    return state;
+    const v = m.data;
+    if (v && Array.isArray(v.messages) && v.messages.length) {
+      state = { id: v.id || newId(), startedAt: v.startedAt || Date.now(), messages: v.messages, resumed: true, migratedFrom: m.migrated ? m.from : null };
+      /* 迁移过就立刻用新格式写回一次（别等下次保存，免得中途崩了又回到老格式） */
+      if (m.migrated) saveNow();
+      bus.emit('session:start', info());
+      return state;
+    }
   }
   state = blank();
   bus.emit('session:start', info());
@@ -58,11 +74,11 @@ function push(...msgs) {
 function all() { return ensure().messages; }
 
 /* 收尾成功后清空草稿，避免下次被当成未结束会话重复记账 */
-function clear() { state = blank(); clearTimeout(saveTimer); store.write(NS, null); }
+function clear() { state = blank(); clearTimeout(saveTimer); if (!readOnly) store.write(NS, null); }
 
 function info() {
   const s = ensure();
-  return { id: s.id, startedAt: s.startedAt, count: s.messages.length, resumed: !!s.resumed };
+  return { id: s.id, startedAt: s.startedAt, count: s.messages.length, resumed: !!s.resumed, readOnly: readOnly, migratedFrom: s.migratedFrom == null ? null : s.migratedFrom, version: fmt.CURRENT };
 }
 
 module.exports = { restore, push, all, clear, info, saveNow, NS };
