@@ -28,6 +28,7 @@ const TOOL_TIER = {
   template_list: 'read', template_del: 'normal',
   find_text: 'full',   // OCR 当前画面找一段文字并返回坐标（文字的模板匹配）
   find_template_scroll: 'full',  // 在列表里边滚边找模板，找不到会滚回原位
+  watch_screen: 'full',          // 连续看屏幕（主人演示时她跟着学）
   proj_ls: 'read', proj_read: 'read', tag_list: 'read',
   open_path: 'normal', open_url: 'normal', skill_write: 'normal', skill_rm: 'normal', proj_rm: 'normal', proj_open: 'normal', proj_run: 'normal', proj_write: 'normal',
   tag_set: 'normal', tag_rm: 'normal',
@@ -679,6 +680,43 @@ async function runInner(tool, arg) {
     if (r.startsWith('OK')) return '🪟 已把窗口抬到最前：' + r.slice(3) + '（现在截图/点击都以它为准）';
     if (r.startsWith('NOTFOUND')) return '🪟 没找到标题含「' + arg + '」的窗口。当前可见窗口：\n' + r.slice(8);
     return '🪟 ' + r;
+  }
+  if (tool === 'watch_screen') {
+    /* 【连续看屏幕】给"主人演示一遍、她跟着学"这种场景用。
+       为什么单独做一个工具：screen_look 是**单张快照**，而"看人操作一遍"需要连续观察；
+       如果让她自己连着调 screen_look，既会撞上"连续只看不动"的闸门，
+       又会把每一帧都当独立思考（很贵，而且她记不住顺序）。
+       这里一次调用完成：每隔 interval 毫秒抓一帧（**画上光标**，才看得出鼠标在点什么），
+       逐帧问视觉模型"这一帧发生了什么/鼠标在哪/界面变了什么"，最后拼成一条时间线。
+       帧同时存到 shots/（文件名带序号），事后能回看。
+       用法：watch_screen|<秒数>[|<间隔毫秒>]   例如 watch_screen|30|2500 */
+    const spW = String(arg || '').split('|').map((s) => s.trim());
+    const secs = Math.max(3, Math.min(120, Number(spW[0]) || 20));
+    const ivMs = Math.max(800, Math.min(8000, Number(spW[1]) || 2500));
+    const cfgW = config.load();
+    if (!cfgW.visionEnabled) return '⚠️ 视觉没开，看不了屏幕。';
+    const total = Math.max(1, Math.min(40, Math.floor((secs * 1000) / ivMs) + 1));
+    const timeline = [];
+    const stamp = Date.now();
+    for (let k = 0; k < total; k++) {
+      const capW = await captureScreen(false, false);   // 不画网格、但**画光标**（要看鼠标点了哪）
+      try {
+        fs.writeFileSync(path.join(shotsDir(), 'watch-' + stamp + '-' + String(k).padStart(2, '0') + '.jpg'),
+          Buffer.from(capW.dataUrl.split(',')[1], 'base64'));
+      } catch {}
+      const qW = '这是同一块屏幕上连续操作中的第 ' + (k + 1) + '/' + total + ' 帧。'
+        + '请用**一句话**说清三件事：① 鼠标指针此刻在画面什么位置；'
+        + '② 这一帧里刚发生或正在发生什么操作（点击、输入、拖动、切界面…）；'
+        + '③ 界面因此变了什么（弹窗、高亮、列表变化…）。只描述你看到的，不要推测意图。';
+      let one = '';
+      try { one = await vision.describe(cfgW, capW.dataUrl, qW, 'low'); }
+      catch (e) { one = '（这一帧视觉失败：' + ((e && e.message) || e) + '）'; }
+      timeline.push('【第 ' + (k + 1) + ' 帧 · ' + (Math.round((k * ivMs) / 100) / 10) + 's】' + String(one).replace(/\s+/g, ' ').trim());
+      if (k < total - 1) await new Promise((r) => setTimeout(r, ivMs));
+    }
+    return '👀 连续看了 ' + total + ' 帧（约 ' + secs + ' 秒，间隔 ' + ivMs + 'ms），时间线：\n'
+      + timeline.join('\n')
+      + '\n帧图已存在 shots/ 下（watch-' + stamp + '-NN.jpg）。';
   }
   if (tool === 'find_template_scroll') {
     /* 【滚动列表里找模板】模板匹配的三个天生短板之一：目标在列表里、当前屏看不到。
