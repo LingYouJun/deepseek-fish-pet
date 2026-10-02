@@ -1439,7 +1439,7 @@ ipcMain.handle('assistant:run', async (_e, a) => {
   if (SCREEN_TOOLS.includes(String(a && a.tool)) && chatWin && !chatWin.isDestroyed() && chatWin.isVisible() && !chatWin.isMinimized()) {
     try {
       chatWasVisible = true;
-      chatWin.minimize();
+      chatWin.hide();   // 用 hide 而不是 minimize：hide 更彻底、也不会因为还原而把焦点抢回去盖住游戏
       dbg('[pet] 屏幕操作前先最小化对话窗（' + a.tool + '）—— 免得她看屏幕时只看到自己');
       await new Promise((r2) => setTimeout(r2, 600));   // 等窗口真的让开，抓帧才干净
     } catch { chatWasVisible = false; }
@@ -1448,7 +1448,7 @@ ipcMain.handle('assistant:run', async (_e, a) => {
   try {
     r = await assistant.run(a.tool, a.arg);
   } finally {
-    if (chatWasVisible) setTimeout(() => { try { if (chatWin && !chatWin.isDestroyed()) chatWin.restore(); } catch {} }, 500);
+    if (chatWasVisible) setTimeout(() => { try { if (chatWin && !chatWin.isDestroyed()) { chatWin.showInactive(); chatWin.setAlwaysOnTop(false); } } catch {} }, 500);
     if (yielded && yielded.length) setTimeout(() => restoreOwnWindows(yielded), 350);
     if (petHiddenForLook) setTimeout(() => { try { if (petWin && !petWin.isDestroyed()) petWin.show(); } catch {} }, 500);
   }
