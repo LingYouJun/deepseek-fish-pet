@@ -53,13 +53,20 @@ public class FW {
   public static void UnTop() {
     if (HitH != IntPtr.Zero) SetWindowPos(HitH, NOTOP, 0, 0, 0, 0, NOMOVE | NOSIZE);
   }
-  /* 不管找没找到，先把所有置顶窗口取消置顶（救"已经被卡住"的情况） */
-  public static List<string> ClearAllTop() {
+  /* 不管找没找到，先把所有置顶窗口取消置顶（救"已经被卡住"的情况）。
+   * ⚠️⚠️ **必须排除调用者自己的进程**：用户报"我一切到别的界面，桌宠就不见了、退到后台了"——
+   *   根因就是这里：它把**桌宠自己的 WS_EX_TOPMOST 也抹掉了**，而 Electron 并不知道这个位
+   *   被 Win32 抹过，不会重新置顶 → 于是用户一切窗口，桌宠就沉到后面。
+   *   （实测证据：dayu-pet 窗口 WS_EX_TOPMOST=False，而 Electron 代码里写的是 alwaysOnTop:true。）
+   *   排除办法：用 GetWindowThreadProcessId 拿到窗口所属进程，等于调用者 pid 的一律跳过。 */
+  public static List<string> ClearAllTop(uint ownPid) {
     var o = new List<string>();
     EnumWindows((h,p) => {
       var sb = new StringBuilder(300); GetWindowText(h, sb, 300);
       string t = sb.ToString();
       if (t.Length > 0 && IsWindowVisible(h)) {
+        uint pid; GetWindowThreadProcessId(h, out pid);
+        if (ownPid != 0 && pid == ownPid) return true;   // ★ 自己的窗口不碰（桌宠/对话窗要一直置顶）
         SetWindowPos(h, NOTOP, 0, 0, 0, 0, NOMOVE | NOSIZE);
         o.Add(t);
       }
@@ -67,9 +74,10 @@ public class FW {
     }, IntPtr.Zero);
     return o;
   }
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
 }
 '@
-[FW]::ClearAllTop() | Out-Null
+[FW]::ClearAllTop(__OWNPID__) | Out-Null
 [FW]::Go('__WANT__')
 if ([FW]::Hit -ne '') {
   Write-Output ('OK ' + [FW]::Hit)
@@ -99,9 +107,11 @@ function focusWindow(title) {
  *    我这个普通权限的会话实测 SetWindowPos(NOTOPMOST) 对"明日方舟"返回 err=5（Access Denied）。 */
 function clearAllTop() {
   /* ⚠️ 不能转调 focusWindow('')：那个函数对空标题会**早退**（"没给窗口名"），
-     PowerShell 根本不会跑 —— 我第一版就是这么写的，等于没清。这里直接跑脚本。 */
+     PowerShell 根本不会跑 —— 我第一版就是这么写的，等于没清。这里直接跑脚本。
+     ⚠️ 必须把自己的 pid 传进去：这样桌宠/对话窗自己的置顶不会被抹掉
+     （用户报"一切到别的界面桌宠就不见了"，就是这个抹掉的后果）。 */
   return new Promise((resolve) => {
-    const script = PS.replace('__WANT__', '');
+    const script = PS.replace('__WANT__', '').replace('__OWNPID__', String(process.pid));
     execFile('powershell.exe', ['-NoProfile', '-Command', script], { timeout: 25000, windowsHide: true }, (e, so) => {
       resolve(String(so || '').trim() || (e ? 'ERR ' + e.message : 'done'));
     });

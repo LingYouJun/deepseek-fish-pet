@@ -139,10 +139,17 @@ function startPetVisibilityWatchdog() {
   setInterval(() => {
     try {
       if (!petWin || petWin.isDestroyed()) return;
+      /* 【每次都重申置顶】用户报"我一切到别的界面，桌宠就不见了、退到后台了，我想办公时看见"。
+         根因是我加的 clearAllTop() 用 Win32 抹掉了桌宠自己的 WS_EX_TOPMOST，而 Electron
+         并不知道（它以为 alwaysOnTop 还是 true），所以不会重新置顶。已让 clearAllTop 排除
+         自己的 pid；这里再每 3 秒重申一次当保险 —— Electron 对"已经置顶"的重复调用是 no-op，
+         不会闪、也没有副作用。 */
+      try { petWin.setAlwaysOnTop(true, 'screen-saver'); } catch {}
       if (petWin.isVisible()) return;
       if (petHideSticky) return;                          // 游戏托管期间收起，是正常状态
       if (Date.now() - lastPetHideAt < 4000) return;       // 正常的临时隐藏，别抢
       petWin.show();
+      try { petWin.setAlwaysOnTop(true, 'screen-saver'); } catch {}
       dbg('[pet] 看门狗：立绘窗被藏太久（上次隐藏于 ' + Math.round((Date.now() - lastPetHideAt) / 1000) + ' 秒前），已强制显示回来');
     } catch {}
   }, 3000);
