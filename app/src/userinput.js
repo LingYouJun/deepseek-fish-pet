@@ -22,7 +22,7 @@ const DEFAULTS = {
   enabled: true,        // 总开关
   pollMs: 50,           // 轮询间隔
   movePx: 6,            // 单次位移超过多少像素算"动过"
-  calmMs: 1200,         // 主人多久没动算"松手了"
+  calmMs: 3000,         // 主人多久没动算"松手了"（用户要求 3 秒）
   expectPx: 40,         // 她的预期落点容忍半径（鼠标加速/取整会带来小偏差）
   petIdleStopMs: 10000, // 她这么久没动作就停掉轮询
 };

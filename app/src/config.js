@@ -115,7 +115,7 @@ const DEFAULTS = {
      判定用**全局光标位移**做代理（Electron 拿不到按键状态），
      所以她自己的落点会预先登记，不会被误判成主人在动。 */
   userYield: true,       // 总开关
-  userCalmMs: 1200,      // 主人多久没动鼠标算"松手了"
+  userCalmMs: 3000,      // 主人多久没动鼠标算"松手了"（用户要求 3 秒）
   userMovePx: 6,         // 单次位移超过多少像素算"动过"
   userPollMs: 50,        // 光标轮询间隔
   speakGoodP: 0.8,       // 口语打分：p ≥ 此值 = 绿（读得清楚）

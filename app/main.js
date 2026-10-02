@@ -1423,7 +1423,18 @@ ipcMain.handle('assistant:run', async (_e, a) => {
      实测她记不住（截图里全是她自己的对话窗，游戏/网页被挡着，读不到也点不准）。
      这件事不该靠她记 —— 由程序替她做：所有"看/操作屏幕"的工具，
      执行前把对话窗最小化，执行完恢复。否则她每看一眼屏幕都是看自己。 */
-  const SCREEN_TOOLS = ['screen_look', 'screen_shot', 'click', 'rclick', 'dclick', 'move', 'drag', 'scroll', 'type', 'key'];
+  const SCREEN_TOOLS = ['screen_look', 'screen_shot', 'click', 'rclick', 'dclick', 'move', 'drag', 'scroll', 'type', 'key', 'focus_window'];
+  /* 【主人一动鼠标她就停手】用户要求："我动鼠标时她停止，3秒检测一次，不然她一直顶窗口"。
+     机制本来就有（src/userinput.js，游戏助手早就在用），但**没接到助手的动作上** ——
+     所以她做任务时会一直抢光标、反复把窗口顶到最前，跟主人抢画面。
+     现在：所有会动屏幕/键鼠的动作执行前，先等主人松手（连续 userCalmMs 没动，默认改成 3000ms）。 */
+  const MOVE_TOOLS = ['click', 'rclick', 'dclick', 'move', 'drag', 'scroll', 'type', 'key', 'focus_window'];
+  if (MOVE_TOOLS.includes(String(a && a.tool))) {
+    const t0 = Date.now();
+    await userinput.waitUntilFree(30000);      // 最多等 30 秒，别把任务挂死
+    const waited = Date.now() - t0;
+    if (waited > 300) dbg('[pet] 主人在动鼠标，等了 ' + Math.round(waited) + 'ms 才动手（' + a.tool + '）');
+  }
   let chatWasVisible = false;
   if (SCREEN_TOOLS.includes(String(a && a.tool)) && chatWin && !chatWin.isDestroyed() && chatWin.isVisible() && !chatWin.isMinimized()) {
     try {
@@ -1624,6 +1635,15 @@ if (!gotLock) {
      * 现在每次启动先松一遍修饰键，等于自动治好 —— 不用再重启。
      * 放启动早期：用户很可能一开机就发现键盘不对。 */
     try { input.releaseAll(); dbg('[input] 启动时释放卡键'); } catch (e) { dbg('[input] releaseAll 失败 ' + e); }
+    /* 【启动兜底】保证她自己的窗口一定是可见的。
+       我加的"看屏幕时藏起立绘窗 / 最小化对话窗"如果在热重载中途被打断，
+       窗口就会**一直藏着**（实测发生过：进程还在、但桌面和任务栏都找不到她）。
+       启动后几秒强制 show/restore 一次，把这种状态纠正回来。 */
+    setTimeout(() => {
+      try { if (petWin && !petWin.isDestroyed()) { if (!petWin.isVisible()) petWin.show(); } } catch {}
+      try { if (chatWin && !chatWin.isDestroyed() && chatWin.isMinimized()) chatWin.restore(); } catch {}
+      dbg('[boot] 启动兜底：确认自己的窗口可见');
+    }, 6000);
     /* 【临时】对讲机：外部普通权限进程没法给她发消息（UIPI），于是让她自己进程里的小钩子读文件转发。 */
     try { require('./src/intercom').install({ chatWin: () => chatWin, createChat, dbg }); } catch (e) { dbg('[intercom] install failed ' + e); }
 
