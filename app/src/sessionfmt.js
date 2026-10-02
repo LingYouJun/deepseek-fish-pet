@@ -17,7 +17,7 @@
  */
 'use strict';
 
-const CURRENT = 1;
+const CURRENT = 2;
 
 /* 迁移链：必须**相邻**（from 必须等于上一条的 to）。 */
 const MIGRATIONS = [
@@ -37,6 +37,23 @@ const MIGRATIONS = [
         });
       }
       return out;
+    },
+  },
+  {
+    from: 1, to: 2,
+    /* v1 = { messages: [{role, content|compact}] }  —— 直接存"模型看到的东西"
+       v2 = { events: [{kind:'msg', role, content|compact}] } —— 存**只追加的事件日志**（真相），
+            "模型看到什么"由 src/surface.js 的投影算出来。
+       为什么换：v1 是就地保存的，一旦截断/改写就再也查不回原文；v2 只追加，投影可重算、可回放。
+       （见 C5 的说明：把真相和投影分开。） */
+    up(d) {
+      const events = (Array.isArray(d.messages) ? d.messages : []).map((m) => {
+        const e = { kind: 'msg', role: (m && m.role) || 'user' };
+        if (m && m.compact != null) e.compact = m.compact;
+        else e.content = (m && m.content) != null ? m.content : '';
+        return e;
+      });
+      return { version: 2, id: d.id, startedAt: d.startedAt, savedAt: d.savedAt, events };
     },
   },
 ];

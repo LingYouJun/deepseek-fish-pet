@@ -802,6 +802,15 @@ ipcMain.handle('chat:send', async (e, payload) => {
   /* 真用户消息到达 → 重置「重复调用」计数（照 DSH dsh-repeat-tool-reminder 的做法：
      主人插话代表环境变了，之前的重复计数不该继续累加）。 */
   try { require('./src/assistant').__repeatReset(); } catch {}
+  /* 【每轮开始清扫一次超长历史】照 DSH dsh-compaction-tool-result-pruner：
+     把早先那些超长的工具结果**折叠成摘要节点**（追加一条替代事件，**原文仍在事件日志里** + 溢出文件里）。
+     阈值取 4000：一次 spill 后的回执约 5~8KB（头 4000 + 提示 + 尾 1000），
+     所以它会在"不再是最新几条"之后被折叠；原文有两处保底（spill 文件 + 原始事件），不会丢。
+     刚来的那条不会被剪（keepRecent 保护），因为那正是她此刻要看的。 */
+  try {
+    const pr = memory.session.pruneLong({ maxInlineChars: 4000, keepRecent: 2, minSaveChars: 500, reason: 'turn-sweep' });
+    if (pr && pr.count) dbg('[session] 本轮清扫折叠了 ' + pr.count + ' 条超长历史');
+  } catch {}
   const messages = [
     { role: 'system', content: buildSystemPrompt(cfg) },
     ...memory.pickHistory(),
