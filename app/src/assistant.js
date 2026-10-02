@@ -17,7 +17,8 @@ const personatags = require('./personatags');
 const TOOL_TIER = {
   list_dir: 'read', read_file: 'read', use_skill: 'read', skill_ls: 'read', skill_read: 'read',
   write_file: 'full',
-  run_file: 'full',     // 跑任意绝对路径的脚本（和 type/key/screen 同级，只在 full 档可用）   // 写任意绝对路径 —— 和 type/key/screen 同级，只在 full 档可用
+  run_file: 'full',
+  focus_window: 'full',   // 把任意窗口抬到最前（她需要它来摆脱'被别的窗口盖住'）     // 跑任意绝对路径的脚本（和 type/key/screen 同级，只在 full 档可用）   // 写任意绝对路径 —— 和 type/key/screen 同级，只在 full 档可用
   proj_ls: 'read', proj_read: 'read', tag_list: 'read',
   open_path: 'normal', open_url: 'normal', skill_write: 'normal', skill_rm: 'normal', proj_rm: 'normal', proj_open: 'normal', proj_run: 'normal', proj_write: 'normal',
   tag_set: 'normal', tag_rm: 'normal',
@@ -410,6 +411,17 @@ async function run(tool, arg) {
     const [x, y] = parseXY(arg);
     const label = { click: '左键点击', rclick: '右键点击', dclick: '双击', move: '移动鼠标' }[tool];
     input[tool](x, y);
+    /* 【等界面反应完再返回】实测踩到的坑：她点"基建"之后**立刻** screen_look，
+       而游戏切界面要 1~2 秒 —— 她看到的是**旧画面**，于是判断"没点进去"、
+       换个坐标再点、再点，连点三次（日志里就是 1320,878 → 1512,810 → 1480,830），
+       而其实现第二次就进去了。不该让她靠"记得等一下"来避免：
+       点/按键/输入/拖拽这类**会改变界面**的动作，返回前统一等一小会儿，
+       这样下一步截图看到的才是动作之后的状态。move 不改界面，不用等。 */
+    if (tool !== 'move') {
+      const settle = Number((config.load().memory || {}).actionSettleMs) || 1500;
+      await new Promise((r) => setTimeout(r, settle));
+      return `✅ 已${label}：(${x}, ${y})（已等 ${(settle / 1000).toFixed(1)}s 让界面反应）`;
+    }
     return `✅ 已${label}：(${x}, ${y})`;
   }
   if (tool === 'drag') {
@@ -463,13 +475,28 @@ async function run(tool, arg) {
       + '（滚轮只会作用于**光标下/当前有焦点**的那个窗口。要是没反应：先确认目标窗口没被别的窗口'
       + '——**包括我自己的桌宠窗**——挡住，或者先点一下目标窗口的空白处让它获得焦点，然后再滚。）';
   }
+  if (tool === 'focus_window') {
+    /* 把目标窗口抬到最前。她自己反复被'游戏被别的窗口盖住'挡住（看不到就点不准），
+       而 Windows 不允许后台进程改前台 —— 但 SetWindowPos(HWND_TOPMOST) 不需要那个权限，
+       抬到最上面就够（截图和点击都是按最上面的窗口算的）。 */
+    const r = await require('./focuswin').focusWindow(arg);
+    if (r.startsWith('OK')) return '🪟 已把窗口抬到最前：' + r.slice(3) + '（现在截图/点击都以它为准）';
+    if (r.startsWith('NOTFOUND')) return '🪟 没找到标题含「' + arg + '」的窗口。当前可见窗口：\n' + r.slice(8);
+    return '🪟 ' + r;
+  }
   if (tool === 'type') {
     input.type(arg);
-    return `✅ 已输入文字：${arg.slice(0, 50)}`;
+    /* 同上：输入会改变界面，等它反应完再让她看屏幕 */
+    const settle = Number((config.load().memory || {}).actionSettleMs) || 1500;
+    await new Promise((r) => setTimeout(r, settle));
+    return `✅ 已输入文字：${arg.slice(0, 50)}（已等 ${(settle / 1000).toFixed(1)}s）`;
   }
   if (tool === 'key') {
     input.key(arg);
-    return `✅ 已按键：${arg}`;
+    /* 按键（回车/ESC/方向键）常常触发界面跳转（比如登录、确认对话框），同样要等 */
+    const settle = Number((config.load().memory || {}).actionSettleMs) || 1500;
+    await new Promise((r) => setTimeout(r, settle));
+    return `✅ 已按键：${arg}（已等 ${(settle / 1000).toFixed(1)}s）`;
   }
 }
 

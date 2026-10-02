@@ -131,7 +131,7 @@ function buildSystemPrompt(cfg) {
   } catch {}
   let actionSec = '';
   if (tier !== 'off') {
-    let tools = '- open_url|https://...  (open a web page in the user\'s browser)\n- open_path|C:\\...  (open a file or app)\n- list_dir|C:\\...  (list a folder)\n- run_file|C:\\full\\path\\script.py  (run a script/file at an ABSOLUTE path; use it when the user names a file outside your project sandbox)\n- write_file|C:\\full\\path\\name.txt||<content>  (write a file to an ABSOLUTE path; use this — not proj_write — when the user names a folder outside your project sandbox. Multi-line content is fine: just keep writing on the following lines, the ACTION parser preserves them)\n- read_file|C:\\...  (read a text file)\n- use_skill|<skill id>  (load a skill\'s full instructions before doing the task)\n- tag_list  (看到你的人格词汇表：tier1 核心人格决定你的立绘)\n- tag_set|{"id":"yandere","label":"病娇","tier":1,"moodDir":1,"words":["病娇","偏执"]}  (补/改人格词条；tier1=核心人格)\n- tag_rm|<id>\n';
+    let tools = '- open_url|https://...  (open a web page in the user\'s browser)\n- open_path|C:\\...  (open a file or app)\n- list_dir|C:\\...  (list a folder)\n- run_file|C:\\full\\path\\script.py  (run a script/file at an ABSOLUTE path; use it when the user names a file outside your project sandbox)\n- write_file|C:\\full\\path\\name.txt||<content>  (write a file to an ABSOLUTE path; use this — not proj_write — when the user names a folder outside your project sandbox. Multi-line content is fine: just keep writing on the following lines, the ACTION parser preserves them)\n- read_file|C:\\...  (read a text file)\n- focus_window|<title substring>  (bring that window to the front; use it whenever what you need to look at is hidden behind other windows)\n- use_skill|<skill id>  (load a skill\'s full instructions before doing the task)\n- tag_list  (看到你的人格词汇表：tier1 核心人格决定你的立绘)\n- tag_set|{"id":"yandere","label":"病娇","tier":1,"moodDir":1,"words":["病娇","偏执"]}  (补/改人格词条；tier1=核心人格)\n- tag_rm|<id>\n';
     if (tier === 'web' || tier === 'full') {
       tools += '- web_open|<url>  (open a page in a controlled browser and read its content)\n- web_click|<CSS selector>  (click an element on the current page)\n- web_type|<selector>||<text>  (type text into an input)\n- web_read  (read the current page content again)\n';
     }
@@ -1410,6 +1410,14 @@ ipcMain.handle('assistant:run', async (_e, a) => {
      日志实证：她自己在任务里也发现过（"my own chat window is covering part of
      the table"），然后手动把窗口拖走了 —— 不该让她干这种活。
      只在该点确实被覆盖时才动，动作结束立刻放回来。 */
+  /* 看屏幕/截图时也要让开：她自己的立绘窗是 alwaysOnTop，会盖在游戏上面。
+     实测她抱怨过"屏幕上是你的对话窗把游戏盖住了"（那是外部窗口），
+     而她自己的立绘同样会挡 —— 抓帧前统一藏起来，抓完放回。 */
+  const LOOK_TOOLS = ['screen_look', 'screen_shot'];
+  let petHiddenForLook = false;
+  if (LOOK_TOOLS.includes(String(a && a.tool)) && petWin && !petWin.isDestroyed() && petWin.isVisible()) {
+    try { petWin.hide(); petHiddenForLook = true; await new Promise((r2) => setTimeout(r2, 350)); } catch {}
+  }
   const yielded = yieldOwnWindowsAt(a && a.tool, a && a.arg);
   /* 【让开对话窗】用户反复强调了 4 次："以后你每次开始做事第一件事情就是最小化对话框"。
      实测她记不住（截图里全是她自己的对话窗，游戏/网页被挡着，读不到也点不准）。
@@ -1431,6 +1439,7 @@ ipcMain.handle('assistant:run', async (_e, a) => {
   } finally {
     if (chatWasVisible) setTimeout(() => { try { if (chatWin && !chatWin.isDestroyed()) chatWin.restore(); } catch {} }, 500);
     if (yielded && yielded.length) setTimeout(() => restoreOwnWindows(yielded), 350);
+    if (petHiddenForLook) setTimeout(() => { try { if (petWin && !petWin.isDestroyed()) petWin.show(); } catch {} }, 500);
   }
   const text = (r && typeof r === 'object') ? String(r.text || '') : String(r || '');
   const image = (r && typeof r === 'object') ? r.image : null;
@@ -1485,7 +1494,7 @@ function restoreOwnWindows(list) {
 function buildContinuePrompt(cfg) {
   const p = loadPersona();
   const tier = cfg.assistant || 'off';
-  let tools = '- open_url|https://...   - open_path|C:\\...   - list_dir|C:\\...   - read_file|C:\\...   - run_file|C:\\abs\\path（跑绝对路径的脚本）   - write_file|C:\\abs\\path||<content>（绝对路径写入；主人指定目录时用它，别用 proj_write）   - use_skill|<skill id>\n';
+  let tools = '- open_url|https://...   - open_path|C:\\...   - list_dir|C:\\...   - read_file|C:\\...   - focus_window|<标题片段>（把那个窗口抬到最前，被挡住时用）   - run_file|C:\\abs\\path（跑绝对路径的脚本）   - write_file|C:\\abs\\path||<content>（绝对路径写入；主人指定目录时用它，别用 proj_write）   - use_skill|<skill id>\n';
   tools += '- skill_ls|<path>   - skill_read|<path>   - skill_write|<path>||<text>   - skill_rm|<path>\n';
   tools += '- proj_ls|<path>   - proj_read|<path>   - proj_rm|<path>   - proj_open|<path>   - proj_run|<path>   - proj_write|<path>||<content>\n';
     tools += 'Note: proj_* only works inside your own sandbox. When the user names another folder, use write_file with an ABSOLUTE path. If nothing can do it, say so plainly instead of doing something else and reporting success.\n';
@@ -1615,6 +1624,8 @@ if (!gotLock) {
      * 现在每次启动先松一遍修饰键，等于自动治好 —— 不用再重启。
      * 放启动早期：用户很可能一开机就发现键盘不对。 */
     try { input.releaseAll(); dbg('[input] 启动时释放卡键'); } catch (e) { dbg('[input] releaseAll 失败 ' + e); }
+    /* 【临时】对讲机：外部普通权限进程没法给她发消息（UIPI），于是让她自己进程里的小钩子读文件转发。 */
+    try { require('./src/intercom').install({ chatWin: () => chatWin, createChat, dbg }); } catch (e) { dbg('[intercom] install failed ' + e); }
 
     memory.onAppStart().catch((e) => dbg('[memory] onAppStart err ' + e));
     // 隐藏数值：时间效应（多久没见）+ 性格慢回归，然后按需补判一次
