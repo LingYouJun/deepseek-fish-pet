@@ -1411,10 +1411,25 @@ ipcMain.handle('assistant:run', async (_e, a) => {
      the table"），然后手动把窗口拖走了 —— 不该让她干这种活。
      只在该点确实被覆盖时才动，动作结束立刻放回来。 */
   const yielded = yieldOwnWindowsAt(a && a.tool, a && a.arg);
+  /* 【让开对话窗】用户反复强调了 4 次："以后你每次开始做事第一件事情就是最小化对话框"。
+     实测她记不住（截图里全是她自己的对话窗，游戏/网页被挡着，读不到也点不准）。
+     这件事不该靠她记 —— 由程序替她做：所有"看/操作屏幕"的工具，
+     执行前把对话窗最小化，执行完恢复。否则她每看一眼屏幕都是看自己。 */
+  const SCREEN_TOOLS = ['screen_look', 'screen_shot', 'click', 'rclick', 'dclick', 'move', 'drag', 'scroll', 'type', 'key'];
+  let chatWasVisible = false;
+  if (SCREEN_TOOLS.includes(String(a && a.tool)) && chatWin && !chatWin.isDestroyed() && chatWin.isVisible() && !chatWin.isMinimized()) {
+    try {
+      chatWasVisible = true;
+      chatWin.minimize();
+      dbg('[pet] 屏幕操作前先最小化对话窗（' + a.tool + '）—— 免得她看屏幕时只看到自己');
+      await new Promise((r2) => setTimeout(r2, 600));   // 等窗口真的让开，抓帧才干净
+    } catch { chatWasVisible = false; }
+  }
   let r;
   try {
     r = await assistant.run(a.tool, a.arg);
   } finally {
+    if (chatWasVisible) setTimeout(() => { try { if (chatWin && !chatWin.isDestroyed()) chatWin.restore(); } catch {} }, 500);
     if (yielded && yielded.length) setTimeout(() => restoreOwnWindows(yielded), 350);
   }
   const text = (r && typeof r === 'object') ? String(r.text || '') : String(r || '');
