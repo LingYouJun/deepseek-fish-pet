@@ -50,7 +50,20 @@ function build(cfg) {
  *    （技能说明、截图文字、脚本输出）永远原文保留 —— 加载一个技能约 1000 token，
  *    而整个历史预算才 3000，真实对话就这样被一点点挤出去了。
  *  - 裁完保证第一条是 user（部分接口对首条 role 敏感）
+ *
+ * 【2026-10 改造，抄自参考项目 Coopanion/Cortico 的"交接笔记"设计】
+ * 原来只有一个"超预算就停"的硬闸门，导致两个毛病：
+ *   ① **重复刷屏**：同一条失败（同一工具同一报错）连着出现十几次，全部原样占预算 ——
+ *      她读到的历史里最显眼的就是"我又失败了"，于是学会放弃（实测她在 3 秒内回"还是那堵墙"，根本没试）。
+ *   ② **均匀截断**：老的记录要么整条在、要么整条丢，而不是"越老留得越少"。
+ * 现在：
+ *   - 逐字相同的记录**合并计数**，只保留最后一次（渲染成"同样内容重复了 N 次"）；
+ *   - 保留额度按**年龄衰减**：离现在越远，单条裁得越狠（而不是整条消失）；
+ *   - 助手自己的失败叙述由 memory/jobs.js 的摘要提示词负责排除（那边是源头）。
  */
+const AGE_SOFT = 12;      // 距现在多少条之后开始额外裁剪
+const AGE_HARD = 40;      // 再往后裁得更狠
+
 function pickHistory(msgs, budgetTokens, keepFull) {
   const list = Array.isArray(msgs) ? msgs : [];
   const keep = Number(keepFull) || 3;
@@ -58,6 +71,8 @@ function pickHistory(msgs, budgetTokens, keepFull) {
   const out = [];
   let used = 0;
   let assistantSeen = 0;
+  /* 逐字重复合并：键统一成"角色 + 前 160 字"，只留最后一次，其余只记次数 */
+  const seen = new Map();
   for (let i = list.length - 1; i >= 0; i--) {
     const m = list[i] || {};
     const isAssistant = m.role === 'assistant';
@@ -70,10 +85,26 @@ function pickHistory(msgs, budgetTokens, keepFull) {
       && content.length > 400 && SYS_MARK.test(content)) {
       content = tokens.clip(content, 240) + SYS_CLIP_MARK;
     }
+    /* 年龄衰减：越远的单条留得越少（原先只有"整条留/整条丢"） */
+    if (distFromNewest > AGE_SOFT && typeof content === 'string' && content.length > 300) {
+      content = tokens.clip(content, distFromNewest > AGE_HARD ? 80 : 160);
+    }
+    /* 重复合并：同一条内容第二次出现时，把前一次替换成"（重复 N 次）"标记 */
+    const key = String(m.role || '') + '|' + String(content || '').slice(0, 160);
+    const dup = seen.get(key);
+    if (dup && typeof content === 'string' && content.length > 12) {
+      dup.n++;
+      dup.entry.content = dup.base + '\n（上面这条内容在历史里重复了 ' + dup.n + ' 次）';
+      continue;                                  // 不再重复占用预算
+    }
     const cost = tokens.est(content) + 4;
     if (out.length && used + cost > budget) break;
     used += cost;
-    out.unshift({ role: m.role, content });
+    const entry = { role: m.role, content };
+    if (typeof content === 'string' && content.length > 12) {
+      seen.set(key, { n: 1, base: content, entry });
+    }
+    out.unshift(entry);
   }
   while (out.length && out[0].role !== 'user') out.shift();
   return out;
