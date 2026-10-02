@@ -55,6 +55,14 @@ const TOOL_TIMEOUT_MS = {
 
 function timeoutFor(tool) {
   const t = String(tool || '');
+  /* 【唯一声明处】优先读能力注册表（工具自己声明的 timeoutMs），表里没有才回落到下面这张。
+     这样"新加一个工具"只需要在 src/registry.js 的 TOOL_DEFS 里写一行。
+     （注册表 lazily 建一次并缓存 —— withTools 会注册 40 多个定义，不必每次调用都重建。） */
+  try {
+    if (!timeoutFor._reg) timeoutFor._reg = require('./registry').withTools();
+    const d = timeoutFor._reg.get('tool', t);
+    if (d && Number.isFinite(d.timeoutMs)) return d.timeoutMs;
+  } catch {}
   if (Object.prototype.hasOwnProperty.call(TOOL_TIMEOUT_MS, t)) return TOOL_TIMEOUT_MS[t];
   return TOOL_TIMEOUT_MS.default;
 }

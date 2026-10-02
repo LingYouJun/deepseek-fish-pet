@@ -206,7 +206,9 @@ async function runFlow(deps, flow, opts) {
 /* 把执行报告压成一段给模型/用户看的话（回执别太长 —— 这也是 DSH 的 spill 思路） */
 function summarize(report) {
   const lines = report.steps.map((r) => '  ' + (r.ok ? '✅' : '❌') + ' 第' + r.i + '步 ' + r.action + (r.note ? '（' + r.note + '）' : '') + (r.ok ? '' : ' → ' + r.error));
-  let head = '流程「' + report.name + '」' + (report.ok ? '全部跑完 ✅（' + report.steps.length + ' 步）' : '❌ 卡在第 ' + report.failedAt + ' 步：' + report.error);
+  /* ⚠️ report.error 本身已经写成"卡在第 N 步：…"，所以这里**不要再加一遍前缀** ——
+     第一版直接拼，结果回执成了「卡在第 1 步：卡在第 1 步：…」（实测看到才发现）。 */
+  let head = '流程「' + report.name + '」' + (report.ok ? '全部跑完 ✅（' + report.steps.length + ' 步）' : '❌ ' + report.error);
   if (!report.ok && report.needLlm) head += '\n（这一步可以交回我兜底：我来看看现在的屏幕、想办法点中它，成功后把这一步写回流程。）';
   return head + '\n' + lines.join('\n');
 }

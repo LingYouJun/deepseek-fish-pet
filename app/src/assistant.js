@@ -43,7 +43,11 @@ const RANK = { off: 0, read: 1, normal: 2, web: 3, full: 4 };
 function allowed(tier, tool) {
   // 停手和查状态永远允许：万一权限被调低，也得能让她把游戏助手停下来
   if (tool === 'game_stop' || tool === 'game_status') return true;
-  const need = TOOL_TIER[tool];
+  /* 【唯一声明处】优先读能力注册表（src/registry.js）里"工具自己声明"的权限档；
+     表里没有的（历史遗留、或注册表还没覆盖到的）回落到老的 TOOL_TIER。
+     这样新加工具只要在 TOOL_DEFS 里写一行，权限/参数/超时三处同时生效。 */
+  const def = TOOLS.get('tool', tool);
+  const need = def ? def.tier : TOOL_TIER[tool];
   return !!need && (RANK[tier] || 0) >= RANK[need];
 }
 
@@ -272,6 +276,12 @@ const REPEAT = require('./repeat').create({
   blockAt: 8,
 });
 
+/* 【能力注册表】见 src/registry.js —— 每个工具在这一个地方声明
+   名字/权限档/是否需要参数/超时/说明；权限判定、参数检查、超时表都从它读。
+   （起因：元信息散在三张手写表里，今天加了 windows_list/template_list 却漏登记 NOARG，
+     导致它们不带参数必然报错。抄 DSH 的纪律：一个能力只声明一次。） */
+const TOOLS = require('./registry').withTools();
+
 /* 【统一超时表】见 src/timeout.js —— 一处声明、所有工具生效。 */
 const { withTimeout, timeoutFor } = require('./timeout');
 
@@ -285,7 +295,11 @@ function statOf(p) { try { return fs.statSync(String(p == null ? '' : p)); } cat
    这样"无进展检测"只需要在一个地方拦、在一个地方记账，不用去改 run 里面几十个 return。 */
 async function runInner(tool, arg) {
   arg = String(arg == null ? '' : arg).trim();
-  if (!TOOL_TIER[tool]) throw new Error('未知操作：' + tool);
+  /* 【闸门也读注册表】原来是 `if (!TOOL_TIER[tool]) throw`，只看老表 ——
+     结果我把 flow_* 注册进能力注册表、却忘了往 TOOL_TIER 里加，调用就报"未知操作"。
+     这正是"元信息散在多张表里"的典型后果（今天已经栽过两次）。
+     现在两处都认：注册表里有（TOOL_DEFS）就算已知，老表只作回落。 */
+  if (!TOOLS.get('tool', tool) && !TOOL_TIER[tool]) throw new Error('未知操作：' + tool);
 
   if (tool.startsWith('web_')) return web.run(tool, arg);
 
@@ -418,9 +432,12 @@ async function runInner(tool, arg) {
   // 这几个允许空参数（列根目录 / 停手 / 查状态 / 列窗口 / 列模板 / 列流程），其它需要参数的工具才拦。
   // ⚠️ 实测踩过：今天新加的 windows_list / template_list 忘了登记在这里，
   //    结果**不带参数调用必然抛「操作参数为空」**——她之前能用只是因为 ACTION 里带了个空格（空格是 truthy）侥幸绕过。
-  //    教训：新增"不需要参数的工具"时，必须同时登记到这里（重构时应改成每个工具自己声明 needsArg，而不是靠这张表）。
+  //    **根治办法**：改读能力注册表里"工具自己声明的 needsArg"（src/registry.js 的 TOOL_DEFS）。
+  //    下面这张 NOARG 只作回落（注册表里没有的工具才用它），不再需要手工维护。
   const NOARG = { skill_ls: 1, proj_ls: 1, game_stop: 1, game_status: 1, screen_shot: 1, web_read: 1, windows_list: 1, template_list: 1, flow_list: 1 };
-  if (!arg && !NOARG[tool]) throw new Error('操作参数为空');
+  const _tdef = TOOLS.get('tool', tool);
+  const _needsArg = _tdef ? _tdef.needsArg !== false : !NOARG[tool];
+  if (!arg && _needsArg) throw new Error('操作参数为空');
   if (tool === 'open_url') {
     if (!/^https?:\/\//i.test(arg)) throw new Error('网址需以 http(s):// 开头');
     await shell.openExternal(arg);
@@ -922,6 +939,65 @@ async function runInner(tool, arg) {
       + '，相似度 ' + r3.score.toFixed(3) + '（' + r3.ms + 'ms）。'
       + '现在可以直接 ACTION: click|' + r3.x + ',' + r3.y + '（坐标就是截图空间，和 screen_look 一致）。';
   }
+
+  /* ---------------- 确定性流程（录制回放里的"回放"那一半，见 src/flow.js / src/flows.js） ----------------
+     调研结论：对"每天做同样一套点击"这种重复任务，业界公认的最佳架构是
+     **确定性回放为主 + LLM 只做异常兜底**（Power Automate Desktop 自愈 / workflow-use / Skyvern 三家一致）。
+     流程存在 <userData>/flows/<名字>.json，你可以直接看/改/分享。
+     用法：flow_list ／ flow_save|<名字>||<JSON> ／ flow_run|<名字> ／ flow_run|<名字>|dry ／ flow_del|<名字>
+     dry = **干跑**：只解析每一步的目标、不动键鼠 —— 先确认每一步都找得到，再真的跑。 */
+  if (tool === 'flow_list' || tool === 'flow_run' || tool === 'flow_save' || tool === 'flow_del') {
+    const FL = require('./flows');
+    const baseDir = app.getPath('userData');
+    if (tool === 'flow_list') {
+      const all = FL.list(baseDir);
+      if (!all.length) {
+        return '📜 还没有任何流程。用 flow_save|<名字>||{"title":"...","steps":[...]} 存一个；'
+          + '步骤格式：{action,target:{template|text|xy},wait,assert,onFail,note}（详见 src/flow.js 顶部注释）。';
+      }
+      return '📜 已有 ' + all.length + ' 个流程：\n' + all.map((f) => '- ' + f.name + '（' + f.steps + ' 步'
+        + (f.title ? '，' + f.title : '') + '）').join('\n');
+    }
+    if (tool === 'flow_del') {
+      const okDel = FL.del(baseDir, String(arg || '').trim());
+      return okDel ? '🗑 已删除流程「' + String(arg).trim() + '」' : '⚠️ 没有这个流程';
+    }
+    if (tool === 'flow_save') {
+      const raw = String(arg || '');
+      const i = raw.indexOf('||');
+      if (i < 0) throw new Error('格式：flow_save|<名字>||{"title":"...","steps":[...]}');
+      const nm = raw.slice(0, i).trim();
+      let obj;
+      try { obj = JSON.parse(raw.slice(i + 2)); } catch (e) { throw new Error('流程 JSON 解析失败：' + e.message); }
+      const w = FL.save(baseDir, nm, obj);
+      if (!w.ok) throw new Error(w.error);
+      return '💾 已保存流程「' + nm + '」（' + w.steps + ' 步）→ ' + w.path;
+    }
+    /* flow_run|<名字>  或  flow_run|<名字>|dry */
+    const sp = String(arg || '').split('|').map((s) => s.trim());
+    const nm = sp[0] || '';
+    const dry = /^(dry|干跑|试跑)$/i.test(sp[1] || '');
+    if (!nm) throw new Error('格式：flow_run|<流程名>  或  flow_run|<名字>|dry');
+    const { nativeImage } = require('electron');
+    const deps = {
+      dry,
+      capture: () => captureScreen(false, true),
+      findTemplate: (name, dataUrl, roi) => require('./matcher').findTemplateScaled(app, nativeImage, name, dataUrl, roi),
+      /* 文字定位复用 find_text 那条路（它会自己抓一张无损 PNG 给 OCR —— 所以这里忽略传进来的帧） */
+      findText: async (text) => {
+        const capF = await captureScreenFallback();
+        const j = await ocrJson(capF.path);
+        if (!j) return { ok: false };
+        const hit = findTextInOcr(j, text);
+        return hit ? { ok: true, x: hit.x, y: hit.y } : { ok: false };
+      },
+      input: require('./input'),
+      log: (m) => { try { dbg('[flow] ' + m); } catch {} },
+    };
+    const rep = await FL.run(baseDir, nm, deps);
+    return FL.summarize(rep) + (dry ? '\n（这是**干跑**：只验证每一步能不能找到目标，没有动键鼠。确认没问题再去掉 dry 真跑。）' : '');
+  }
+
   if (tool === 'template_list' || tool === 'template_del') {
     const M2 = require('./matcher');
     if (tool === 'template_list') {
