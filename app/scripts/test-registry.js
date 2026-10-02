@@ -176,6 +176,21 @@ console.log('=== registry.js 单元测试（纯 Node）===');
   ok(badTier.length === 0, '★ §11 每个 tier 都是 RANK 认得的取值（read/normal/web/full）', badTier.join(', ') || '（全部合法）');
 }
 
+/* §13 ★★ 视觉模型给的动作白名单：裸坐标点击必须被拒（她"点自己人取消选中"的根因） */
+{
+  const ALLOWED = ['find_text', 'find_template', 'find_template_scroll', 'focus_window', 'windows_list', 'key'];
+  const BARE = ['click', 'rclick', 'dclick', 'move', 'clickz', 'rclickz', 'dclickz', 'movez', 'drag', 'scroll', 'screen_look'];
+  const r = REG.withTools();
+  /* 白名单里的必须是真工具 */
+  const badAllowed = ALLOWED.filter((t) => !r.get('tool', t));
+  ok(badAllowed.length === 0, '★ §13 白名单里的工具都真实存在', badAllowed.join(',') || '（全部存在）');
+  /* 裸坐标的必须**不在**白名单里 */
+  const leaked = BARE.filter((t) => ALLOWED.indexOf(t) >= 0);
+  ok(leaked.length === 0, '★★ §13 裸坐标类动作（click/move/clickz/drag/scroll…）**全部**不在视觉白名单里', leaked.join(',') || '（一个都没漏）');
+  /* screen_look 也不能在 —— 否则"看→又想看"的自转闸门会被绕过 */
+  ok(ALLOWED.indexOf('screen_look') < 0, '★ §13 screen_look 也不在白名单里（防自转）');
+}
+
 console.log('');
 console.log('通过 ' + pass + ' / ' + (pass + fail));
 process.exit(fail ? 1 : 0);

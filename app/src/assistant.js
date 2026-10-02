@@ -384,15 +384,17 @@ async function runInner(tool, arg) {
         ? ('\n\n【重要】这一张是**放大图**：它是屏幕区域 (' + zoomInfo.x + ',' + zoomInfo.y + ') 起 '
            + zoomInfo.w + 'x' + zoomInfo.h + ' 裁出来放大的，放大倍数约 ' + zoomInfo.scale
            + '，**这张图本身的尺寸是 ' + zoomInfo.outW + 'x' + zoomInfo.outH + '**。\n'
-           + '**请直接按这张放大图自己的像素坐标输出，并用 clickz 这个工具**：\n'
-           + '  例如"按钮在这张图里约 (900,400)"就写 **ACTION: clickz|900,400**\n'
-           + '  （clickz 表示"这是放大图里的坐标"；普通的 click 永远按整屏坐标算，两者不要混用。）\n'
-           + '  另外还有 movez / rclickz / dclickz，用法同 clickz。\n'
-           + '**不要自己换算成整屏坐标，也不要用 1920x1080 这个数字** —— 换算由程序做。')
+           + '**不要自己换算成整屏坐标，也不要用 1920x1080 这个数字** —— 换算由程序做。'
+           + '（你要点击时请用 find_text|<文字> 或 find_template|<名字> 让程序去精确定位，别直接给像素坐标。）')
         : '';
       const q = (arg || '看看屏幕') + _zoomNote + `\n\n【读坐标的方法】图上画了**刻度网格**（每格 240x135），边上黄色数字就是那条线的像素坐标（左上角写着 0,0，右下角写着 ${CAPW},${CAPH}）。请**顺着网格读出**目标在哪一格，再判断它在格内的相对位置 —— 不要凭感觉估：实测凭感觉在贴近屏幕边缘时能差 300 像素。
 
-【输出要求】先用一句中文说明你的判断；如果这一步需要操作屏幕，就在回答的最后单独输出一行：ACTION: 工具|参数（坐标基于 ${SPACE.name}，这个空间的尺寸是 ${SPACE.w}x${SPACE.h}，左上角 0,0；工具可选 click/rclick/dclick/move/drag/scroll/type/key，例如 ACTION: click|${SPACE.ex}）。如果不需要操作就不要写 ACTION 行。`;
+【输出要求】先用一句中文说明你的判断（**说清你看到了什么、那个东西叫什么名字**）。
+只有在你能**说出目标的文字名字**、并且确实需要程序去点它时，才在最后单独输出一行：
+  ACTION: find_text|<目标上的文字>     或     ACTION: find_template|<已存的模板名>
+⚠️ **绝对不要输出带像素坐标的点击**（如 click|960,540、clickz|400,200、move|x,y、drag|x,y|x,y）——
+实测这么干会点错地方（在选人面板上点屏幕正中央 = 点到某张干员卡 = 把它选上/取消），
+把已经做好的选择毁掉。说不出名字就**只描述、不要给 ACTION**，让主人/自己下一步再看一次。`;
       /* tV 必须声明在 try **外面**：catch 里也要用它算耗时，
          写在 try 内的话失败路径会 ReferenceError（实测被 §6 那条测试抓住）。 */
       let tV = tick();
@@ -403,7 +405,22 @@ async function runInner(tool, arg) {
         const m = text.match(/ACTION\s*[:：]\s*([a-z_]+)\s*\|\s*(.+)/i);
         if (m) {
           const t = m[1].trim().toLowerCase();
-          if (TOOL_TIER[t]) action = { tool: t, arg: m[2].trim() };
+          /* ★★ 只接受"有可验证目标"的动作 —— **裸坐标的点击一律拒绝** ★★
+             实测事故链（用户的判断完全正确）：
+               ① 视觉提示词以前在**教**它写 `ACTION: clickz|900,400`（见上面的改动）；
+               ② 这里 `if (TOOL_TIER[t]) action = …` **照单全收**；
+               ③ chat.js 的循环见到 r.action 就**跳过文本模型直接执行**。
+             后果：视觉模型随口给一个 `click|960,540`（屏幕正中）就被真点下去 ——
+               在干员选择面板上，屏幕正中央是**某张干员卡**，点它 = toggle，
+               于是**把刚选好的干员取消掉了**；在基建总览上点正中 = 进到某个随机房间
+               （这正是她"老落在制造站4"的原因）。她自己也报过"我瞄 1370,300 实际落在 1628,509"。
+             现在只放行这几个"名字/模板驱动、能复核"的工具；其余一律忽略并记日志。 */
+          const VISION_OK = ['find_text', 'find_template', 'find_template_scroll', 'focus_window', 'windows_list', 'key'];
+          if (VISION_OK.indexOf(t) >= 0) {
+            action = { tool: t, arg: m[2].trim() };
+          } else {
+            dbg('[look] 忽略视觉模型给的裸坐标动作：ACTION: ' + t + '|' + String(m[2]).slice(0, 40));
+          }
         }
       } catch (e) {
         /* ⚠️ 这里以前是 `text = ''`，**把视觉失败完全吞掉**：key 过期 / 余额不足 /
