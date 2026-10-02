@@ -217,7 +217,47 @@ function zoomOut(x, y) {
   catch { return [x, y]; }
 }
 
-async function run(tool, arg) {
+/* 【无进展检测】同一个工具 + 同一批参数，连续产生同样的结果 → 拦住她，逼她换办法。
+ *
+ * 为什么需要：调研参考项目 Coopanion/Cortico 时发现，它的 CUA 世界**没有任何**重复动作/
+ * 无进展检测（作者在 Minecraft 世界做了：同一轮+同一工具+读数指纹相同 → 压缩回执，
+ * 但没搬到 cua）。实测我们这边会原地打转：用户刚看到她"Let me list the windows"连说了 6 次，
+ * 而步数上限又被提高到 68 步 —— 没有这道闸门，她能把预算全烧在同一个动作上。
+ *
+ * 判定：同一个 (工具|参数) 已出现过两次、且那两次的**回执指纹相同** → 第三次拒绝执行。
+ * 为什么用"回执也相同"而不是单纯数次数：scroll / key|down 这类动作本来就该重复，
+ * 但它们**成功时画面会变**（回执不同），所以不会被误判 —— 只有"做了跟没做一样"才拦。
+ */
+const actionLog = [];
+const NO_PROGRESS_TOOLS = new Set(['list_dir', 'template_list', 'windows_list', 'screen_shot']);
+function actFingerprint(tool, arg) { return String(tool) + '|' + String(arg || '').slice(0, 80); }
+function noProgressWarning(tool, arg) {
+  const fp = actFingerprint(tool, arg);
+  const same = actionLog.filter((x) => x.fp === fp);
+  if (same.length < 2) return '';
+  const last = same[same.length - 1], prev = same[same.length - 2];
+  if (last.res && prev.res && last.res === prev.res) {
+    if (NO_PROGRESS_TOOLS.has(String(tool))) {
+      return 'ℹ️ 这个问题你已经问过了，答案没变：「' + last.res.slice(0, 120) + '」。请基于这个结果往下走。';
+    }
+    return '⚠️ **原地打转**：你已经连续三次用 `' + fp + '` 拿到同样的结果（「' + last.res.slice(0, 100) + '」）。'
+      + '再做一次不会有新结果。请**换一种完全不同的办法**：换坐标（±30~60px 的邻居）→ '
+      + '先 screen_look|<问题>||x,y,w,h 放大看清 → 裁模板 make_template 后用 find_template 精确定位 → '
+      + '退回上一层重新进 → 换个入口；或者如实上报卡在哪一步、需要主人做什么。';
+  }
+  return '';
+}
+function noteAction(tool, arg, result) {
+  const fp = actFingerprint(tool, arg);
+  /* 回执指纹：把所有数字抹掉（同一个按钮每次报的坐标会飘几十像素），只留结构 */
+  const res = String(result == null ? '' : result).replace(/\d+/g, '#').replace(/\s+/g, ' ').slice(0, 160);
+  actionLog.push({ fp, res });
+  while (actionLog.length > 40) actionLog.shift();
+}
+
+/* 真正的执行体改名为 runInner；对外仍是 run（见文件末尾的包装）——
+   这样"无进展检测"只需要在一个地方拦、在一个地方记账，不用去改 run 里面几十个 return。 */
+async function runInner(tool, arg) {
   arg = String(arg == null ? '' : arg).trim();
   if (!TOOL_TIER[tool]) throw new Error('未知操作：' + tool);
 
@@ -834,6 +874,23 @@ async function run(tool, arg) {
   }
 }
 
+/* 对外入口：先查"是不是又在原地打转"，执行完再记一笔（用于下次判重）。
+   包一层的好处：runInner 里有几十个 return，不用逐个去加记账代码。 */
+async function run(tool, arg) {
+  const t = String(tool == null ? '' : tool);
+  const warn = noProgressWarning(t, arg);
+  if (warn) return warn;
+  let out;
+  try {
+    out = await runInner(t, arg);
+  } catch (e) {
+    noteAction(t, arg, 'ERR ' + ((e && e.message) || e));
+    throw e;
+  }
+  noteAction(t, arg, out);
+  return out;
+}
+
 /* __captureForTest / __captureFallbackForTest：只给测试脚本用（抓帧链路 + 无光标选项）。
    带下划线前缀表示"不是给模型调用的工具"，不进 TOOL_TIER、不进工具清单。 */
 module.exports = {
@@ -841,5 +898,8 @@ module.exports = {
   __captureForTest: (grid, noCursor) => captureScreen(grid, noCursor),
   __captureFallbackForTest: () => captureScreenFallback(),
   __findTextInOcr: (j, needle) => findTextInOcr(j, needle),
+  __noProgressWarning: (t, a) => noProgressWarning(t, a),
+  __noteAction: (t, a, r) => noteAction(t, a, r),
+  __actionLog: () => actionLog,
   __ocrJson: (p) => ocrJson(p),
 };
