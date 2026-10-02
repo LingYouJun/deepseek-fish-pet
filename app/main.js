@@ -1518,9 +1518,19 @@ ipcMain.handle('assistant:run', async (_e, a) => {
    （另一条路是让文件方拆成小片，那边也做了 —— 两条一起用最稳。） */
       const READ_CAPS = { use_skill: 12000, skill_read: 12000, proj_read: 8000, read_file: 6000, skill_ls: 3000, proj_ls: 2000, list_dir: 3000 };
   const cap = READ_CAPS[a.tool] || ((config.load().memory || {}).toolResultChars) || 500;
-  const cut = memory.tokens.clip(text, cap);
-  memory.session.push({ role: 'user', content: `[系统] 我刚执行了操作 ${a.tool}（${a.arg}），结果如下：\n${cut}` });
-  return { ok: true, result: text, image, action, yielded: !!(yielded && yielded.length) };
+  /* 【大输出溢出到文件，而不是硬截断】抄自 DSH 的 dsh-spill-policy：
+     原来 tokens.clip 是**就地砍掉**，模型既不知道后面还有什么、也没办法去读回来。
+     现在：超过内联预算就把**完整原文**写到 userData/spill/<id>.txt，
+     回执 = 头 4000 字符 + 「[... 省略 N 字节（约 X%）。完整内容已存到：<路径> ...]」+ 尾 1000 字符。
+     于是模型永远知道"有东西被省略了、省略了多少、去哪读回来"。
+     ⚠️ 落盘失败时 spill 会**原样返回完整内容**（fail-open）—— 宁可回执长一点，绝不丢数据。 */
+  const sp = require('./src/spill').spill(text, {
+    dir: path.join(app.getPath('userData'), 'spill'),
+    id: String(a.tool) + '-' + Date.now(),
+    maxInlineBytes: Math.max(1500, cap * 3),   // 内联预算（cap 是"偏小"的旧值，这里给 3 倍余量）
+  });
+  memory.session.push({ role: 'user', content: `[系统] 我刚执行了操作 ${a.tool}（${a.arg}），结果如下：\n${sp.content}` });
+  return { ok: true, result: text, image, action, yielded: !!(yielded && yielded.length), spilled: !!sp.spilled, spillPath: sp.path || '' };
 });
 
 /* 把动作参数里的第一个 x,y 抠出来（模型空间的坐标）。 */
@@ -1715,6 +1725,8 @@ if (!gotLock) {
     setTimeout(() => {
       try { if (petWin && !petWin.isDestroyed()) { if (!petWin.isVisible()) petWin.show(); } } catch {}
       try { startPetVisibilityWatchdog(); dbg('[boot] 立绘窗可见性看门狗已启动'); } catch (e) { dbg('[boot] 看门狗启动失败 ' + e); }
+      /* 顺手清理过期的 spill（大输出溢出文件）—— 保留 7 天，免得越堆越多 */
+      try { const dl = require('./src/spill').prune(require('path').join(app.getPath('userData'), 'spill'), 7); if (dl) dbg('[boot] 清理了 ' + dl + ' 个过期 spill 文件'); } catch {}
       try { if (chatWin && !chatWin.isDestroyed() && chatWin.isMinimized()) chatWin.restore(); } catch {}
       dbg('[boot] 启动兜底：确认自己的窗口可见');
       /* 顺手把"被卡成永久置顶"的窗口放下来（第一版 focus_window 的遗留问题）。
