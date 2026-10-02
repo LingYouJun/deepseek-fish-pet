@@ -25,6 +25,7 @@ const TOOL_TIER = {
   web_open: 'web', web_click: 'web', web_type: 'web', web_read: 'web',
   screen_shot: 'full', screen_look: 'full',
   click: 'full', rclick: 'full', dclick: 'full', move: 'full', drag: 'full', scroll: 'full', type: 'full', key: 'full',
+  clickz: 'full', movez: 'full', rclickz: 'full', dclickz: 'full',
   game_start: 'full', game_stop: 'read', game_status: 'read',
 };
 const RANK = { off: 0, read: 1, normal: 2, web: 3, full: 4 };
@@ -224,9 +225,11 @@ async function run(tool, arg) {
         ? ('\n\n【重要】这一张是**放大图**：它是屏幕区域 (' + zoomInfo.x + ',' + zoomInfo.y + ') 起 '
            + zoomInfo.w + 'x' + zoomInfo.h + ' 裁出来放大的，放大倍数约 ' + zoomInfo.scale
            + '，**这张图本身的尺寸是 ' + zoomInfo.outW + 'x' + zoomInfo.outH + '**。\n'
-           + '**请只按这张放大图自己的像素坐标输出**（图的左上角就是 0,0，右下角是 '
-           + zoomInfo.outW + ',' + zoomInfo.outH + '），例如"按钮在图里约 (900,400)"就写 ACTION: click|900,400。\n'
-           + '**不要换算成整屏坐标，也不要用 1920x1080 这个数字** —— 换算由程序做。')
+           + '**请直接按这张放大图自己的像素坐标输出，并用 clickz 这个工具**：\n'
+           + '  例如"按钮在这张图里约 (900,400)"就写 **ACTION: clickz|900,400**\n'
+           + '  （clickz 表示"这是放大图里的坐标"；普通的 click 永远按整屏坐标算，两者不要混用。）\n'
+           + '  另外还有 movez / rclickz / dclickz，用法同 clickz。\n'
+           + '**不要自己换算成整屏坐标，也不要用 1920x1080 这个数字** —— 换算由程序做。')
         : '';
       const q = (arg || '看看屏幕') + _zoomNote + `\n\n【读坐标的方法】图上画了**刻度网格**（每格 240x135），边上黄色数字就是那条线的像素坐标（左上角写着 0,0，右下角写着 ${CAPW},${CAPH}）。请**顺着网格读出**目标在哪一格，再判断它在格内的相对位置 —— 不要凭感觉估：实测凭感觉在贴近屏幕边缘时能差 300 像素。
 
@@ -467,7 +470,12 @@ async function run(tool, arg) {
   };
   if (tool === 'click' || tool === 'rclick' || tool === 'dclick' || tool === 'move') {
     /* 如果她上一眼是【放大图】，她报的是放大图自己的坐标 —— 这里换算回整屏。 */
-    const [x, y] = zoomOut.apply(null, parseXY(arg));
+    /* ⚠️ click 永远是【整屏坐标】，绝不自动换算。
+       第一版这里写的是 zoomOut.apply(...) —— 只要 ZoomState 还在就一律换算，
+       而她做过一次放大之后，**后面所有整屏坐标的点击都被错误换算了一遍**：
+       她自己报过"我瞄 1370,300，实际落在 1628,509"（差 250px）。
+       也就是说之前统计的"坐标漂移 20~120px"，相当一部分是我这个隐藏状态造成的，不是模型飘。 */
+    const [x, y] = parseXY(arg);
     const label = { click: '左键点击', rclick: '右键点击', dclick: '双击', move: '移动鼠标' }[tool];
     input[tool](x, y);
     /* 【等界面反应完再返回】实测踩到的坑：她点"基建"之后**立刻** screen_look，
@@ -482,6 +490,16 @@ async function run(tool, arg) {
       return `✅ 已${label}：(${x}, ${y})（已等 ${(settle / 1000).toFixed(1)}s 让界面反应）`;
     }
     return `✅ 已${label}：(${x}, ${y})`;
+  }
+  if (tool === 'clickz' || tool === 'movez' || tool === 'rclickz' || tool === 'dclickz') {
+    if (!ZoomState) return '⚠️ 现在没有有效的放大图（上一次 screen_look 不是放大看）。请先用 screen_look|<问题>||x,y,w,h 放大看一次，或改用普通的 click（整屏坐标）。';
+    const [zx, zy] = parseXY(arg);
+    const [x, y] = [Math.round(ZoomState.x + zx / ZoomState.k), Math.round(ZoomState.y + zy / ZoomState.k)];
+    const real = tool.replace(/z$/, '');
+    input[real](x, y);
+    const settle = Number((config.load().memory || {}).actionSettleMs) || 1500;
+    await new Promise((r) => setTimeout(r, settle));
+    return '✅ 已点击（放大图坐标换算）：放大图(' + zx + ',' + zy + ') → 整屏(' + x + ',' + y + ')（已等 ' + (settle / 1000).toFixed(1) + 's）';
   }
   if (tool === 'drag') {
     /* 两种写法都收：
@@ -501,13 +519,13 @@ async function run(tool, arg) {
       }
       a = [all[0], all[1]]; b = [all[2], all[3]];
     }
-    const [x1, y1] = zoomOut.apply(null, a), [x2, y2] = zoomOut.apply(null, b);
+    const [x1, y1] = a, [x2, y2] = b;   // drag 同样是整屏坐标（不换算，理由见上面 click 那段）
     input.drag(x1, y1, x2, y2);
     return `✅ 已拖拽：(${x1},${y1}) → (${x2},${y2})`;
   }
   if (tool === 'scroll') {
     const parts = String(arg).split('|').map((s) => s.trim());
-    const [x, y] = zoomOut.apply(null, parseXY(parts[0]));
+    const [x, y] = parseXY(parts[0]);   // scroll 也是整屏坐标
     /* 支持三种写法，意思一样：
      *   scroll|x,y|down          向下滚一屏（默认 5 格 = 600）
      *   scroll|x,y|down|10       向下滚 10 格
