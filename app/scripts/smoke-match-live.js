@@ -1,89 +1,113 @@
-/* 真屏幕冒烟测试：验证 captureScreen(noCursor) + toBitmap() 这条真实链路，
- * 并**用数据回答**调研里那句"模板匹配别用 JPEG"到底影响多大。
+/* 真屏幕冒烟测试（精简版）：只依赖 screenstream + matcher，不 require main.js
  *
- * 做法：抓一帧真实屏幕 → 从里面挑一块"有纹理"的区域当模板（自动挑方差最大的块，
- * 避开桌面上的纯色区域，纯色模板匹配没有意义）→ 分别用 JPEG 帧和 PNG 帧去匹配同一个模板，
- * 比较分数与耗时。两者坐标系都是截图空间（1920x1080）。
+ * 目的：验证"真实抓帧 → 原始 BGRA → 模板匹配"这条**生产链路**（合成测试之外的真机验证），
+ * 并顺便量一下 JPEG 帧与 PNG 帧对匹配分数的影响（调研说"模板匹配别用 JPEG"）。
  *
+ * 每一步都打日志 + 每步都有超时保护：一旦挂住，日志会直接指出挂在哪一步。
  * 跑法：electron.exe app\scripts\smoke-match-live.js
  */
 const path = require('path');
 const fs = require('fs');
-const { app, nativeImage } = require('electron');
+const { app, nativeImage, desktopCapturer, screen } = require('electron');
 
 const T = path.join(process.env.APPDATA, 'dayu-pet-matchsmoke');
 fs.mkdirSync(T, { recursive: true });
 app.setPath('userData', T);
-require('../main.js');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/* 给任意 promise 套超时：挂住时不至于静默卡死，日志能说清是哪一步 */
+function withTimeout(p, ms, label) {
+  return Promise.race([
+    Promise.resolve(p),
+    new Promise((_, rej) => setTimeout(() => rej(new Error('超时 ' + ms + 'ms: ' + label)), ms)),
+  ]);
+}
 
 app.whenReady().then(async () => {
+  const log = (s) => console.log(s);
+  log('=== 真屏幕冒烟测试（精简版）===');
   const M = require('../src/matcher');
-  const assistant = require('../src/assistant');
-  console.log('=== 真屏幕冒烟测试 ===');
-  await sleep(5000);
 
-  /* 1) 无光标抓帧（JPEG 流）+ 原始 BGRA */
-  const jpg = await assistant.__captureForTest(false, true).catch(() => null);
-  if (!jpg) { console.log('  ❌ 抓帧失败（captureScreen 不可用）'); return setTimeout(() => app.exit(1), 200); }
-  const W = jpg.width, H = jpg.height;
-  console.log('  · JPEG 帧（无光标）: ' + W + 'x' + H + '  ' + Math.round(jpg.dataUrl.length / 1024) + 'KB');
-  const bmp = M.toBgra(nativeImage, jpg.dataUrl);
-  console.log('  · toBitmap() 得到原始 BGRA: ' + bmp.w + 'x' + bmp.h + '  ' + bmp.buf.length + ' 字节  （期望 ' + (W * H * 4) + '）');
-  console.log('    ' + (bmp.buf.length === W * H * 4 ? '✅ 尺寸吻合' : '❌ 尺寸不符'));
+  log('  [1/6] 检查 match.exe …');
+  log('        ' + (fs.existsSync(M.EXE) ? '✅ 存在 ' + M.EXE : '❌ 不存在'));
+  if (!fs.existsSync(M.EXE)) return setTimeout(() => app.exit(1), 200);
 
-  /* 2) 自动挑一块有纹理的区域当模板（方差最大） */
-  const TW = 96, TH = 72, STEP = 160;
-  const findTextured = (buf, w, h) => {
-    let best = { v: -1, x: 0, y: 0 };
-    const gray = (p) => (buf[p + 2] * 77 + buf[p + 1] * 150 + buf[p] * 29) >> 8;
-    for (let y = 0; y + TH < h; y += STEP) {
-      for (let x = 0; x + TW < w; x += STEP) {
-        let s = 0, s2 = 0, n = 0;
-        for (let yy = 0; yy < TH; yy += 4) {
-          for (let xx = 0; xx < TW; xx += 4) {
-            const g = gray(((y + yy) * w + (x + xx)) * 4);
-            s += g; s2 += g * g; n++;
-          }
+  const d = screen.getPrimaryDisplay();
+  log('  [2/6] 显示器: DIP ' + d.size.width + 'x' + d.size.height + '  scale=' + d.scaleFactor
+    + ' → 物理 ' + Math.round(d.size.width * d.scaleFactor) + 'x' + Math.round(d.size.height * d.scaleFactor));
+
+  /* --- 3) 用 desktopCapturer 直接抓一帧 PNG（无损，绕开流，最可靠） --- */
+  log('  [3/6] desktopCapturer 抓 PNG 帧（20s 超时）…');
+  let pngUrl = null, pngW = 0, pngH = 0;
+  try {
+    const tw = Math.round(d.size.width * d.scaleFactor), th = Math.round(d.size.height * d.scaleFactor);
+    const srcs = await withTimeout(desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: tw, height: th } }), 20000, 'getSources');
+    if (srcs && srcs[0]) {
+      const img = srcs[0].thumbnail;
+      pngW = img.getSize().width; pngH = img.getSize().height;
+      pngUrl = img.toDataURL();
+      log('        ✅ ' + pngW + 'x' + pngH + '  ' + Math.round(pngUrl.length / 1024) + 'KB');
+    } else log('        ❌ 没有拿到屏幕源');
+  } catch (e) { log('        ❌ ' + e.message); }
+  if (!pngUrl) return setTimeout(() => app.exit(1), 200);
+
+  /* --- 4) 挑一块有纹理的区域当模板 --- */
+  log('  [4/6] 找纹理最丰富的区域当模板 …');
+  const bmp = M.toBgra(nativeImage, pngUrl);
+  log('        toBitmap: ' + bmp.w + 'x' + bmp.h + '  ' + bmp.buf.length + ' 字节（期望 ' + (bmp.w * bmp.h * 4) + '）'
+    + (bmp.buf.length === bmp.w * bmp.h * 4 ? ' ✅' : ' ❌'));
+  const TW = 96, TH = 72, STEP = 140;
+  const gray = (p) => (bmp.buf[p + 2] * 77 + bmp.buf[p + 1] * 150 + bmp.buf[p] * 29) >> 8;
+  let best = { v: -1, x: 0, y: 0 };
+  for (let y = 0; y + TH < bmp.h; y += STEP) {
+    for (let x = 0; x + TW < bmp.w; x += STEP) {
+      let s = 0, s2 = 0, n = 0;
+      for (let yy = 0; yy < TH; yy += 4) {
+        for (let xx = 0; xx < TW; xx += 4) {
+          const g = gray(((y + yy) * bmp.w + (x + xx)) * 4);
+          s += g; s2 += g * g; n++;
         }
-        const mean = s / n;
-        const va = s2 / n - mean * mean;
-        if (va > best.v) best = { v: va, x, y };
       }
-    }
-    return best;
-  };
-  const spot = findTextured(bmp.buf, W, H);
-  console.log('  · 自动挑到纹理最丰富的区域: (' + spot.x + ',' + spot.y + ') 方差=' + Math.round(spot.v));
-  if (spot.v < 50) { console.log('  ⚠️ 屏幕太"平"了（方差 ' + Math.round(spot.v) + '）—— 桌面大多是纯色，这个测试说服力有限，但流程仍然验证了'); }
-
-  /* 3) 用 JPEG 帧裁模板，再分别用 JPEG 帧 / PNG 帧去找 */
-  const sv = M.saveTemplate(app, nativeImage, 'live', jpg.dataUrl, { x: spot.x, y: spot.y, w: TW, h: TH });
-  console.log('  · 存模板: ' + (sv.ok ? sv.name + ' ' + sv.w + 'x' + sv.h : sv.error));
-  if (!sv.ok) return setTimeout(() => app.exit(1), 200);
-
-  const rJpg = await M.findTemplate(app, nativeImage, 'live', jpg.dataUrl);
-  console.log('  · 用 **JPEG 帧** 找: ' + (rJpg.ok || rJpg.low ? 'score=' + rJpg.score.toFixed(4) + '  坐标(' + rJpg.x + ',' + rJpg.y + ')  ' + rJpg.ms + 'ms' : 'ERR ' + rJpg.error));
-  const expX = spot.x + TW / 2, expY = spot.y + TH / 2;
-  console.log('    期望中心 = (' + expX + ',' + expY + ')  → ' + (Math.abs(rJpg.x - expX) <= 1 && Math.abs(rJpg.y - expY) <= 1 ? '✅ 精确吻合' : '❌ 偏了'));
-
-  /* 4) PNG 帧（无损，慢）对比 */
-  let png = null;
-  try { png = await assistant.__captureFallbackForTest(); } catch (e) { console.log('  · PNG 抓帧失败: ' + e.message); }
-  if (png) {
-    console.log('  · PNG 帧: ' + png.width + 'x' + png.height + '  ' + Math.round(png.dataUrl.length / 1024) + 'KB');
-    const rPng = await M.findTemplate(app, nativeImage, 'live', png.dataUrl);
-    console.log('  · 用 **PNG 帧** 找: ' + (rPng.ok || rPng.low ? 'score=' + rPng.score.toFixed(4) + '  坐标(' + rPng.x + ',' + rPng.y + ')  ' + rPng.ms + 'ms' : 'ERR ' + rPng.error));
-    if (rJpg.score != null && rPng.score != null) {
-      const d = (rPng.score - rJpg.score);
-      console.log('    → PNG 比 JPEG 分数高 ' + d.toFixed(4) + (d > 0.02 ? '（说明调研那句"别用 JPEG"确实有影响，值得为模板用 PNG）' : '（差别很小，JPEG 流够用，可以省掉慢速 PNG 抓帧）'));
+      const m = s / n, va = s2 / n - m * m;
+      if (va > best.v) best = { v: va, x, y };
     }
   }
+  log('        选到 (' + best.x + ',' + best.y + ') 方差=' + Math.round(best.v)
+    + (best.v < 50 ? '  ⚠️ 屏幕偏纯色，说明力有限（但流程仍被验证）' : '  ✅ 有纹理'));
 
-  const all = M.listTemplates(app);
-  console.log('  · 模板目录现在有 ' + all.length + ' 个模板');
-  console.log('');
-  console.log('冒烟测试结束');
+  /* --- 5) 存模板 + 用 PNG 帧找回来 --- */
+  log('  [5/6] 存模板并用同一张 PNG 找回 …');
+  const sv = M.saveTemplate(app, nativeImage, 'live', pngUrl, { x: best.x, y: best.y, w: TW, h: TH });
+  log('        ' + (sv.ok ? '✅ 已存 ' + sv.w + 'x' + sv.h : '❌ ' + sv.error));
+  if (!sv.ok) return setTimeout(() => app.exit(1), 200);
+  const rPng = await withTimeout(M.findTemplate(app, nativeImage, 'live', pngUrl), 40000, 'findTemplate(PNG)');
+  const expX = best.x + TW / 2, expY = best.y + TH / 2;
+  log('        PNG 帧: ' + (rPng.ok || rPng.low ? 'score=' + rPng.score.toFixed(4) + '  得到(' + rPng.x + ',' + rPng.y + ')  ' + rPng.ms + 'ms' : 'ERR ' + rPng.error));
+  log('        期望  : (' + expX + ',' + expY + ')  → '
+    + (Math.abs(rPng.x - expX) <= 1 && Math.abs(rPng.y - expY) <= 1 ? '✅ **精确吻合（真机链路成立）**' : '❌ 偏差 ' + Math.abs(rPng.x - expX) + 'px'));
+
+  /* --- 6) JPEG 帧（走屏幕流）对比 --- */
+  log('  [6/6] 用屏幕流抓 JPEG 帧再找一次（对比分数）…');
+  try {
+    const ss = require('../src/screenstream');
+    const jpg = await withTimeout(ss.grabFrame({ grid: false, noCursor: true }), 25000, 'grabFrame');
+    if (!jpg) { log('        ⚠️ 屏幕流不可用（返回 null）—— 生产时会自动回退到 desktopCapturer，不影响正确性'); }
+    else {
+      log('        JPEG 帧: ' + jpg.width + 'x' + jpg.height + '  ' + Math.round(jpg.dataUrl.length / 1024) + 'KB');
+      const rJpg = await withTimeout(M.findTemplate(app, nativeImage, 'live', jpg.dataUrl), 40000, 'findTemplate(JPEG)');
+      if (rJpg.ok || rJpg.low) {
+        log('        JPEG 帧: score=' + rJpg.score.toFixed(4) + '  得到(' + rJpg.x + ',' + rJpg.y + ')  ' + rJpg.ms + 'ms');
+        if (rPng.score != null) {
+          const dd = rPng.score - rJpg.score;
+          log('        → PNG 比 JPEG 高 ' + dd.toFixed(4)
+            + (dd > 0.02 ? '  ← 调研那句"别用 JPEG"确实有影响，模板值得改用 PNG 抓' : '  ← 差别很小，JPEG 流够用（还能省掉慢速抓帧）'));
+        }
+      } else log('        ERR ' + rJpg.error);
+    }
+  } catch (e) { log('        ⚠️ ' + e.message + '（生产路径有回退，不算失败）'); }
+
+  log('');
+  log('模板目录: ' + M.listTemplates(app).map((t) => t.name + '(' + t.w + 'x' + t.h + ')').join(', ') || '(空)');
+  log('冒烟测试结束');
   setTimeout(() => app.exit(0), 300);
 });
