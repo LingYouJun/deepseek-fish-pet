@@ -16,9 +16,10 @@ const personatags = require('./personatags');
 // 每个工具所需的最低权限档
 const TOOL_TIER = {
   list_dir: 'read', read_file: 'read', use_skill: 'read', skill_ls: 'read', skill_read: 'read',
-  write_file: 'full',
-  run_file: 'full',
-  focus_window: 'full',   // 把任意窗口抬到最前（她需要它来摆脱'被别的窗口盖住'）     // 跑任意绝对路径的脚本（和 type/key/screen 同级，只在 full 档可用）   // 写任意绝对路径 —— 和 type/key/screen 同级，只在 full 档可用
+  write_file: 'full',    // 写任意绝对路径
+  run_file: 'full',      // 跑任意绝对路径的脚本
+  focus_window: 'full',  // 把窗口抬到最前（被别的窗口挡住时用）
+  windows_list: 'full',  // 列出可见窗口（标题+位置尺寸，已换算成截图空间）
   proj_ls: 'read', proj_read: 'read', tag_list: 'read',
   open_path: 'normal', open_url: 'normal', skill_write: 'normal', skill_rm: 'normal', proj_rm: 'normal', proj_open: 'normal', proj_run: 'normal', proj_write: 'normal',
   tag_set: 'normal', tag_rm: 'normal',
@@ -564,12 +565,57 @@ async function run(tool, arg) {
     if (r.startsWith('NOTFOUND')) return '🪟 没找到标题含「' + arg + '」的窗口。当前可见窗口：\n' + r.slice(8);
     return '🪟 ' + r;
   }
+  if (tool === 'windows_list') {
+    /* 列出可见窗口（标题+位置尺寸，**换算成截图空间的像素**）。
+       抄自参考项目 Coopanion 的 cua_windows：给模型一条"结构化通道"，
+       这样"哪个窗口在哪、该切哪个"就不必靠模型猜坐标。
+       ⚠️ 坐标换算：跑 PowerShell 的子进程不是 DPI-aware，Windows 给它的是虚拟化坐标
+       （物理 ÷ scaleFactor），而截图空间是物理像素 —— 所以用"截图宽 ÷ DIP 宽"这个比值乘回去。
+       本机实测 1920/1536 = 1.25；不乘的话她会按偏小 25% 的坐标去点。 */
+    const rows = await require('./focuswin').listWindows();
+    if (!rows.length) return '🪟 没读到任何可见窗口（可能被权限挡了）。';
+    let capK = 1;
+    try {
+      const { screen } = require('electron');
+      const d = screen.getPrimaryDisplay();
+      const s = require('./input').space();
+      if (d && d.size && d.size.width) capK = s.w / d.size.width;
+    } catch {}
+    const lines = rows.slice(0, 30).map((r) => '- 「' + r.title + '」 左上('
+      + Math.round(r.x * capK) + ',' + Math.round(r.y * capK) + ') 大小 '
+      + Math.round(r.w * capK) + 'x' + Math.round(r.h * capK));
+    return '🪟 当前可见窗口（坐标已换算成截图空间，可以直接用来 click/focus_window）：\n' + lines.join('\n');
+  }
   if (tool === 'type') {
-    input.type(arg);
+    /* 【分段可中断输入】抄自参考项目 Coopanion（packages/cortico-world-cua/src/engine-child.ts:113-126）：
+       长文本按 16 字符一段发，**每段之间再查一次主人是否在用键鼠**，他一动就停手，
+       并**如实回报实际打出了几个字符**（它的 cua_type 回执就写"只输入了 x/y 个字符：
+       用户开始操作，停了下来"）。原来是一次性把整段发进 Input.exe —— 主人中途接手时
+       她的输入会继续灌进去，把人正在打的字搅乱。 */
+    const text = String(arg);
+    const CHUNK = 16;
+    let done = 0;
+    try {
+      const ui = require('./userinput');
+      for (let i = 0; i < text.length; i += CHUNK) {
+        if (done > 0 && ui.isUserActive()) break;      // 主人开始操作 → 立刻停手
+        const part = text.slice(i, i + CHUNK);
+        input.type(part);
+        done += part.length;
+        if (i + CHUNK < text.length) await new Promise((r) => setTimeout(r, 60));
+      }
+    } catch (e) {
+      if (!done) { input.type(text); done = text.length; }
+    }
     /* 同上：输入会改变界面，等它反应完再让她看屏幕 */
     const settle = Number((config.load().memory || {}).actionSettleMs) || 1500;
     await new Promise((r) => setTimeout(r, settle));
-    return `✅ 已输入文字：${arg.slice(0, 50)}（已等 ${(settle / 1000).toFixed(1)}s）`;
+    if (done < text.length) {
+      return `⚠️ 只输入了 ${done}/${text.length} 个字符：**主人开始操作了，我停下来了**。`
+        + `已经打进去的是：「${text.slice(0, done)}」；还没打的是：「${text.slice(done, done + 30)}${text.length - done > 30 ? '…' : ''}」。`
+        + `主人松手后可以让我接着输入剩下的部分。`;
+    }
+    return `✅ 已输入文字：${text.slice(0, 50)}（已等 ${(settle / 1000).toFixed(1)}s）`;
   }
   if (tool === 'key') {
     input.key(arg);

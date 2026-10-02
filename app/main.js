@@ -131,7 +131,7 @@ function buildSystemPrompt(cfg) {
   } catch {}
   let actionSec = '';
   if (tier !== 'off') {
-    let tools = '- open_url|https://...  (open a web page in the user\'s browser)\n- open_path|C:\\...  (open a file or app)\n- list_dir|C:\\...  (list a folder)\n- run_file|C:\\full\\path\\script.py  (run a script/file at an ABSOLUTE path; use it when the user names a file outside your project sandbox)\n- write_file|C:\\full\\path\\name.txt||<content>  (write a file to an ABSOLUTE path; use this — not proj_write — when the user names a folder outside your project sandbox. Multi-line content is fine: just keep writing on the following lines, the ACTION parser preserves them)\n- read_file|C:\\...  (read a text file)\n- focus_window|<title substring>  (bring that window to the front; use it whenever what you need to look at is hidden behind other windows)\n- use_skill|<skill id>  (load a skill\'s full instructions before doing the task)\n- tag_list  (看到你的人格词汇表：tier1 核心人格决定你的立绘)\n- tag_set|{"id":"yandere","label":"病娇","tier":1,"moodDir":1,"words":["病娇","偏执"]}  (补/改人格词条；tier1=核心人格)\n- tag_rm|<id>\n';
+    let tools = '- open_url|https://...  (open a web page in the user\'s browser)\n- open_path|C:\\...  (open a file or app)\n- list_dir|C:\\...  (list a folder)\n- run_file|C:\\full\\path\\script.py  (run a script/file at an ABSOLUTE path; use it when the user names a file outside your project sandbox)\n- write_file|C:\\full\\path\\name.txt||<content>  (write a file to an ABSOLUTE path; use this — not proj_write — when the user names a folder outside your project sandbox. Multi-line content is fine: just keep writing on the following lines, the ACTION parser preserves them)\n- read_file|C:\\...  (read a text file)\n- focus_window|<title substring>  (bring that window to the front)   - windows_list  (list visible windows with their position/size in SCREENSHOT pixels - use it to know what is on screen instead of guessing)\n- use_skill|<skill id>  (load a skill\'s full instructions before doing the task)\n- tag_list  (看到你的人格词汇表：tier1 核心人格决定你的立绘)\n- tag_set|{"id":"yandere","label":"病娇","tier":1,"moodDir":1,"words":["病娇","偏执"]}  (补/改人格词条；tier1=核心人格)\n- tag_rm|<id>\n';
     if (tier === 'web' || tier === 'full') {
       tools += '- web_open|<url>  (open a page in a controlled browser and read its content)\n- web_click|<CSS selector>  (click an element on the current page)\n- web_type|<selector>||<text>  (type text into an input)\n- web_read  (read the current page content again)\n';
     }
@@ -191,6 +191,22 @@ function buildSystemPrompt(cfg) {
       + 'proj_open opens a file with the default app — for .html that is the browser, which is how you "run" a web app.\n'
       + 'Whenever you build an interface, follow your 「界面风格」 skill. Keep apps self-contained: one HTML file when possible, no CDN, no external images.\n';
   }
+  /* 【提示词可覆盖】抄自参考项目 Coopanion 的做法（ref/Cortico/src/core/prefix.ts:26-59）：
+     它的系统提示词是"模块 → 代码包 → 部署"三层可覆盖的模板文件，运维/用户能在部署目录里
+     改提示词而不动代码、不发版。我们这里做一个最小版本：如果
+     %APPDATA%/dayu-pet/prompts/override.md 存在，就把它的内容**追加在系统提示词最后** ——
+     放在最后是因为"越靠后的指令越有分量"，这样用户写的规则能压过内置的。
+     好处：我和用户都能调她的行为（工具用法、说话方式、任务纪律）而不用改代码。
+     ⚠️ 只在文件存在时读，读不到就当没有，绝不让它影响正常流程。 */
+  let overrideSec = '';
+  try {
+    const fs = require('fs');
+    const p2 = require('path').join(app.getPath('userData'), 'prompts', 'override.md');
+    if (fs.existsSync(p2)) {
+      const t = String(fs.readFileSync(p2, 'utf8') || '').trim();
+      if (t) { overrideSec = '\n\n# 主人手写的补充规则（优先级高于上面的所有内容）\n' + t + '\n'; dbg('[prompt] 已追加 override.md（' + t.length + ' 字符）'); }
+    }
+  } catch {}
   return `You are "${p.name || '大肥鱼'}", a desktop pet.
 
 # World setting
@@ -239,7 +255,7 @@ Rules:
   ① 到底哪一步没做成（比如"读文件"、"运行脚本"）；
   ② **真实原因**，照实说（找不到文件 / 路径不存在 / 没权限 / 缺某个程序没装 / 参数写错了…），不要含糊成"出了点小问题"；
   ③ 需要主人做什么（装个东西？给个正确路径？还是要你自己换个做法重试）。
-  这种回复不受"1-3 句"限制，讲清楚优先。`;
+  这种回复不受"1-3 句"限制，讲清楚优先。` + overrideSec;
 }
 
 async function genReply(cfg, messages, onPartial) {
@@ -1505,7 +1521,7 @@ function restoreOwnWindows(list) {
 function buildContinuePrompt(cfg) {
   const p = loadPersona();
   const tier = cfg.assistant || 'off';
-  let tools = '- open_url|https://...   - open_path|C:\\...   - list_dir|C:\\...   - read_file|C:\\...   - focus_window|<标题片段>（把那个窗口抬到最前，被挡住时用）   - run_file|C:\\abs\\path（跑绝对路径的脚本）   - write_file|C:\\abs\\path||<content>（绝对路径写入；主人指定目录时用它，别用 proj_write）   - use_skill|<skill id>\n';
+  let tools = '- open_url|https://...   - open_path|C:\\...   - list_dir|C:\\...   - read_file|C:\\...   - focus_window|<标题片段>（把窗口抬到最前）   - windows_list（列出可见窗口的标题+位置尺寸，坐标已换算成截图空间）   - run_file|C:\\abs\\path（跑绝对路径的脚本）   - write_file|C:\\abs\\path||<content>（绝对路径写入；主人指定目录时用它，别用 proj_write）   - use_skill|<skill id>\n';
   tools += '- skill_ls|<path>   - skill_read|<path>   - skill_write|<path>||<text>   - skill_rm|<path>\n';
   tools += '- proj_ls|<path>   - proj_read|<path>   - proj_rm|<path>   - proj_open|<path>   - proj_run|<path>   - proj_write|<path>||<content>\n';
     tools += 'DRIFT in the continue prompt: dense UIs give slightly different coords for the same button each look. If a click changes nothing, do NOT repeat the same coordinate - try ~30-60px around it, or zoom in with screen_look|<question>||x,y,w,h first. **Do not give up early** (the user asked for this): keep trying DIFFERENT approaches up to 4-5 times (shifted coords, zoomed look, go back a level and re-enter, another entry point). Only after several different approaches failed, report honestly what you tried.\n';

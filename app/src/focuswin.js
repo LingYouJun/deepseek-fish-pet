@@ -108,4 +108,29 @@ function clearAllTop() {
   });
 }
 
-module.exports = { focusWindow, clearAllTop };
+/* 列出当前可见窗口（标题 + 位置尺寸）。
+ * 抄自参考项目 Coopanion 的 cua_windows（packages/cortico-world-cua/src/world.ts:316-340）：
+ * 它给模型提供一条**廉价的结构化通道** —— 窗口标题 + 矩形（已换算成截图像素），
+ * 这样"切窗口/知道某个窗口在哪"就不用靠模型瞎猜坐标。
+ *
+ * ⚠️ 坐标系：这个 PowerShell 子进程**不是 DPI-aware** 的，Windows 会给它**虚拟化**过的坐标
+ *    （物理像素 ÷ scaleFactor）。而我们的截图空间是**物理像素**（1920x1080）。
+ *    所以返回前必须乘回 scaleFactor，否则她会按虚拟坐标去点，全部偏 25%（实测本机 1.25）。
+ */
+function listWindows() {
+  return new Promise((resolve) => {
+    const script = PS.replace('__WANT__', '');
+    execFile('powershell.exe', ['-NoProfile', '-Command', script], { timeout: 25000, windowsHide: true }, (e, so) => {
+      const out = String(so || '');
+      const rows = [];
+      const re = /visible:\s*(.+?)\s*\[(-?\d+),(-?\d+)\s+(\d+)x(\d+)\]/g;
+      let m;
+      while ((m = re.exec(out))) {
+        rows.push({ title: m[1].trim(), x: Number(m[2]), y: Number(m[3]), w: Number(m[4]), h: Number(m[5]) });
+      }
+      resolve(rows);
+    });
+  });
+}
+
+module.exports = { focusWindow, clearAllTop, listWindows };
