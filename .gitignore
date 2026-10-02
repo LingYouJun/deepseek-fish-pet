@@ -24,6 +24,7 @@ debug.log
 # ---- 本地快照、备份、素材包（体积大 / 与源码无关，不进仓库）----
 snapshots/
 app-modified-backup/
+.worktrees/
 *.zip
 ref/*.mp4
 ref/_extracted/
