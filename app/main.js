@@ -1436,8 +1436,26 @@ ipcMain.handle('chat:continue', async (e, _payload) => {
   logTurn('', reply);   // 中间/最终回复也要进聊天记录，否则重开窗口看不到任务结果
   // 注意：续跑几乎都是从对话窗发起的，对话窗自己会渲染 —— 再 relayToChat 就会画两遍
   if (!isFromChat(e)) relayToChat({ who: 'pet', en: reply.en, zh: reply.zh, words: reply.words, choices: reply.choices });
+  /* 但对话窗**最小化/隐藏**时，用户屏幕上什么都看不到（只能听到声音）。
+     这时把同一条回复用气泡推到立绘上 —— 这就是"做任务时立绘也要弹气泡"。 */
+  bubbleOnPetIfChatHidden(reply);
   return reply;
 });
+
+/* 对话窗最小化/隐藏 → 把回复用气泡推到立绘上。
+ * 为什么需要：多步任务的中间步骤只在对话窗里渲染（见上面 chat:continue 的注释），
+ * 用户一旦把对话窗最小化，整段任务过程在屏幕上就是**不可见**的。
+ * silent: true —— 朗读由对话窗那边负责，这里只要气泡，否则会读两遍。 */
+function bubbleOnPetIfChatHidden(reply) {
+  try {
+    if (!petWin || petWin.isDestroyed() || !reply || !reply.en) return false;
+    if (!chatWin || chatWin.isDestroyed()) return false;            // 没开对话窗：别的路径会管
+    if (chatWin.isVisible() && !chatWin.isMinimized()) return false; // 对话窗看得见 → 不重复
+    petWin.webContents.send('pet:say', Object.assign({}, reply, { silent: true }));
+    dbg('[pet] 对话窗不可见 → 立绘弹气泡：' + String(reply.en).slice(0, 40));
+    return true;
+  } catch { return false; }
+}
 
 /* ---------------- 游戏助手（持续盯屏 + 决策 + 操作） ----------------
    平时完全关闭；用户对她说"打游戏"→ 她按 play-game 技能调 game_start 才会跑。 */
@@ -1581,7 +1599,7 @@ if (!gotLock) {
  * 然后直接调这些函数驱动对话 —— 比走 IPC 少一层，也拿得到内部状态。
  * 正常运行时这些导出没有任何副作用。 */
 module.exports = {
-  buildSystemPrompt, buildContinuePrompt, genReply, logTurn, createChat, createPet,
+  buildSystemPrompt, buildContinuePrompt, genReply, logTurn, createChat, createPet, bubbleOnPetIfChatHidden,
   config, llm, memory, mood, stats, persona, personatags, petactions, speak,
   assistant, skills, projects, tts, asr, testlog, clock, userinput,
   win: () => ({ petWin, chatWin }),
