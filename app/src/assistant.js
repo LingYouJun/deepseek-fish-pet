@@ -20,6 +20,9 @@ const TOOL_TIER = {
   run_file: 'full',      // 跑任意绝对路径的脚本
   focus_window: 'full',  // 把窗口抬到最前（被别的窗口挡住时用）
   windows_list: 'full',  // 列出可见窗口（标题+位置尺寸，已换算成截图空间）
+  make_template: 'full', // 从当前画面裁一块存成模板
+  find_template: 'full', // 用模板匹配精确定位（替代让模型估坐标）
+  template_list: 'read', template_del: 'normal',
   proj_ls: 'read', proj_read: 'read', tag_list: 'read',
   open_path: 'normal', open_url: 'normal', skill_write: 'normal', skill_rm: 'normal', proj_rm: 'normal', proj_open: 'normal', proj_run: 'normal', proj_write: 'normal',
   tag_set: 'normal', tag_rm: 'normal',
@@ -46,8 +49,8 @@ function shotsDir() {
   return d;
 }
 
-async function captureScreen(withGrid) {
-  const frame = await screenstream.grabFrame({ grid: !!withGrid });
+async function captureScreen(withGrid, noCursor) {
+  const frame = await screenstream.grabFrame({ grid: !!withGrid, noCursor: !!noCursor });
   if (frame && frame.dataUrl) {
     const p = path.join(shotsDir(), 'screen-' + Date.now() + '.jpg');
     fs.writeFileSync(p, Buffer.from(frame.dataUrl.split(',')[1], 'base64'));
@@ -565,6 +568,57 @@ async function run(tool, arg) {
     if (r.startsWith('NOTFOUND')) return '🪟 没找到标题含「' + arg + '」的窗口。当前可见窗口：\n' + r.slice(8);
     return '🪟 ' + r;
   }
+  if (tool === 'make_template') {
+    /* 从**当前画面**裁一块存成模板（存 PNG 给人看 + 原始 BGRA 给 match.exe 用）。
+       用法：make_template|按钮名| x,y,w,h
+       为什么要这个工具：模板匹配的前提是"有模板"。与其由我在开发期预先截一堆游戏按钮，
+       不如让她在**真正看到那个按钮的那一刻**自己裁下来 —— 下次再遇到同一个按钮就能精确定位。
+       抓帧用 noCursor（不画准星）：光标压在按钮上会污染模板。 */
+    const mm = String(arg || '').match(/^\s*([^|]+?)\s*\|\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*$/);
+    if (!mm) return '⚠️ 用法：make_template|模板名| x,y,w,h（x,y,w,h 是屏幕上那块区域的坐标，用 screen_look 看准了再裁）';
+    const { nativeImage } = require('electron');
+    const cap2 = await captureScreen(false, true);
+    const got = require('./matcher').saveTemplate(app, nativeImage, mm[1],
+      cap2.dataUrl, { x: Number(mm[2]), y: Number(mm[3]), w: Number(mm[4]), h: Number(mm[5]) });
+    if (!got.ok) return '⚠️ 存模板失败：' + got.error;
+    const all = require('./matcher').listTemplates(app);
+    return '✅ 已存模板「' + got.name + '」（' + got.w + 'x' + got.h + '），现在一共 ' + all.length + ' 个模板。'
+      + '以后用 find_template|' + got.name + ' 就能在当前画面里精确定位它（返回坐标可直接 click）。';
+  }
+  if (tool === 'find_template') {
+    /* 在**当前画面**里精确找模板，返回匹配框中心（截图空间坐标，可直接给 click）。
+       这是这套改造的核心：把"她估计坐标"换成"确定性找图"。
+       用法：find_template|模板名        或   find_template|模板名| x,y,w,h（限定搜索区域，快很多） */
+    const sp = String(arg || '').split('|').map((s) => s.trim());
+    const nm = sp[0] || '';
+    let roi = null;
+    if (sp[1]) {
+      const n = sp[1].split(/[,，]/).map((v) => Number(v.trim()));
+      if (n.length === 4 && n.every((v) => Number.isFinite(v))) roi = n;
+    }
+    const { nativeImage } = require('electron');
+    const cap3 = await captureScreen(false, true);
+    const r3 = await require('./matcher').findTemplate(app, nativeImage, nm, cap3.dataUrl, roi);
+    if (!r3.ok && !r3.low) return '⚠️ ' + (r3.error || '匹配失败，原因未知');
+    if (r3.low) {
+      return '⚠️ 没找到「' + nm + '」（最佳分数只有 ' + r3.score.toFixed(2) + '，低于阈值 0.70）。'
+        + '可能这一屏根本没这个按钮，或者你的模板是别的分辨率/皮肤下截的。'
+        + '建议先用 screen_look 看一眼当前在哪一屏，确认那个按钮在不在。';
+    }
+    return '🎯 找到「' + nm + '」：中心 (' + r3.x + ',' + r3.y + ')，匹配框 ' + r3.w + 'x' + r3.h
+      + '，相似度 ' + r3.score.toFixed(3) + '（' + r3.ms + 'ms）。'
+      + '现在可以直接 ACTION: click|' + r3.x + ',' + r3.y + '（坐标就是截图空间，和 screen_look 一致）。';
+  }
+  if (tool === 'template_list' || tool === 'template_del') {
+    const M2 = require('./matcher');
+    if (tool === 'template_list') {
+      const all = M2.listTemplates(app);
+      if (!all.length) return '📦 还没有任何模板。用 make_template|名字| x,y,w,h 从当前画面裁一个。';
+      return '📦 已有 ' + all.length + ' 个模板：\n' + all.map((t) => '- ' + t.name + '（' + t.w + 'x' + t.h + '）').join('\n');
+    }
+    const n2 = M2.delTemplate(app, String(arg || '').trim());
+    return n2 ? '🗑 已删除模板「' + String(arg).trim() + '」' : '⚠️ 没有这个模板';
+  }
   if (tool === 'windows_list') {
     /* 列出可见窗口（标题+位置尺寸，**换算成截图空间的像素**）。
        抄自参考项目 Coopanion 的 cua_windows：给模型一条"结构化通道"，
@@ -626,4 +680,10 @@ async function run(tool, arg) {
   }
 }
 
-module.exports = { run, allowed, TOOL_TIER, RANK };
+/* __captureForTest / __captureFallbackForTest：只给测试脚本用（抓帧链路 + 无光标选项）。
+   带下划线前缀表示"不是给模型调用的工具"，不进 TOOL_TIER、不进工具清单。 */
+module.exports = {
+  run, allowed, TOOL_TIER, RANK,
+  __captureForTest: (grid, noCursor) => captureScreen(grid, noCursor),
+  __captureFallbackForTest: () => captureScreenFallback(),
+};

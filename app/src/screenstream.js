@@ -115,7 +115,12 @@ async function grabFrame(opts) {
       cy = Math.round(p.y / d.size.height * cap.h);
     } catch {}
     const grid = !(opts && opts.grid === false);
-    return await w.webContents.executeJavaScript(`window.__grabFrame(${Number.isFinite(cx) ? cx : 'undefined'}, ${Number.isFinite(cy) ? cy : 'undefined'}, ${grid})`);
+    /* 【不画光标】opts.noCursor：给模板匹配用的帧**必须没有我们画的那个准星**。
+       参考项目 MaaAssistantArknights 在识别前会主动把鼠标移开，就是为了避免光标压住目标；
+       我们不动用户的光标（更安全），而是抓帧时干脆不把光标画进去 —— capture.js 里
+       "传进来才画"，所以这里传 undefined 即可。 */
+    const noCur = !!(opts && opts.noCursor);
+    return await w.webContents.executeJavaScript(`window.__grabFrame(${(!noCur && Number.isFinite(cx)) ? cx : 'undefined'}, ${(!noCur && Number.isFinite(cy)) ? cy : 'undefined'}, ${grid})`);
   } catch { return null; }
 }
 
