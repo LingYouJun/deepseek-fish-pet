@@ -1382,7 +1382,19 @@ ipcMain.handle('art:reset', () => {
 ipcMain.handle('assistant:run', async (_e, a) => {
   const tier = config.load().assistant || 'off';
   if (!assistant.allowed(tier, a && a.tool)) throw new Error('当前 AI 助手权限不允许该操作');
-  const r = await assistant.run(a.tool, a.arg);
+  /* 点/拖/滚之前：如果目标点正被**我们自己的窗口**盖着，先把它让开一会儿。
+     为什么必需 —— 用户报"她点不了开始游戏的按钮"：桌宠窗是 alwaysOnTop，
+     而 mouse_event 的点击只会落到**最上面那个窗口**，于是她怎么点都点在桌宠窗上。
+     日志实证：她自己在任务里也发现过（"my own chat window is covering part of
+     the table"），然后手动把窗口拖走了 —— 不该让她干这种活。
+     只在该点确实被覆盖时才动，动作结束立刻放回来。 */
+  const yielded = yieldOwnWindowsAt(a && a.tool, a && a.arg);
+  let r;
+  try {
+    r = await assistant.run(a.tool, a.arg);
+  } finally {
+    if (yielded && yielded.length) setTimeout(() => restoreOwnWindows(yielded), 350);
+  }
   const text = (r && typeof r === 'object') ? String(r.text || '') : String(r || '');
   const image = (r && typeof r === 'object') ? r.image : null;
   const action = (r && typeof r === 'object') ? r.action : null;
@@ -1393,8 +1405,42 @@ ipcMain.handle('assistant:run', async (_e, a) => {
   const cap = READ_CAPS[a.tool] || ((config.load().memory || {}).toolResultChars) || 500;
   const cut = memory.tokens.clip(text, cap);
   memory.session.push({ role: 'user', content: `[系统] 我刚执行了操作 ${a.tool}（${a.arg}），结果如下：\n${cut}` });
-  return { ok: true, result: text, image, action };
+  return { ok: true, result: text, image, action, yielded: !!(yielded && yielded.length) };
 });
+
+/* 把动作参数里的第一个 x,y 抠出来（模型空间的坐标）。 */
+function actionPointOf(arg) {
+  try {
+    const m = String(arg || '').match(/(\d+)\s*[,，]\s*(\d+)/);
+    return m ? { x: Number(m[1]), y: Number(m[2]) } : null;
+  } catch { return null; }
+}
+/* 目标点被自己的窗口盖住就临时藏起来，返回被藏起来的窗口数组（没藏返回 null）。 */
+function yieldOwnWindowsAt(tool, arg) {
+  try {
+    if (!['click', 'rclick', 'dclick', 'drag', 'scroll'].includes(String(tool))) return null;
+    const p = actionPointOf(arg);
+    if (!p) return null;
+    const d = screen.getPrimaryDisplay();
+    const cap = input.space();
+    const dipX = p.x / cap.w * d.size.width, dipY = p.y / cap.h * d.size.height;
+    const hidden = [];
+    /* 只藏桌宠窗：对话窗是她在里面汇报进度的地方，藏掉用户会以为卡住了。
+       （对话窗挡住目标的场景，交给提示词里那句"先点空白处/挪开窗口"去处理。） */
+    const w = petWin;
+    if (w && !w.isDestroyed() && w.isVisible()) {
+      const b = w.getBounds();
+      if (dipX >= b.x && dipX <= b.x + b.width && dipY >= b.y && dipY <= b.y + b.height) {
+        w.hide(); hidden.push(w);
+        dbg('[pet] 目标点(' + Math.round(dipX) + ',' + Math.round(dipY) + ')被桌宠窗遮挡 → 临时让开');
+      }
+    }
+    return hidden.length ? hidden : null;
+  } catch { return null; }
+}
+function restoreOwnWindows(list) {
+  try { for (const w of (list || [])) if (w && !w.isDestroyed() && !w.isVisible()) w.show(); } catch {}
+}
 
 /* 多步任务的"续跑"专用精简提示词：
    续跑时不需要人设全文/记忆/技能目录/项目说明 —— 那些首轮已经给过了，
@@ -1599,7 +1645,7 @@ if (!gotLock) {
  * 然后直接调这些函数驱动对话 —— 比走 IPC 少一层，也拿得到内部状态。
  * 正常运行时这些导出没有任何副作用。 */
 module.exports = {
-  buildSystemPrompt, buildContinuePrompt, genReply, logTurn, createChat, createPet, bubbleOnPetIfChatHidden,
+  buildSystemPrompt, buildContinuePrompt, genReply, logTurn, createChat, createPet, bubbleOnPetIfChatHidden, yieldOwnWindowsAt, restoreOwnWindows,
   config, llm, memory, mood, stats, persona, personatags, petactions, speak,
   assistant, skills, projects, tts, asr, testlog, clock, userinput,
   win: () => ({ petWin, chatWin }),

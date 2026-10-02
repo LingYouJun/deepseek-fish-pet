@@ -36,6 +36,50 @@ class Program
     static void Move(double x, double y) { mouse_event(MOVE | ABS, Norm(x), Norm(y), 0, 0); }
     static void Sleep(int ms) { System.Threading.Thread.Sleep(ms); }
 
+    /* ---------- 点之前先激活光标下的窗口 ----------
+     * 为什么必需：Windows 对**非活动窗口**的第一次点击只用它来激活窗口，
+     * **不会把点击传给控件** —— 用户感受就是"点了没反应，得再点一次"。
+     * 桌宠窗是 alwaysOnTop，它一盖到目标上，目标窗口就失活了；等她让开后再点，
+     * 那一次点击又只用来激活，于是"她点不了开始游戏的按钮"（实测复现过）。
+     * 这里先自己把光标下的顶层窗口激活，真正的点击就不会被吞掉。
+     *
+     * 坐标怎么拿：先把光标移到目标点，再 GetCursorPos 读回**系统真实像素坐标**，
+     * 这样完全绕开 DPI 缩放换算（本进程不是 DPI-aware，自己换算容易差一截）。 */
+    [DllImport("user32.dll")] static extern bool GetCursorPos(out POINT p);
+    [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(POINT p);
+    [DllImport("user32.dll")] static extern IntPtr GetAncestor(IntPtr hWnd, uint gaFlags);
+    [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+    [StructLayout(LayoutKind.Sequential)] struct POINT { public int x; public int y; }
+
+    static void ActivateUnderCursor()
+    {
+        try
+        {
+            POINT p;
+            if (!GetCursorPos(out p)) return;
+            IntPtr h = WindowFromPoint(p);
+            if (h == IntPtr.Zero) return;
+            IntPtr root = GetAncestor(h, 2 /* GA_ROOT */);
+            if (root == IntPtr.Zero) root = h;
+            if (root == GetForegroundWindow()) return;      // 已经是前台，别多此一举
+            SetForegroundWindow(root);
+            Sleep(120);                                     // 给窗口一点时间真正拿到前台
+        }
+        catch { }
+    }
+
+    /* 移动 + 激活 + 点击，合成一个动作（click/rclick/dclick/drag 都用它） */
+    static void ClickAt(double x, double y, uint down, uint up, int gapMs)
+    {
+        Move(x, y);
+        Sleep(60);
+        ActivateUnderCursor();
+        mouse_event(down, 0, 0, 0, 0);
+        Sleep(gapMs);
+        mouse_event(up, 0, 0, 0, 0);
+    }
+
     static void Keybd(ushort vk, uint flags)
     {
         var i = new INPUT[1]; i[0].type = 1; i[0].u.ki.wVk = vk; i[0].u.ki.dwFlags = flags;
@@ -132,20 +176,25 @@ class Program
                 case "move":
                     Move(double.Parse(args[1]), double.Parse(args[2])); break;
                 case "click":
-                    Move(double.Parse(args[1]), double.Parse(args[2]));
-                    mouse_event(LEFTDOWN, 0, 0, 0, 0); Sleep(45); mouse_event(LEFTUP, 0, 0, 0, 0); break;
+                    /* 走 ClickAt：移动 → **先激活光标下的窗口** → 再点。
+                       不先激活的话，点在失活窗口上的第一次会被系统吞掉
+                       （只用来激活窗口），用户就会觉得"点了没反应" ——
+                       这正是"她点不了开始游戏的按钮"的第二个原因。 */
+                    ClickAt(double.Parse(args[1]), double.Parse(args[2]), LEFTDOWN, LEFTUP, 45); break;
                 case "rclick":
-                    Move(double.Parse(args[1]), double.Parse(args[2]));
-                    mouse_event(RIGHTDOWN, 0, 0, 0, 0); Sleep(45); mouse_event(RIGHTUP, 0, 0, 0, 0); break;
+                    ClickAt(double.Parse(args[1]), double.Parse(args[2]), RIGHTDOWN, RIGHTUP, 45); break;
                 case "dclick":
                     x = double.Parse(args[1]); y = double.Parse(args[2]);
-                    Move(x, y); mouse_event(LEFTDOWN, 0, 0, 0, 0); mouse_event(LEFTUP, 0, 0, 0, 0);
+                    Move(x, y); Sleep(60); ActivateUnderCursor();
+                    mouse_event(LEFTDOWN, 0, 0, 0, 0); mouse_event(LEFTUP, 0, 0, 0, 0);
                     Sleep(60);
                     mouse_event(LEFTDOWN, 0, 0, 0, 0); mouse_event(LEFTUP, 0, 0, 0, 0); break;
                 case "drag":
                     x = double.Parse(args[1]); y = double.Parse(args[2]);
                     x2 = double.Parse(args[3]); y2 = double.Parse(args[4]);
-                    Move(x, y); Sleep(50); mouse_event(LEFTDOWN, 0, 0, 0, 0); Sleep(50);
+                    /* 拖拽起点也要先激活：从失活窗口上起拖同样会被吞掉（拖不动窗口/元素）。 */
+                    Move(x, y); Sleep(50); ActivateUnderCursor();
+                    mouse_event(LEFTDOWN, 0, 0, 0, 0); Sleep(50);
                     for (int i = 1; i <= 24; i++) { Move(x + (x2 - x) * i / 24, y + (y2 - y) * i / 24); Sleep(10); }
                     mouse_event(LEFTUP, 0, 0, 0, 0); break;
                 case "press":

@@ -65,8 +65,38 @@ function frameSig() {
   return out;
 }
 
-window.__grabFrame = () => {
+/* 抓帧。cursor 是主进程读到的光标位置（已经是这个抓帧空间的坐标），传进来就画在图上。
+ *
+ * ⚠️ 为什么要自己画光标：Electron 的桌面捕获（getUserMedia chromeMediaSource=desktop）
+ * **不会把鼠标指针画进画面** —— 主进程日志里那条
+ *   mouse_cursor_monitor_win.cc: Unable to get cursor info. Error = 5
+ * 就是 Chromium 在尝试合成指针并被系统拒绝（Access Denied）。
+ * 于是模型看到的截图里**没有光标**，它没法判断"鼠标现在在哪"，用户就报了
+ * "她识别光标总是有问题"。而 screen.getCursorScreenPoint() 是读得到的 ——
+ * 也就是说我们知道它在哪，只是没画出来。这里补上。
+ *
+ * 画法用"白底 + 黑边 + 十字"：任何背景色上都看得清，且不遮挡周围内容太多。 */
+window.__grabFrame = (cursorX, cursorY) => {
   if (!ctx || !video) return null;
   ctx.drawImage(video, 0, 0, CAP_W, CAP_H);
-  return { dataUrl: canvas.toDataURL('image/jpeg', JPEG_Q), width: CAP_W, height: CAP_H, sig: frameSig() };
+  if (Number.isFinite(cursorX) && Number.isFinite(cursorY)) {
+    const x = Math.max(0, Math.min(CAP_W - 1, cursorX));
+    const y = Math.max(0, Math.min(CAP_H - 1, cursorY));
+    ctx.save();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+    ctx.beginPath(); ctx.arc(x, y, 14, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x - 22, y); ctx.lineTo(x - 6, y); ctx.moveTo(x + 6, y); ctx.lineTo(x + 22, y);
+    ctx.moveTo(x, y - 22); ctx.lineTo(x, y - 6); ctx.moveTo(x, y + 6); ctx.lineTo(x, y + 22); ctx.stroke();
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+    ctx.beginPath(); ctx.arc(x, y, 14, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x - 22, y); ctx.lineTo(x - 6, y); ctx.moveTo(x + 6, y); ctx.lineTo(x + 22, y);
+    ctx.moveTo(x, y - 22); ctx.lineTo(x, y - 6); ctx.moveTo(x, y + 6); ctx.lineTo(x, y + 22); ctx.stroke();
+    /* 中心一个小实心点，标出精确落点 */
+    ctx.fillStyle = 'rgba(255,60,60,0.95)';
+    ctx.beginPath(); ctx.arc(x, y, 2.5, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+  return { dataUrl: canvas.toDataURL('image/jpeg', JPEG_Q), width: CAP_W, height: CAP_H, sig: frameSig(), cursor: { x: cursorX, y: cursorY } };
 };

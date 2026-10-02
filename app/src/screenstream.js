@@ -95,13 +95,26 @@ async function init() {
   return starting;
 }
 
-/* 抓当前帧。返回 { dataUrl(jpeg), width, height }；流不可用返回 null */
+/* 抓当前帧。返回 { dataUrl(jpeg), width, height, cursor }；流不可用返回 null。
+ *
+ * 会把**光标位置一起画进画面**（见 capture.js 里 __grabFrame 的注释）：
+ * 桌面捕获本身不含鼠标指针，不画的话模型根本不知道鼠标在哪 ——
+ * 用户就报了"她识别光标总是有问题"。
+ * 坐标系换算：screen.getCursorScreenPoint() 给的是 DIP，抓帧空间是 CAP_W×CAP_H。 */
 async function grabFrame() {
   await init();
   if (!ready) return null;
   try {
     const w = ensureWindow();
-    return await w.webContents.executeJavaScript('window.__grabFrame()');
+    let cx = NaN, cy = NaN;
+    try {
+      const p = screen.getCursorScreenPoint();
+      const d = screen.getPrimaryDisplay();
+      const cap = require('./input').space();
+      cx = Math.round(p.x / d.size.width * cap.w);
+      cy = Math.round(p.y / d.size.height * cap.h);
+    } catch {}
+    return await w.webContents.executeJavaScript(`window.__grabFrame(${Number.isFinite(cx) ? cx : 'undefined'}, ${Number.isFinite(cy) ? cy : 'undefined'})`);
   } catch { return null; }
 }
 
