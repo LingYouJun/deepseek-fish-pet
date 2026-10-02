@@ -8,6 +8,12 @@ const { app } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const bus = require('./bus');
+const fmt = require('./storefmt');
+
+/* 文件比程序新的命名空间（拒绝加载）→ 一律不许写，免得把用户的新数据覆盖成旧格式。
+   pendingWrite：读过时发生了迁移 → 标记一下（下次写盘自然落新格式，不必专门改写一次）。 */
+const readOnly = new Set();
+const pendingWrite = new Set();
 
 const dir = () => path.join(app.getPath('userData'), 'memory');
 const fileOf = (name) => path.join(dir(), String(name).replace(/[^\w.-]/g, '_') + '.json');
@@ -34,8 +40,24 @@ function read(name, fallback) {
   }
   try {
     const v = JSON.parse(raw);
-    if (v === null || v === undefined) return clone(fallback);
-    return v;
+    /* ⚠️ 这里原来写的是 `if (v === null || v === undefined) return clone(fallback);` —— 把 null 当成"没有数据"。
+       实测发现是错的：`ending` 这个命名空间**故意存字面量 null**（memory/index.js 的 END_NS，
+       表示"本轮已收尾、没有挂起的事"），session 收尾时也会写 null。
+       只有 undefined 才该走 fallback；null 是**真实数据**，必须原样返回。
+       （probe-storefmt 的 §D 就是抓这个的：期望读回 null，实际拿到了 fallback。） */
+    if (v === undefined) return clone(fallback);
+    /* 【格式版本与迁移】见 src/storefmt.js —— C8 当初只给 session 加了版本，
+       这里把机制下沉到**所有命名空间**：对象包 version（并按链迁移），
+       数组（long/medium/statslog）与标量（ending 的 null）原样通过。 */
+    const m = fmt.migrate(String(name), v);
+    if (!m.ok) {
+      /* 文件比程序还新 → 拒绝加载，并把这个命名空间标成**只读**（绝不写回覆盖）。 */
+      readOnly.add(String(name));
+      warn('拒绝加载 ' + name + '.json：' + m.error);
+      return clone(fallback);
+    }
+    if (m.migrated) pendingWrite.add(String(name));   // 迁过就标记，下次写盘自动落新格式
+    return m.data;
   } catch (e) {
     /* 解析失败 = 文件真的坏了。**先另存一份再降级**：
        调用方随后保存时写的是全新文件，原数据仍留在 .corrupt-* 里可以人工抢救。 */
@@ -46,11 +68,19 @@ function read(name, fallback) {
 }
 
 function write(name, data) {
+  /* 兜底：undefined 绝不能写下去（JSON.stringify(undefined) 返回 undefined，
+     writeFileSync 会抛类型错误 —— 实测 skillmem.save() 少传一个参数就踩到了）。
+     宁可报错拒写，也不要把一份好好的记忆写成坏文件。 */
+  if (data === undefined) { warn('拒绝写入 ' + name + '.json：data 是 undefined（调用方少传了参数？）'); return false; }
+  /* 该命名空间的文件是"更新版本"写的 → 拒绝写入，绝不覆盖（照 DSH session-format:134 的语义） */
+  if (readOnly.has(String(name))) { warn('拒绝写入 ' + name + '.json：该文件版本比本程序新，已标为只读'); return false; }
   const target = fileOf(name);
   const tmp = target + '.tmp';
   try {
     fs.mkdirSync(dir(), { recursive: true });
-    fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
+    /* 写盘统一包上格式版本（对象加 version；数组/标量原样）—— 迁移的另一半 */
+    fs.writeFileSync(tmp, JSON.stringify(fmt.wrap(String(name), data), null, 2));
+    if (pendingWrite.has(String(name))) pendingWrite.delete(String(name));
     try {
       fs.renameSync(tmp, target);
     } catch (e) {
@@ -80,4 +110,6 @@ function write(name, data) {
 
 function exists(name) { try { return fs.existsSync(fileOf(name)); } catch { return false; } }
 
-module.exports = { read, write, exists, fileOf, dir };
+function status() { return { readOnly: Array.from(readOnly), pendingWrite: Array.from(pendingWrite), version: fmt.CURRENT }; }
+
+module.exports = { read, write, exists, fileOf, dir, status };

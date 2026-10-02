@@ -104,7 +104,11 @@ function memoryFacts(id) {
   try {
     const p = path.join(userDir(), id, 'memory.json');
     const v = JSON.parse(fs.readFileSync(p, 'utf8'));
-    return Array.isArray(v && v.facts) ? v.facts : [];
+    /* 这个文件不在 store.js 管的记忆命名空间里（它是技能文件夹里的散文件），没有版本机制兜底，
+       所以干脆**两种形状都认**：{ facts: [...] }（现在的约定）和裸数组 [...]（一开始可能是这么写的）。 */
+    if (Array.isArray(v)) return v;
+    if (v && Array.isArray(v.facts)) return v.facts;
+    return [];
   } catch { return []; }
 }
 

@@ -73,6 +73,12 @@ app.whenReady().then(async () => {
     }
   } catch { console.log('       （还没有 memory 目录）'); }
   /* 技能自己的记忆文件有没有版本 */
+  /* 再验一次：裸数组形状也要认（把 memory.json 换成裸数组，重读一遍） */
+  try {
+    fs.writeFileSync(path.join(dir, 'memory.json'), JSON.stringify([{ text: '裸数组形状的经验', weight: 5 }]), 'utf8');
+    const s2 = require('../src/skills').read('demo-skill');
+    console.log('  §F 裸数组也要认: ' + ((s2.memory || []).some((x) => x.text === '裸数组形状的经验') ? '✅' : '❌'));
+  } catch (e) { console.log('  §F 出错: ' + e.message); }
   const mdemo = path.join(dir, 'memory.json');
   try {
     const j = JSON.parse(fs.readFileSync(mdemo, 'utf8'));
