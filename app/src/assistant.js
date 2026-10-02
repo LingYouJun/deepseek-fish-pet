@@ -741,10 +741,13 @@ async function runInner(tool, arg) {
     if (dup) compact[compact.length - 1] += '（之后 ' + dup + ' 帧画面基本没变）';
     let body = compact.join('\n');
     if (body.length > 3000) body = body.slice(0, 3000) + '\n…（完整时间线见文件，内容太长这里截断了）';
-    return '👀 连续看了 ' + frames.length + ' 帧（约 ' + secs + ' 秒，间隔 ' + ivMs + 'ms）。'
-      + '以下是**画面真正发生变化**的那些帧（连续没变的已合并）：\n' + body
-      + '\n\n完整时间线：' + tpath + '（需要逐帧细看可以用 read_file 读它）'
-      + '\n帧图：shots/watch-' + stamp + '-NN.jpg';
+    /* ⚠️ 文件路径必须放在**最前面**：上次实测回执太长、被上层截到 1000 字左右，
+       结果连"完整时间线在哪个文件"这行都丢了，她只看到前 3 帧、以为录制失败了。
+       把路径、帧数、文件位置全放开头，截断也截不到关键信息。 */
+    return '👀 连续看了 ' + frames.length + ' 帧（约 ' + secs + ' 秒，间隔 ' + ivMs + 'ms）。\n'
+      + '【完整时间线（每帧都有）】' + tpath + '  ← 想知道完整过程就用 read_file 读这个文件\n'
+      + '【帧图】shots/watch-' + stamp + '-NN.jpg（共 ' + frames.length + ' 张）\n'
+      + '下面是**画面真正发生变化**的那些帧（连续没变的已合并）：\n' + body;
   }
   if (tool === 'find_template_scroll') {
     /* 【滚动列表里找模板】模板匹配的三个天生短板之一：目标在列表里、当前屏看不到。
