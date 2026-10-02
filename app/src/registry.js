@@ -185,24 +185,38 @@ function create() {
 
 /* ---------------- 桌宠的工具元信息（**唯一声明处**） ---------------- */
 /* 每个工具在这里声明一次：权限档 / 是否需要参数 / 超时 / 给模型看的一句话。
- * 三处读它：assistant 的权限判定、参数检查、timeout.js 的超时表。 */
+ * 三处读它：assistant 的权限判定、参数检查、timeout.js 的超时表。
+ *
+ * ⚠️⚠️ tier 必须与老的 TOOL_TIER **逐字一致** —— 第一版我凭印象写了几个，结果：
+ *   · screen_look / screen_shot / watch_screen 我写成 `look`，而 `look` 不在 RANK 里
+ *     （RANK = off/read/normal/web/full），于是 RANK['look'] 是 undefined →
+ *     `allowed()` 算出来永远是 false → **看屏幕在任何权限档都被拒绝**；
+ *   · find_template / find_text / find_template_scroll / make_template / windows_list
+ *     我写成 `read`，而老表是 `full` → **read 档就能调用，权限被放宽**。
+ *   两处都是"重构时凭印象重写常量"的典型事故。现在 test-registry.js 里有一张
+ *   **冻结的期望表**（照老表抄的），逐条断言，不允许再漂移。
+ * tier 取值只有：read / normal / web / full（外加 off = 全禁）。 */
 const TOOL_DEFS = [
-  /* 看屏幕 */
-  { name: 'screen_look', tier: 'look', needsArg: true, timeoutMs: 30000, desc: '看屏幕并回答问题' },
-  { name: 'screen_shot', tier: 'look', needsArg: false, timeoutMs: 30000, desc: '截一张全屏图' },
-  { name: 'watch_screen', tier: 'look', needsArg: true, timeoutMs: 180000, desc: '连续看屏幕并给逐帧时间线' },
-  /* 定位 */
-  { name: 'find_template', tier: 'read', needsArg: true, timeoutMs: 40000, desc: '按模板图精确定位' },
-  { name: 'find_template_scroll', tier: 'read', needsArg: true, timeoutMs: 150000, desc: '在滚动列表里找模板' },
-  { name: 'find_text', tier: 'read', needsArg: true, timeoutMs: 60000, desc: '按文字定位（OCR）' },
-  { name: 'make_template', tier: 'read', needsArg: true, timeoutMs: 30000, desc: '从当前画面裁一个模板' },
+  /* 看屏幕（老表都是 full） */
+  { name: 'screen_look', tier: 'full', needsArg: true, timeoutMs: 30000, desc: '看屏幕并回答问题' },
+  { name: 'screen_shot', tier: 'full', needsArg: false, timeoutMs: 30000, desc: '截一张全屏图' },
+  { name: 'watch_screen', tier: 'full', needsArg: true, timeoutMs: 180000, desc: '连续看屏幕并给逐帧时间线' },
+  /* 定位（老表都是 full） */
+  { name: 'find_template', tier: 'full', needsArg: true, timeoutMs: 40000, desc: '按模板图精确定位' },
+  { name: 'find_template_scroll', tier: 'full', needsArg: true, timeoutMs: 150000, desc: '在滚动列表里找模板' },
+  { name: 'find_text', tier: 'full', needsArg: true, timeoutMs: 60000, desc: '按文字定位（OCR）' },
+  { name: 'make_template', tier: 'full', needsArg: true, timeoutMs: 30000, desc: '从当前画面裁一个模板' },
   { name: 'template_list', tier: 'read', needsArg: false, timeoutMs: 10000, desc: '列出已有模板' },
+  { name: 'template_del', tier: 'normal', needsArg: true, timeoutMs: 10000, desc: '删掉一个模板' },
   /* 键鼠 */
   { name: 'click', tier: 'full', needsArg: true, timeoutMs: 15000 },
   { name: 'rclick', tier: 'full', needsArg: true, timeoutMs: 15000 },
   { name: 'dclick', tier: 'full', needsArg: true, timeoutMs: 15000 },
   { name: 'clickz', tier: 'full', needsArg: true, timeoutMs: 30000, desc: '放大后精确点击' },
+  { name: 'rclickz', tier: 'full', needsArg: true, timeoutMs: 30000, desc: '放大后精确右键' },
+  { name: 'dclickz', tier: 'full', needsArg: true, timeoutMs: 30000, desc: '放大后精确双击' },
   { name: 'move', tier: 'full', needsArg: true, timeoutMs: 15000 },
+  { name: 'movez', tier: 'full', needsArg: true, timeoutMs: 30000, desc: '放大后精确移动' },
   { name: 'drag', tier: 'full', needsArg: true, timeoutMs: 25000 },
   { name: 'scroll', tier: 'full', needsArg: true, timeoutMs: 15000 },
   { name: 'key', tier: 'full', needsArg: true, timeoutMs: 15000 },
@@ -212,33 +226,40 @@ const TOOL_DEFS = [
   { name: 'flow_save', tier: 'full', needsArg: true, timeoutMs: 10000 },
   { name: 'flow_list', tier: 'read', needsArg: false, timeoutMs: 10000 },
   { name: 'flow_del', tier: 'full', needsArg: true, timeoutMs: 10000 },
-  /* 文件 */
+  /* 文件（tier 照老表） */
   { name: 'read_file', tier: 'read', needsArg: true, timeoutMs: 30000 },
   { name: 'write_file', tier: 'full', needsArg: true, timeoutMs: 30000 },
   { name: 'list_dir', tier: 'read', needsArg: true, timeoutMs: 20000 },
   { name: 'run_file', tier: 'full', needsArg: true, timeoutMs: 120000 },
+  { name: 'open_path', tier: 'normal', needsArg: true, timeoutMs: 20000, desc: '用默认程序打开一个路径' },
+  { name: 'open_url', tier: 'normal', needsArg: true, timeoutMs: 20000, desc: '用浏览器打开一个网址' },
   { name: 'proj_read', tier: 'read', needsArg: true, timeoutMs: 20000 },
-  { name: 'proj_write', tier: 'full', needsArg: true, timeoutMs: 20000 },
+  { name: 'proj_write', tier: 'normal', needsArg: true, timeoutMs: 20000 },
   { name: 'proj_ls', tier: 'read', needsArg: false, timeoutMs: 10000 },
-  { name: 'proj_run', tier: 'full', needsArg: true, timeoutMs: 120000 },
-  { name: 'proj_rm', tier: 'full', needsArg: true, timeoutMs: 10000 },
-  { name: 'proj_open', tier: 'full', needsArg: true, timeoutMs: 20000 },
+  { name: 'proj_run', tier: 'normal', needsArg: true, timeoutMs: 120000 },
+  { name: 'proj_rm', tier: 'normal', needsArg: true, timeoutMs: 10000 },
+  { name: 'proj_open', tier: 'normal', needsArg: true, timeoutMs: 20000 },
   /* 技能 */
   { name: 'use_skill', tier: 'read', needsArg: true, timeoutMs: 20000 },
   { name: 'skill_read', tier: 'read', needsArg: true, timeoutMs: 20000 },
   { name: 'skill_ls', tier: 'read', needsArg: false, timeoutMs: 10000 },
-  { name: 'skill_write', tier: 'full', needsArg: true, timeoutMs: 30000 },
-  /* 网页 */
-  { name: 'web_open', tier: 'full', needsArg: true, timeoutMs: 60000 },
-  { name: 'web_read', tier: 'read', needsArg: false, timeoutMs: 60000 },
-  { name: 'web_click', tier: 'full', needsArg: true, timeoutMs: 30000 },
-  { name: 'web_type', tier: 'full', needsArg: true, timeoutMs: 30000 },
-  /* 窗口 */
+  { name: 'skill_write', tier: 'normal', needsArg: true, timeoutMs: 30000 },
+  { name: 'skill_rm', tier: 'normal', needsArg: true, timeoutMs: 10000 },
+  /* 人格词条 */
+  { name: 'tag_list', tier: 'read', needsArg: false, timeoutMs: 10000 },
+  { name: 'tag_set', tier: 'normal', needsArg: true, timeoutMs: 10000 },
+  { name: 'tag_rm', tier: 'normal', needsArg: true, timeoutMs: 10000 },
+  /* 网页（老表是 web） */
+  { name: 'web_open', tier: 'web', needsArg: true, timeoutMs: 60000 },
+  { name: 'web_read', tier: 'web', needsArg: false, timeoutMs: 60000 },
+  { name: 'web_click', tier: 'web', needsArg: true, timeoutMs: 30000 },
+  { name: 'web_type', tier: 'web', needsArg: true, timeoutMs: 30000 },
+  /* 窗口（老表 full） */
   { name: 'focus_window', tier: 'full', needsArg: true, timeoutMs: 25000 },
-  { name: 'windows_list', tier: 'read', needsArg: false, timeoutMs: 25000 },
-  /* 游戏托管 */
+  { name: 'windows_list', tier: 'full', needsArg: false, timeoutMs: 25000 },
+  /* 游戏托管（老表 game_stop/game_status 是 read） */
   { name: 'game_start', tier: 'full', needsArg: true, timeoutMs: 300000 },
-  { name: 'game_stop', tier: 'full', needsArg: false, timeoutMs: 30000 },
+  { name: 'game_stop', tier: 'read', needsArg: false, timeoutMs: 30000 },
   { name: 'game_status', tier: 'read', needsArg: false, timeoutMs: 15000 },
 ];
 

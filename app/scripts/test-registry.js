@@ -135,6 +135,47 @@ console.log('=== registry.js 单元测试（纯 Node）===');
   ok(st.kinds.indexOf('tool') >= 0 && st.byKind.tool === REG.TOOL_DEFS.length, '§9 stats 报出种类与数量', JSON.stringify(st.byKind));
 }
 
+/* §10 ★★ 冻结的期望表：照**重构前的老 TOOL_TIER** 逐条抄下来。
+   为什么需要它：重构时我"凭印象"给几个工具写了权限档，结果
+     · screen_look / screen_shot / watch_screen 写成 `look`（`look` 根本不在 RANK 里）
+       → allowed() 永远是 false → **看屏幕在任何权限档都被拒绝**；
+     · find_template / find_text / find_template_scroll / make_template / windows_list 写成 `read`（老表是 full）
+       → **read 档就能调用，权限被放宽**。
+   两处都是"重写常量时不小心改了语义"。这张表把老语义**冻住**，以后改一处就会红。 */
+{
+  const FROZEN_TIERS = {
+    list_dir: 'read', read_file: 'read', use_skill: 'read', skill_ls: 'read', skill_read: 'read',
+    write_file: 'full', run_file: 'full', focus_window: 'full', windows_list: 'full',
+    make_template: 'full', find_template: 'full', template_list: 'read', template_del: 'normal',
+    find_text: 'full', find_template_scroll: 'full', watch_screen: 'full',
+    proj_ls: 'read', proj_read: 'read', tag_list: 'read',
+    open_path: 'normal', open_url: 'normal', skill_write: 'normal', skill_rm: 'normal',
+    proj_rm: 'normal', proj_open: 'normal', proj_run: 'normal', proj_write: 'normal',
+    tag_set: 'normal', tag_rm: 'normal',
+    web_open: 'web', web_click: 'web', web_type: 'web', web_read: 'web',
+    screen_shot: 'full', screen_look: 'full',
+    click: 'full', rclick: 'full', dclick: 'full', move: 'full', drag: 'full', scroll: 'full', type: 'full', key: 'full',
+    clickz: 'full', movez: 'full', rclickz: 'full', dclickz: 'full',
+    game_start: 'full', game_stop: 'read', game_status: 'read',
+  };
+  const r = REG.withTools();
+  const wrong = [];
+  for (const [name, tier] of Object.entries(FROZEN_TIERS)) {
+    const d = r.get('tool', name);
+    if (!d) wrong.push(name + '(注册表里没有)');
+    else if (d.tier !== tier) wrong.push(name + ':' + d.tier + '≠' + tier);
+  }
+  ok(wrong.length === 0, '★ §10 注册表权限档与冻结的老语义**逐条一致**', wrong.length ? wrong.join(', ') : '共核对 ' + Object.keys(FROZEN_TIERS).length + ' 个');
+  /* 反向：注册表里不该有冻结表之外、又不在新工具白名单里的（防止乱加） */
+  const NEW_OK = ['flow_run', 'flow_save', 'flow_list', 'flow_del'];
+  const extra = r.list('tool').map((t) => t.name).filter((n) => !FROZEN_TIERS[n] && NEW_OK.indexOf(n) < 0);
+  ok(extra.length === 0, '★ §10 注册表里没有"来历不明"的工具', extra.join(', ') || '（干净）');
+  /* §11 ★ tier 必须是 RANK 认得的取值（`look` 这种拼错会让 allowed() 永远 false） */
+  const VALID = ['read', 'normal', 'web', 'full'];
+  const badTier = r.list('tool').filter((t) => VALID.indexOf(t.tier) < 0).map((t) => t.name + ':' + t.tier);
+  ok(badTier.length === 0, '★ §11 每个 tier 都是 RANK 认得的取值（read/normal/web/full）', badTier.join(', ') || '（全部合法）');
+}
+
 console.log('');
 console.log('通过 ' + pass + ' / ' + (pass + fail));
 process.exit(fail ? 1 : 0);
