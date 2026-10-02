@@ -56,6 +56,7 @@ function computeCovered(target, allWindows, extraRects) {
   if (!target) return out;
   for (const w of (allWindows || [])) {
     if (!w || w.hwnd === target.hwnd) continue;
+    if (w.visible === false) continue;                        // ★ 隐藏的窗口不是遮挡者（实测误报过 100% 遮盖）★
     if (w.w < 24 || w.h < 24) continue;                       // 忽略托盘/指示器之类的小窗口
     if (!intersects({ x: w.x, y: w.y, w: w.w, h: w.h }, target, -2)) continue;
     const aboveByZ = (w.z != null && target.z != null) ? (w.z < target.z) : false;

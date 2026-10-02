@@ -65,6 +65,10 @@ console.log('=== occlusion.js 单元测试（纯逻辑）===');
   ok(cov.length === 2, '§4 只算"z 更小 或 置顶"且相交的窗口', '得到 ' + cov.length + ' 个: ' + titles.join(' / '));
   ok(titles.indexOf('压在上面的普通窗') >= 0 && titles.indexOf('置顶窗') >= 0, '§4 上面那两个被算进来');
   ok(titles.indexOf('压在下面的窗') < 0, '§4 ★压在目标下面的窗口【不算】遮挡者（这条我第一版错过）★');
+  /* ★ 这条是实测补的：任务切换/Codex 这类 visible=false 的隐藏帮手窗口
+     曾被误判成"遮盖 100%"，害我拒绝了一个其实完全可见的计算器。 */
+  const hidden = OC.computeCovered(target, [{ hwnd: 700, x: 0, y: 0, w: 1000, h: 800, z: 1, topmost: true, visible: false, title: '隐藏的置顶窗' }], []);
+  ok(hidden.length === 0, '§4 ★visible=false 的窗口不算遮挡者（实测误报过 100% 遮盖）★', JSON.stringify(hidden.map((h) => h.title)));
   ok(titles.indexOf('目标自己') < 0 && titles.indexOf('不相交') < 0 && titles.indexOf('太小的托盘窗') < 0, '§4 自己/不相交/微小窗口都不算');
 }
 
