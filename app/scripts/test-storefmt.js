@@ -99,6 +99,21 @@ console.log('=== storefmt.js 单元测试（纯 Node）===');
   ok(S.migrate('permanent', { a: 1 }).ok === true, '§9 还原后恢复正常');
 }
 
+/* §12 ★★ 自带版本体系的命名空间（session v2）绝不能被本模块覆盖 —— 这是实测数据事故的根因 */
+{
+  const sess = { version: 2, id: 'x', events: [{ role: 'user', content: 'hi' }] };
+  const w = S.wrap('session', sess);
+  ok(w.version === 2, '★★ §12 wrap 不会把 session 的 v2 覆盖成本模块的版本', 'version=' + w.version);
+  ok(w.events && w.events.length === 1, '★★ §12 events 原样保留（这正是被清掉过的东西）');
+  ok(w === sess, '§12 直接返回原对象（连拷贝都不做）');
+  const m = S.migrate('session', sess);
+  ok(m.ok && m.migrated === false && m.data.version === 2, '★★ §12 migrate 也不介入（不迁移、不判"太高"）', m.note);
+  ok(S.migrate('session', sess).data.events.length === 1, '★★ §12 迁移后 events 仍在');
+  /* 对比：普通命名空间仍然正常加版本 */
+  const perm = S.wrap('permanent', { facts: [] });
+  ok(perm.version === S.CURRENT, '§12 普通命名空间照样被包上版本');
+}
+
 console.log('');
 console.log('通过 ' + pass + ' / ' + (pass + fail));
 process.exit(fail ? 1 : 0);

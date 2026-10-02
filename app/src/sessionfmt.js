@@ -47,6 +47,12 @@ const MIGRATIONS = [
        为什么换：v1 是就地保存的，一旦截断/改写就再也查不回原文；v2 只追加，投影可重算、可回放。
        （见 C5 的说明：把真相和投影分开。） */
     up(d) {
+      /* ★ 防御：如果这个文件里**已经有 events**（说明它其实是 v2 的形状，只是版本号被写坏了 ——
+         实测发生过：store 层多包了一层，把 session 的 version:2 覆盖成 1，于是这里按 v1 的约定
+         去找 messages、找不到，**把 213 条 events 清成了空**）。有 events 就直接保留，绝不清空。 */
+      if (Array.isArray(d.events) && !Array.isArray(d.messages)) {
+        return { version: 2, id: d.id, startedAt: d.startedAt, savedAt: d.savedAt, events: d.events };
+      }
       const events = (Array.isArray(d.messages) ? d.messages : []).map((m) => {
         const e = { kind: 'msg', role: (m && m.role) || 'user' };
         if (m && m.compact != null) e.compact = m.compact;

@@ -107,6 +107,17 @@ console.log('=== sessionfmt.js 单元测试（纯 Node）===');
   ok(r.ok === true, '§8 恢复后正常路径仍然可用（§7 的破坏已还原）');
 }
 
+/* §9 ★★ 畸形文件的防御：有 events 但没有 messages（版本号被写坏过）时，绝不清空 */
+{
+  const malformed = { version: 1, id: 'm', events: [{ kind: 'msg', role: 'user', content: '不能丢' }] };
+  const r = S.migrate(malformed);
+  ok(r.ok && r.data.version === 2, '§9 畸形文件被迁到 v2');
+  ok(r.data.events && r.data.events.length === 1 && r.data.events[0].content === '不能丢', '★★ §9 events 被保留（这正是 213 条丢失的场景）');
+  const normal = { version: 1, id: 'n', messages: [{ role: 'user', content: '正常的' }] };
+  const r2 = S.migrate(normal);
+  ok(r2.data.events.length === 1 && r2.data.events[0].content === '正常的', '§9 正常的 v1（messages）照旧转换');
+}
+
 console.log('');
 console.log('通过 ' + pass + ' / ' + (pass + fail));
 process.exit(fail ? 1 : 0);

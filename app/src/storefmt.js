@@ -23,6 +23,9 @@ const CURRENT = 1;
 
 /* 故意是数组的命名空间（登记在案，不包装） */
 const ARRAY_NS = ['long', 'medium', 'statslog'];
+/* 自带版本体系的命名空间：由各自的模块管（session 归 sessionfmt，链在它那边）——
+   本模块**不介入**，既不包 version 也不迁移，更不按本模块的 CURRENT 判高低。 */
+const SELF_VERSIONED_NS = ['session'];
 /* 可能是标量的命名空间（null 是合法状态） */
 const SCALAR_NS = ['ending'];
 
@@ -63,6 +66,13 @@ function migrate(ns, raw) {
   if (shape === 'array') return { ok: true, data: raw, from: 0, migrated: false, shape, note: '未登记的数组，原样通过' };
 
   const from = detectVersion(raw);
+  /* ★ 登记为"自带版本体系"的命名空间（session，由 sessionfmt 管到 v2）：本模块**完全不介入** ——
+     不迁移，也不按本模块的 CURRENT 判"太高"。
+     （第一版没这条：session 的 v2 被判成"更高版本"→ 整个命名空间被锁成只读；
+       第二版又写成"任何带 version 的对象都放行"→ 连高版本保护也废掉了。收窄成白名单才对。） */
+  if (SELF_VERSIONED_NS.indexOf(ns) >= 0) {
+    return { ok: true, data: raw, from, migrated: false, shape, note: '自带版本体系（' + from + '），交给它自己的模块处理' };
+  }
   if (from > CURRENT) {
     return { ok: false, from, shape, error: '这个文件是**更新版本**的桌宠写的（文件版本 ' + from + '，本程序只到 ' + CURRENT + '）——'
       + '为避免读坏，已拒绝加载该命名空间（' + ns + '），并把它标为只读，绝不覆盖。请升级桌宠。' };
@@ -79,12 +89,27 @@ function migrate(ns, raw) {
   return { ok: true, data: cur, from, migrated: from !== CURRENT, shape };
 }
 
-/* 写盘前包一层：对象加 version；数组/标量原样返回。 */
+/* 写盘前包一层：对象加 version；数组/标量原样返回。
+ *
+ * ⚠️⚠️ 这里有个**必须守住的边界**（实测造成过一次数据事故）：
+ *   有些命名空间**自己就有版本体系**（session 由 src/sessionfmt.js 管，当前 v2）。
+ *   如果这里无脑 `Object.assign({}, data, {version: CURRENT})`，就会把 session 的
+ *   `version: 2` 覆盖成 `version: 1` ✗ —— 于是下次读的时候 sessionfmt 按 v1 的约定去找
+ *   `messages`（根本没有），**把 events 清成空**。她的 213 条会话历史就是这么没的。
+ *   规则：**已经有 version 字段的对象一律原样返回**（那是它自己的版本，不归本模块管）。 */
 function wrap(ns, data) {
   if (data === undefined) return undefined;
   const shape = shapeOf(data);
   if (shape !== 'object') return data;
+  if (Number.isFinite(Number(data.version))) return data;   // 有自己的版本体系 → 不碰
   return Object.assign({}, data, { version: CURRENT });
+}
+
+/* 同理，读的时候：已有 version 的对象**不做本模块的迁移**，也不按本模块的 CURRENT 去判"太高"。
+ *   session 的 v2 > 本模块的 CURRENT(1) 是**正常**的（两套版本各管各的），
+ *   第一版按"高版本 → 拒绝加载"处理，会把 session 整个变成只读 —— 又是一次误伤。 */
+function isSelfVersioned(v) {
+  return !!v && typeof v === 'object' && !Array.isArray(v) && Number.isFinite(Number(v.version));
 }
 
 /* 启动自检：每个登记过的链必须相邻且连到 CURRENT（照 DSH :124 的"宁可启动就炸"） */
@@ -102,4 +127,4 @@ function selfCheck() {
 }
 selfCheck();
 
-module.exports = { CURRENT, migrate, wrap, detectVersion, shapeOf, selfCheck, ARRAY_NS, SCALAR_NS, MIGRATIONS };
+module.exports = { CURRENT, migrate, wrap, detectVersion, shapeOf, selfCheck, isSelfVersioned, ARRAY_NS, SCALAR_NS, SELF_VERSIONED_NS, MIGRATIONS };
