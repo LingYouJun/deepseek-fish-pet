@@ -240,12 +240,41 @@ async function target(title, opts) {
   const fgTitle = (list.foregroundTitle || '').replace(/[\u200b-\u200f\ufeff]/g, '');
   const normT = (x) => String(x).replace(/[\u200b-\u200f\ufeff\s]/g, '');
   /* ★ 优先用【前台 HWND】精确挑 ★：标题会重复，hwnd 不会。 */
-  let win = (list.foregroundHwnd ? cands.find((w) => w.hwnd === list.foregroundHwnd) : null)
+  /* ⚠️ 前台那一个【还必须可见】：实测 UWP 应用（计算器）会有一个 visible=false 的宿主窗口，
+     而它居然是 GetForegroundWindow() 的返回值 —— 不加 visible 条件就会挑中它，
+     随后 UIA 查不到元素树（NOTFOUND）、点击也落不到真正可见的窗口上。 */
+  let win = (list.foregroundHwnd ? cands.find((w) => w.hwnd === list.foregroundHwnd && w.visible !== false) : null)
     || cands.find((w) => fgTitle && normT(w.title) === normT(fgTitle) && w.visible !== false)
     || cands.filter((w) => w.visible !== false && !w.iconic).sort((a, b) => b.w * b.h - a.w * a.h)[0]
     || cands.sort((a, b) => b.w * b.h - a.w * a.h)[0];
   if (!win) return { ok: false, reason: 'window-not-found', candidates: list.windows.map((w) => w.title).slice(0, 20) };
   const f = await ensureForeground(want, o);
+  /* ★★ 前提断言：目标不能被"压在它上面的窗口"盖住 ★★
+     实测事故（2026-10-03）：计算器确实是前台（回读确认 ✓），但被 6 个**置顶**窗口
+     （任务切换 / Codex / 通知窗…）压着 —— 于是截图里根本没有计算器，
+     随后 UIA / OCR / 几何三条定位器【全部必然失败】，而"前台校验"却报了成功。
+     **前台 ≠ 可见。** 所以这里必须再查一次遮挡：被压得太多就直接判不通过，
+     并明确告诉调用方"先让它露出来"，而不是带着一个看不见的目标往下走。 */
+  let occlusion = null;
+  try {
+    const oc = require('./occlusion');
+    const sc = await oc.scene({ targetTitle: want, selfPids: o.selfPids || [process.pid] });
+    if (sc.ok) {
+      occlusion = { covered: sc.covered, ratio: sc.coveredRatio, note: sc.coveredNote };
+      const limit = o.maxCovered == null ? 0.35 : o.maxCovered;
+      if (sc.coveredRatio > limit) {
+        return {
+          ok: false, reason: 'target-is-covered',
+          window: win, foreground: f, occlusion,
+          rect: { x: win.x, y: win.y, w: win.w, h: win.h },
+          message: '目标窗口「' + want + '」被别的窗口盖住了（最大单个遮住约 '
+            + Math.round(sc.coveredRatio * 100) + '%）：'
+            + sc.covered.slice(0, 5).map((c) => String(c.title).slice(0, 22)).join(' / ')
+            + '。截图里可能根本没有它，任何定位都会失败 —— **先让它露出来再操作**。',
+        };
+      }
+    }
+  } catch (e) { occlusion = { error: String((e && e.message) || e) }; }
   /* ★ 聚焦之后必须【重新读矩形】★
      实测：最小化的窗口 GetWindowRect 返回 -32000,-32000（Windows 把最小化窗口扔到屏幕外），
      恢复之后才是真坐标。第一版直接用了聚焦前的 rect，于是返回了 -32000 —— 照它点击必然全错。

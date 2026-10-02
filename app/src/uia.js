@@ -26,6 +26,11 @@ function psQuote(s) {
 }
 
 const PS_HEAD = [
+  /* 前两行是"按窗口句柄直接取元素树"的入口：$hwnd 非 0 时完全绕开标题匹配。
+     为什么必须有它：实测同一台机器上有 3 个标题都是「计算器」的顶层窗口
+     （其中一个是 visible=false 的 UWP 宿主窗，而它居然是"前台窗口"），
+     按标题在 UIA 根节点里找会一个都找不到（NOTFOUND）。
+     用 AutomationElement.FromHandle(hwnd) 就能精确拿到那个窗口的树。 */
   /* ⚠️ 每个数组元素都必须是【单行 JS 字符串】—— 注释只能写在数组外面。
      我上一版把 /* … *\/ 写进了字符串里，字符串跨行未闭合 → 整个文件语法错误。
      ⚠️ 另外：有些元素（虚拟化列表项、离屏容器）的 BoundingRectangle 是【无穷大或 NaN】，
@@ -37,11 +42,15 @@ const PS_HEAD = [
   'try {',
   '  $root = [System.Windows.Automation.AutomationElement]::RootElement',
   '  $want = ' + '__WANT__',
+  '  $wantHwnd = ' + '__HWND__',
   '  $found = $null',
   '  $all = $root.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)',
   '  foreach ($w in $all) {',
   '    $n = $w.Current.Name',
   '    if ($n -and $n.IndexOf($want) -ge 0) { $found = $w; break }',
+  '  }',
+  '  if ($wantHwnd -ne 0) {',
+  '    $found = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$wantHwnd)',
   '  }',
   '  if (-not $found) { Write-Output "NOTFOUND"; exit 0 }',
   '  $r = $found.Current.BoundingRectangle',
@@ -81,11 +90,12 @@ const PS_HEAD = [
   '} catch { Write-Output ("ERR|" + $_.Exception.Message) }',
 ].join('\n');
 
-function buildScript(mode, windowTitle, needle) {
+function buildScript(mode, windowTitle, needle, hwnd) {
   return PS_HEAD
     .replace('__WANT__', psQuote(windowTitle))
     .replace('__NEEDLE__', psQuote(needle))
-    .replace('__MODE__', psQuote(mode));
+    .replace('__MODE__', psQuote(mode))
+    .replace('__HWND__', String(Number(hwnd) || 0));
 }
 
 function parse(out) {
@@ -109,8 +119,8 @@ function parse(out) {
   return r;
 }
 
-function run(mode, windowTitle, needle, timeoutMs) {
-  const script = buildScript(mode, windowTitle, needle);
+function run(mode, windowTitle, needle, timeoutMs, hwnd) {
+  const script = buildScript(mode, windowTitle, needle, hwnd);
   return new Promise((resolve) => {
     execFile('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
       { timeout: timeoutMs || 40000, windowsHide: true, maxBuffer: 8 * 1024 * 1024 },
@@ -125,12 +135,27 @@ function run(mode, windowTitle, needle, timeoutMs) {
   });
 }
 
-function listElements(windowTitle) { return run('list', windowTitle, ''); }
-function findElement(windowTitle, needle) { return run('find', windowTitle, needle); }
+function listElements(windowTitle, hwnd) { return run('list', windowTitle, '', undefined, hwnd); }
+function findElement(windowTitle, needle, hwnd) { return run('find', windowTitle, needle, undefined, hwnd); }
+
+/* ★ 按 hwnd 直接定位 ★ —— 同名窗口多、或标题在 UIA 里读不到时，这是唯一可靠的路。
+   实战：3 个「计算器」窗口，按标题 NOTFOUND；按 hwnd 一次拿到 num3Button/equalButton。 */
+async function locateByHwnd(hwnd, needle) {
+  const r = await findElement('', needle, hwnd);
+  if (!r.window) return { ok: false, reason: r.notFound ? 'hwnd-not-found' : (r.error || 'uia-failed'), raw: r.raw };
+  const exact = r.elements.find((e) => e.name === needle || e.automationId === needle);
+  const hit = exact || r.elements[0];
+  if (!hit) return { ok: false, reason: 'element-not-found', window: r.window, count: r.count };
+  return {
+    ok: true, x: hit.cx, y: hit.cy, confidence: exact ? 0.98 : 0.85,
+    how: 'uia-hwnd' + (exact ? '-exact' : '-loose'),
+    extra: { name: hit.name, automationId: hit.automationId, controlType: hit.controlType, rect: { x: hit.x, y: hit.y, w: hit.w, h: hit.h } },
+  };
+}
 
 /* 便捷：找元素并返回可直接点击的中心点（含置信度和身份信息） */
-async function locate(windowTitle, needle) {
-  const r = await findElement(windowTitle, needle);
+async function locate(windowTitle, needle, hwnd) {
+  const r = await findElement(windowTitle, needle, hwnd);
   if (!r.window) {
     return { ok: false, reason: r.notFound ? 'window-not-found' : (r.error || 'uia-failed'), raw: r.raw };
   }
@@ -157,7 +182,7 @@ function crossCheck(uiaRect, ocrBox, tolerance) {
   return { ok: dx <= tol && dy <= tol, dx: Math.round(dx), dy: Math.round(dy), tolerance: tol };
 }
 
-module.exports = { listElements, findElement, locate, crossCheck, parse, buildScript };
+module.exports = { listElements, findElement, locate, locateByHwnd, crossCheck, parse, buildScript };
 
 if (require.main === module) {
   const [cmd, win, needle] = process.argv.slice(2);
