@@ -130,6 +130,16 @@ function readHead(file, n) {
   }
 }
 
+/* 最近一次"放大看"的参数，用来把放大图坐标换算回整屏坐标。
+   为什么放在模块级：她"看"和"点"是两次独立调用（screen_look 之后才是 click），
+   中间必须记住那块区域的偏移和缩放比。非放大的一次 screen_look 会把它清掉。 */
+let ZoomState = null;
+function zoomOut(x, y) {
+  if (!ZoomState) return [x, y];
+  try { return [Math.round(ZoomState.x + x / ZoomState.k), Math.round(ZoomState.y + y / ZoomState.k)]; }
+  catch { return [x, y]; }
+}
+
 async function run(tool, arg) {
   arg = String(arg == null ? '' : arg).trim();
   if (!TOOL_TIER[tool]) throw new Error('未知操作：' + tool);
@@ -157,7 +167,12 @@ async function run(tool, arg) {
     /* 视觉这条路**要画坐标网格**：实测模型"估位置"在贴边处能差近 300px
        （鹰角启动器右下角按钮真实 (1837,1025)，它给 (1500,807)），
        有了刻度它就能"读"坐标而不是"估"。 */
-    const cap = await captureScreen(true);
+    /* 放大看时**不要网格**：实测"网格 + 整屏换算"把她绕晕了 ——
+       她自己报的："放大后视觉模型说编辑队列在约 (2200,600)，已经超出 1920 宽的屏幕范围"。
+       放大图只让她按【放大图自己的像素坐标】报，换算由程序做（见 ZoomState / zoomConvert）。 */
+    const zoomPre = (function () { try { return /\|\|\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*\d+\s*$/.test(String(arg || '')); } catch { return false; } })();
+    const cap = await captureScreen(!zoomPre);
+    if (!zoomPre) ZoomState = null;   // 普通看屏幕：清掉上一次的放大参数，免得之后点击被错误换算
     timing.captureMs = tick() - tCap;
     /* 【局部放大】用户点出的真问题："这不是游戏问题，而是你给她分辨率太低了"。
        实测：抓帧确实是 1920x1080（= 物理屏 1:1，不能再高），但**整屏只有 207 万像素**，
@@ -180,7 +195,11 @@ async function run(tool, arg) {
         const img = nativeImage.createFromDataURL(cap.dataUrl).crop({ x: rx, y: ry, width: rw, height: rh });
         const scaled = img.resize({ width: Math.min(1920, rw * 3), quality: 'best' });
         capDataUrl = scaled.toDataURL();
-        zoomInfo = { x: rx, y: ry, w: rw, h: rh, scale: Math.round(Math.min(1920, rw * 3) / rw * 10) / 10 };
+        zoomInfo = { x: rx, y: ry, w: rw, h: rh, scale: Math.round(Math.min(1920, rw * 3) / rw * 10) / 10, k: Math.min(1920, rw * 3) / rw };
+        /* 记住它：她"看"和"点"是两次独立调用，中间必须靠它把放大图坐标换算回整屏坐标 */
+        ZoomState = { x: rx, y: ry, k: zoomInfo.k };
+        zoomInfo.outW = Math.min(1920, rw * 3);
+        zoomInfo.outH = Math.round(rh * zoomInfo.k);
       }
     } catch (e) { zoomInfo = null; }
     const cfg = config.load();
@@ -194,7 +213,15 @@ async function run(tool, arg) {
          之前写成了单引号 → 占位符没被插值，**模型看到的字面就是 "${CAPW}x${CAPH}"**，
          于是它照着写 `click|${CAPW-20},${CAPH-20}` 被拒（"坐标格式应为 x,y"），白费一步。
          这是监视数据里从她的报错里挖出来的，不是什么模型犯傻。 */
-      const _zoomNote = zoomInfo ? ('\n\n【注意】这是你看的屏幕区域 (' + zoomInfo.x + ',' + zoomInfo.y + ') 起 ' + zoomInfo.w + 'x' + zoomInfo.h + ' 的**放大图**（放大约 ' + zoomInfo.scale + ' 倍，所以字变大了）。请**按整屏 1920x1080 的绝对坐标**输出。算法：这张图的左上角 = 整屏 (X,Y)（见上文数字）；图上每一格 = 整屏 240x135 像素，所以「区域左上角往右 n 格、往下 m 格」就是整屏 (X+n*240, Y+m*135)。若刻度数字可见，它写的就是整屏绝对坐标，直接读。') : '';
+      const _zoomNote = zoomInfo
+        ? ('\n\n【重要】这一张是**放大图**：它是屏幕区域 (' + zoomInfo.x + ',' + zoomInfo.y + ') 起 '
+           + zoomInfo.w + 'x' + zoomInfo.h + ' 裁出来放大的，放大倍数约 ' + zoomInfo.scale
+           + '，图本身的尺寸是 ' + zoomInfo.outW + 'x' + zoomInfo.outH + '。\n'
+           + '**请直接按这张放大图自己的像素坐标输出**（图的左上角就是 0,0），'
+           + '例如"按钮在图里约 (900,400) 处"就写 ACTION: click|900,400。\n'
+           + '**不要自己换算成整屏坐标**（实测自己换算会算出 (2200,600) 这种超出屏幕的值）。'
+           + '换算由程序负责，你只要把在放大的图里看到的位置读准就行。')
+        : '';
       const q = (arg || '看看屏幕') + _zoomNote + `\n\n【读坐标的方法】图上画了**刻度网格**（每格 240x135），边上黄色数字就是那条线的像素坐标（左上角写着 0,0，右下角写着 ${CAPW},${CAPH}）。请**顺着网格读出**目标在哪一格，再判断它在格内的相对位置 —— 不要凭感觉估：实测凭感觉在贴近屏幕边缘时能差 300 像素。
 
 【输出要求】先用一句中文说明你的判断；如果这一步需要操作屏幕，就在回答的最后单独输出一行：ACTION: 工具|参数（坐标基于 ${CAPW}x${CAPH} 截图，左上角 0,0；工具可选 click/rclick/dclick/move/drag/scroll/type/key，例如 ACTION: click|${CAPEX},${CAPEY}）。如果不需要操作就不要写 ACTION 行。`;
@@ -433,7 +460,8 @@ async function run(tool, arg) {
     return [Number(m[1]), Number(m[2])];
   };
   if (tool === 'click' || tool === 'rclick' || tool === 'dclick' || tool === 'move') {
-    const [x, y] = parseXY(arg);
+    /* 如果她上一眼是【放大图】，她报的是放大图自己的坐标 —— 这里换算回整屏。 */
+    const [x, y] = zoomOut.apply(null, parseXY(arg));
     const label = { click: '左键点击', rclick: '右键点击', dclick: '双击', move: '移动鼠标' }[tool];
     input[tool](x, y);
     /* 【等界面反应完再返回】实测踩到的坑：她点"基建"之后**立刻** screen_look，
@@ -467,13 +495,13 @@ async function run(tool, arg) {
       }
       a = [all[0], all[1]]; b = [all[2], all[3]];
     }
-    const [x1, y1] = a, [x2, y2] = b;
+    const [x1, y1] = zoomOut.apply(null, a), [x2, y2] = zoomOut.apply(null, b);
     input.drag(x1, y1, x2, y2);
     return `✅ 已拖拽：(${x1},${y1}) → (${x2},${y2})`;
   }
   if (tool === 'scroll') {
     const parts = String(arg).split('|').map((s) => s.trim());
-    const [x, y] = parseXY(parts[0]);
+    const [x, y] = zoomOut.apply(null, parseXY(parts[0]));
     /* 支持三种写法，意思一样：
      *   scroll|x,y|down          向下滚一屏（默认 5 格 = 600）
      *   scroll|x,y|down|10       向下滚 10 格
