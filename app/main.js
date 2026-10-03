@@ -1861,7 +1861,25 @@ if (!gotLock) {
       try { require('./src/focuswin').clearAllTop(); dbg('[boot] 已清理所有窗口的置顶状态'); } catch (e) { dbg('[boot] 清置顶失败 ' + e); }
     }, 6000);
     /* 【临时】对讲机：外部普通权限进程没法给她发消息（UIPI），于是让她自己进程里的小钩子读文件转发。 */
-    try { require('./src/intercom').install({ chatWin: () => chatWin, createChat, dbg }); } catch (e) { dbg('[intercom] install failed ' + e); }
+    /* ★ 提醒到点要真的说出来（B3 的收尾）★
+   没有这段的话，remind_in/remind_at 只是把条目写进文件、**永远不会响** ✗ ——
+   那比没有这个功能更糟（她以为记下了，其实什么都不会发生）。
+   提醒落盘在 userData/reminders.json（她是 Electron 应用，会热重载/重启，
+   只放内存里重启就全丢 ✗）。到点时：把对话窗叫出来 + 发一条消息 + 让她念出来 ✓ */
+try {
+  require('./src/remind').init({
+    file: require('path').join(app.getPath('userData'), 'reminders.json'),
+    onFire: (it) => {
+      const zh = '⏰ 提醒时间到了：' + it.text;
+      dbg('[remind] 到点：' + it.text);
+      try { createChat(); } catch (e) {}
+      relayToChat({ who: 'pet', en: 'Reminder: ' + it.text, zh, kind: 'remind', at: Date.now() });
+      try { chatlog.add(sessionId(), { who: 'pet', en: 'Reminder: ' + it.text, zh, at: Date.now() }); } catch (e) {}
+      try { if (petWin && !petWin.isDestroyed()) petWin.webContents.send('pet:say', { en: 'Reminder: ' + it.text, zh, silent: false }); } catch (e) {}
+    },
+  });
+} catch (e) { dbg('[remind] 装上失败：' + (e && e.message)); }
+try { require('./src/intercom').install({ chatWin: () => chatWin, createChat, dbg }); } catch (e) { dbg('[intercom] install failed ' + e); }
 
     memory.onAppStart().catch((e) => dbg('[memory] onAppStart err ' + e));
     // 隐藏数值：时间效应（多久没见）+ 性格慢回归，然后按需补判一次

@@ -784,6 +784,36 @@ async function runInner(tool, arg) {
       + (r.literalFallback ? "\n（" + r.matcherNote + "）" : "")
       + "\n" + body;
   }
+  if (tool === 'sys_info') {
+    /* ★ 系统信息（B4）★ —— 主人问电量/磁盘/内存时用它，别去 OCR 托盘小字 ✓ */
+    const si = require('./sysinfo');
+    const arg0 = String(arg == null ? '' : arg).trim();
+    const r = arg0 ? si.only(arg0) : si.collect();
+    const parts = (r && r.parts) || [];
+    if (!parts.length) return '🖥 没查到信息' + (arg0 ? ('（可以试试 battery / disk / net / mem，或者不带参数查全部）') : '');
+    return '🖥 ' + parts.join('；')
+      + ((r.warn && r.warn.length) ? ('\n（' + r.warn.join('；') + '）') : '');
+  }
+  if (tool === 'remind_in' || tool === 'remind_at' || tool === 'remind_list' || tool === 'remind_cancel') {
+    /* ★ 提醒（B3）★ —— 提醒落盘，重启也在（见 src/remind.js）✓ */
+    const RM = require('./remind');
+    const parts = String(arg == null ? '' : arg).split('|');
+    const fmt = (ms) => { const d = new Date(ms); return (d.getMonth() + 1) + '月' + d.getDate() + '日 ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
+    if (tool === 'remind_list') {
+      const l = RM.list();
+      if (!l.length) return '⏰ 现在没有待提醒的事。';
+      return '⏰ 待提醒 ' + l.length + ' 条：\n' + l.map((x) => '  ' + x.id + '　' + fmt(x.at) + '（还有 ' + (x.inMin >= 60 ? (Math.round(x.inMin / 6) / 10 + ' 小时') : (x.inMin + ' 分钟')) + '）　' + x.text).join('\n');
+    }
+    if (tool === 'remind_cancel') {
+      const r = RM.cancel(parts[0]);
+      return r.ok ? ('⏰ 已取消：' + r.item.text + '（' + fmt(r.item.at) + '）') : ('⏰ ' + r.error);
+    }
+    const text = parts.slice(1).join('|').trim();
+    if (!text) return '要提醒什么内容？例如 ' + (tool === 'remind_in' ? 'remind_in|30|去喝水' : 'remind_at|14:30|开会');
+    const r = tool === 'remind_in' ? RM.inMinutes(parts[0], text) : RM.atClock(parts[0], text);
+    if (!r.ok) return '⏰ ' + r.error;
+    return '⏰ 记下了：' + fmt(r.item.at) + ' 提醒你「' + r.item.text + '」（编号 ' + r.item.id + '，可以用 remind_cancel|' + r.item.id + ' 取消）';
+  }
   if (tool === 'read_file') {
     /* 只读前 3000 字。以前是 readFileSync 整读再 slice——模型给个大文件路径
        （C:\Windows\Logs\CBS\CBS.log、视频、hiberfil.sys）主进程就同步卡死+内存暴涨，
