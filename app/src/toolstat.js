@@ -56,6 +56,9 @@ function save() {
 function init(opts) {
   storeFile = (opts && opts.file) || null;
   load();
+  /* ★ 一开始就落盘 ★ —— 这样"文件存在"本身就是"接线生效"的证据 ✓
+     （原来只 load 不 save，要等她跑完第一轮任务文件才出现，不好确认接线 ✓）*/
+  save();
   return { rounds: rounds.length, tools: Object.keys(toolTotals).length };
 }
 
