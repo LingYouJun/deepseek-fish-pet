@@ -759,6 +759,31 @@ async function runInner(tool, arg) {
       + String(r.output || '').trim().slice(0, 6000)
       + (r.error && !r.timeout ? ('\n' + r.error) : '');
   }
+  if (tool === 'search_code') {
+    /* ★ 代码内容搜索（B2）★
+       她有 list_dir（看名字）和 read_file（读一个文件），但没有"哪个文件里有这个东西" ——
+       而"后面要写程序"里这恰恰是最常用的一步。纯 Node 实现，见 src/search.js。 */
+    const parts = String(arg == null ? '' : arg).split('|');
+    const pat = String(parts[0] || '').trim();
+    const root = String(parts[1] || '').trim();
+    const extArg = String(parts[2] || '').trim();
+    if (!pat) return '用法：search_code|<要搜的正则或文字>|<目录>|<可选的扩展名开关，如 js,ts>';
+    if (!root) return '还要给我一个目录，例如 search_code|buildToolList|C:\\deepseek\\desktop-pet\\app';
+    const exts = extArg ? extArg.split(/[,\s]+/).map((x) => x.replace(/^\./, '').toLowerCase()).filter(Boolean) : null;
+    const SEARCH = require('./search');
+    const r = SEARCH.search(pat, root, { exts, maxHits: 60, timeoutMs: 15000 });
+    if (!r.ok) return "🔍 " + r.error;
+    if (!r.hits.length) {
+      return "🔍 在 " + root + " 里没找到「" + pat + "」（扫了 " + r.scanned + " 个文件，" + r.ms + "ms）"
+        + (r.truncated ? "\n★ 注意：这次【没搜完】（撞上时间或文件数预算）—— 不排除后面还有，别当成「确实没有」★" : "")
+        + "\n（已跳过 node_modules/.git/dist/浏览器缓存等目录、二进制文件和 >2MB 的文件）";
+    }
+    const body = r.hits.map((h) => h.file + ":" + h.line + ": " + h.text).join("\n");
+    return "🔍 找到 " + r.hits.length + " 条（分布在 " + r.matchedFiles + " 个文件；扫了 " + r.scanned + " 个文件，" + r.ms + "ms）"
+      + (r.truncated ? "　★已截断：结果不止这些★" : "")
+      + (r.literalFallback ? "\n（" + r.matcherNote + "）" : "")
+      + "\n" + body;
+  }
   if (tool === 'read_file') {
     /* 只读前 3000 字。以前是 readFileSync 整读再 slice——模型给个大文件路径
        （C:\Windows\Logs\CBS\CBS.log、视频、hiberfil.sys）主进程就同步卡死+内存暴涨，

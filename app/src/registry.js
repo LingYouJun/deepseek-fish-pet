@@ -243,6 +243,7 @@ const TOOL_DEFS = [
   { name: 'shell_run', tier: 'full', needsArg: true, timeoutMs: 300000, desc: '在【常驻】PowerShell 会话里跑一条命令。★和 proj_run 的区别：cd、环境变量、会话变量全都保留★，所以"进目录→装依赖→编译→看报错→改"可以连续做。参数就是命令本身（中文/多行都行，走 base64 通道不会乱码）。超时会明确告诉你"没跑完"而不是假装成功。' },
   { name: 'shell_status', tier: 'read', needsArg: false, timeoutMs: 10000, desc: '看常驻 shell 会话的状态：还活着吗、现在在哪个目录、上一条命令跑完多久了。' },
   { name: 'shell_close', tier: 'read', needsArg: false, timeoutMs: 10000, desc: '关掉常驻 shell 会话（会丢掉 cwd 和会话变量）。★一般不用手动关，空闲 10 分钟会自动回收★。' },
+  { name: 'search_code', tier: 'read', needsArg: true, timeoutMs: 60000, desc: '在目录里搜索**文件内容**（正则或普通文字），返回 文件:行号:那一行。★这是找"哪个文件里有这个函数/这个配置"的正确工具★ —— list_dir 只能看名字，read_file 要一个个试。用法 search_code|<模式>|<目录>|<扩展名开关，如 js,ts>。自动跳过 node_modules/.git/dist/浏览器缓存等，跳过二进制和 >2MB 的文件；有 15 秒预算和 60 条命中上限，★没搜完会明确说"截断了"而不是假装没有★。' },
   { name: 'read_file', tier: 'read', needsArg: true, timeoutMs: 30000, desc: '读一个文本文件的内容（大文件会截断）。参数是路径。★改文件之前先读，别凭记忆改★。' },
   { name: 'write_file', tier: 'full', needsArg: true, timeoutMs: 30000, desc: '写入/覆盖一个文本文件。参数 <路径>||<内容>（注意是**两个竖线**分隔）。★会覆盖原文件 —— 改之前先 read_file 看清★。主人指定别的目录时用它，别用 proj_write。' },
   { name: 'list_dir', tier: 'read', needsArg: true, timeoutMs: 20000, desc: '列出一个目录下的文件和子目录。参数是路径。★想知道某个目录里有什么时用它★。' },

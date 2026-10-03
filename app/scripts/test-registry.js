@@ -179,6 +179,8 @@ console.log('=== registry.js 单元测试（纯 Node）===');
     'uia_snapshot',
     /* B1（2026-10-03）：常驻 shell 会话 */
     'shell_run', 'shell_status', 'shell_close',
+    /* B2（2026-10-03）：代码内容搜索 */
+    'search_code',
   ];
   const extra = r.list('tool').map((t) => t.name).filter((n) => !FROZEN_TIERS[n] && NEW_OK.indexOf(n) < 0);
   ok(extra.length === 0, '★ §10 注册表里没有"来历不明"的工具', extra.join(', ') || '（干净）');
