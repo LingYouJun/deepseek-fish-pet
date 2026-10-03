@@ -260,3 +260,21 @@ header .tools { margin-left: auto; display: flex; gap: 8px; }
 .moremenu .mi.danger { color: #cf4d3f; }
 .moremenu .mi.danger:hover { background: #fdf0ee; }
 .moremenu .msep { height: 1px; background: #eef1f7; margin: 4px 6px; }
+
+
+/* ★ 步骤流水（任务中每一步做了什么）—— 见 chat.js 的 addStep 与 main.js 的 wantStep ★
+   用户要求："她任务显示改成像你这样的" + "做任务时全程聊天框最小化"
+   → 因为全程最小化，主人是任务结束后才看到这些行，所以样式要一眼能扫。 */
+.step {
+  font-size: 12.5px; line-height: 1.7; padding: 3px 10px; margin: 2px 0 2px 8px;
+  border-left: 3px solid #3a3f4b; color: #9aa4b2;
+  font-family: ui-monospace, Consolas, "Cascadia Mono", monospace;
+  word-break: break-all; white-space: normal;
+}
+.step.running { border-left-color: #d0a24c; color: #d8c08a; }
+.step.ok      { border-left-color: #3f9d5a; color: #8fbf9a; }
+.step.fail    { border-left-color: #c0504d; color: #d79b98; }
+.step .stepdot { margin-right: 2px; }
+.step .steparg { color: #c9d1d9; }
+.step .stepms { color: #6d7684; }
+.step .stepnote { color: #b08a86; }

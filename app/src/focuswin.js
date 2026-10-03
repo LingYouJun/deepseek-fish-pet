@@ -194,6 +194,24 @@ function runPs(want, mode, timeoutMs) {
   });
 }
 
+/* ★ 从一组同名窗口里挑出"真的显示在屏幕上"的那一个 ★
+   实测（2026-10-03）：Windows 计算器（UWP）同时存在两个标题都是「计算器」、位置尺寸都一样的顶层窗：
+     hwnd=1312000  visible=否  ← 隐藏的那个
+     hwnd=461342   visible=是  ← 真正在屏幕上的那个
+   而旧的 focusWindow 靠 PS 里"第一个标题匹配"来挑，随手拿到了隐藏的那个 ✗，
+   于是她 focus 之后截图里看不到计算器（她自己的气泡就说："Calculator window is frontmost
+   but the s..."）。visible / cloaked / iconic 这三个标志是准的，问题是**没人看它们**。
+   优先级：真显示的 → 非最小化的 → 有真实矩形的 → 第一个。 */
+function pickShown(cands) {
+  const list = (cands || []).slice();
+  if (!list.length) return { win: null, shown: 0, total: 0, note: 'no-candidates' };
+  const shown = list.filter((w) => w.visible !== false && !w.cloaked && !w.iconic);
+  if (shown.length) return { win: shown.sort((a, b) => b.w * b.h - a.w * a.h)[0], shown: shown.length, total: list.length, note: 'shown' };
+  const notIconic = list.filter((w) => !w.cloaked && !w.iconic && w.w > 1 && w.h > 1);
+  if (notIconic.length) return { win: notIconic.sort((a, b) => b.w * b.h - a.w * a.h)[0], shown: 0, total: list.length, note: 'none-shown-but-has-real-rect' };
+  return { win: list[0], shown: 0, total: list.length, note: 'all-hidden' };
+}
+
 /* 列窗口。坐标已是物理像素（PS 声明了 DPI 感知）；同时把 DPI 报出来便于核对。 */
 async function listWindows() {
   const { out, err } = await runPs('', 'list');
@@ -349,7 +367,7 @@ async function clearAllTop() {
   });
 }
 
-module.exports = { listWindows, foreground, focusWindow, focusWindowEx, windowRect, clearAllTop, cursorPos };
+module.exports = { listWindows, foreground, focusWindow, focusWindowEx, windowRect, clearAllTop, cursorPos, pickShown };
 
 /* ============================ CLI（方便外部直接驱动）============================ */
 if (require.main === module) {

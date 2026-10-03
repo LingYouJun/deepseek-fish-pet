@@ -1494,6 +1494,10 @@ ipcMain.handle('assistant:run', async (_e, a) => {
      而她自己的立绘同样会挡 —— 抓帧前统一藏起来，抓完放回。 */
   const LOOK_TOOLS = ['screen_look', 'screen_shot', 'watch_screen'];   // watch_screen 也要让开：实测它拍到的全是盖在游戏上的聊天窗
   let petHiddenForLook = false;
+/* ★ 任务期隐藏对话窗的状态（用户要求"做任务时全程最小化"）★
+   见下面 runTool 里 SCREEN_TOOLS 那段的注释。 */
+let chatTaskHidden = false;
+let chatTaskHideTimer = null;
   if (LOOK_TOOLS.includes(String(a && a.tool)) && petWin && !petWin.isDestroyed() && petWin.isVisible()) {
     try { petWin.hide(); petHiddenForLook = true; markPetHidden('look'); await new Promise((r2) => setTimeout(r2, 350)); } catch {}
   }
@@ -1523,11 +1527,64 @@ ipcMain.handle('assistant:run', async (_e, a) => {
       await new Promise((r2) => setTimeout(r2, 600));   // 等窗口真的让开，抓帧才干净
     } catch { chatWasVisible = false; }
   }
+  /* ★★ 用户第 5 次强调，这次要求升级了：「做任务时**全程**聊天框最小化」★★
+     原来上面那段是"每个屏幕工具调用前隐藏、调用完就恢复" ✗ ——
+     于是一个多步任务里她的对话窗会**反复弹出来**盖住目标（她每次恢复都会挡住刚看到的东西）。
+     现在改成【任务期隐藏】：
+       · 第一次因屏幕工具隐藏时，进入"任务期隐藏"状态
+       · 任务期间（每次屏幕工具都刷新计时）**一律不恢复**
+       · 连续 chatRestoreIdleMs（默认 15 秒）没有任何屏幕动作 → 认为任务结束 → 恢复
+     这样她做整个任务的过程中，屏幕上都不会出现她自己的对话窗。
+     她想跟主人说话时本来就会走"立绘弹气泡"那条路（见 [pet] 对话窗不可见 → 立绘弹气泡）。 */
+  if (chatWasVisible) {
+    chatTaskHidden = true;
+    if (chatTaskHideTimer) { clearTimeout(chatTaskHideTimer); chatTaskHideTimer = null; }
+  }
   let r;
+  /* ★★ 步骤流水（用户要求：任务显示像 DSH 那样）★★
+     每个工具调用发两条事件：开始一条（running）、结束一条（ok/fail）。
+     聊天窗按 id 原地更新那一行（见 renderer/chat.js 的 addStep）。
+     为什么同时写进 chatlog：做任务时聊天框**全程最小化**（用户要求 #3），
+     所以必须持久化，等任务结束恢复聊天框时主人才看得到每一步。 */
+  const stepId = 'step-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
+  const stepTool = String(a && a.tool || '');
+  const stepArg = String(a && a.arg || '').slice(0, 90);
+  const stepT0 = Date.now();
+  /* 只给"会改屏幕/看屏幕/跑东西"的工具做流水，杂项（配置读写之类）不刷屏 */
+  const STEP_TOOLS = SCREEN_TOOLS.concat(['find_text', 'find_template', 'find_template_scroll', 'screen_diff', 'uia_find', 'uia_dump', 'match_template', 'skill_write', 'proj_run']);
+  const wantStep = STEP_TOOLS.includes(stepTool);
+  if (wantStep) {
+    relayToChat({ who: 'step', id: stepId, status: 'running', tool: stepTool, arg: stepArg });
+    chatlog.add(sessionId(), { who: 'step', id: stepId, status: 'running', tool: stepTool, arg: stepArg, at: Date.now() });
+  }
   try {
     r = await assistant.run(a.tool, a.arg);
   } finally {
-    if (chatWasVisible) setTimeout(() => { try { if (chatWin && !chatWin.isDestroyed()) { chatWin.showInactive(); chatWin.setAlwaysOnTop(false); } } catch {} }, 500);
+    /* ★ 步骤流水的收尾（和上面的 wantStep/stepId 对应）★ */
+    if (wantStep) {
+      const ms = Date.now() - stepT0;
+      const txt = (typeof r === 'string') ? r : (r && (r.text || ''));
+      const failed = /^(❌|⚠️|✗)/.test(String(txt).trim()) || /失败|错误|reason=|FAIL|被拦/.test(String(txt).slice(0, 120));
+      let note = '';
+      if (failed) note = String(txt).replace(/\s+/g, ' ').slice(0, 90);
+      /* 结果里常带"已把窗口置到前台并通过回读校验"这种话，取第一句当备注更清楚 */
+      else if (String(txt).trim()) note = String(txt).replace(/\s+/g, ' ').split(/[\n。]/)[0].slice(0, 70);
+      relayToChat({ who: 'step', id: stepId, status: failed ? 'fail' : 'ok', tool: stepTool, arg: stepArg, ms, note });
+      chatlog.add(sessionId(), { who: 'step', id: stepId, status: failed ? 'fail' : 'ok', tool: stepTool, arg: stepArg, ms, note, at: Date.now() });
+    }
+    /* ★ 不再"调用完就恢复" ★ —— 只重置空闲计时器；真的空闲下来了才恢复对话窗。 */
+    if (chatTaskHidden) {
+      if (chatTaskHideTimer) clearTimeout(chatTaskHideTimer);
+      const idleMs = Number((config.load().memory || {}).chatRestoreIdleMs) || 15000;
+      chatTaskHideTimer = setTimeout(() => {
+        chatTaskHidden = false;
+        chatTaskHideTimer = null;
+        try {
+          if (chatWin && !chatWin.isDestroyed()) { chatWin.showInactive(); chatWin.setAlwaysOnTop(false); }
+          dbg('[pet] 任务期结束（' + Math.round(idleMs / 1000) + 's 没有屏幕动作）→ 恢复对话窗');
+        } catch {}
+      }, idleMs);
+    }
     if (yielded && yielded.length) setTimeout(() => restoreOwnWindows(yielded), 350);
     if (petHiddenForLook) setTimeout(() => { try { if (petWin && !petWin.isDestroyed()) petWin.show(); } catch {} }, 500);
   }

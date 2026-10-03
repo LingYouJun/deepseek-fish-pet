@@ -55,6 +55,10 @@ async function loadLog() {
     for (const it of entries) {
       if (it.who === 'me') addUser(it.text);
       else if (it.who === 'pet') addPet(it.en, it.zh, it.words);
+      /* ★ 步骤流水 ★ —— 做任务时聊天框全程最小化，这些行是任务结束后才被看到的，
+         所以历史加载必须把它们也渲染出来（running 和 ok/fail 是同 id 的两条，
+         addStep 会原地更新，不会重复）。 */
+      else if (it.who === 'step') addStep(it);
     }
     const last = [...entries].reverse().find((x) => x.who === 'pet' && x.choices && x.choices.length);
     if (last) renderChoices(last.choices);
@@ -550,6 +554,35 @@ function renderScored(text, score, ipaMap) {
       + ' title="清晰度 ' + Math.round(sw.p * 100) + '｜点一下听发音">' + esc(m[1]) + '</span>' + esc(m[2]);
   }).join('');
 }
+/* ★★ 步骤流水（用户要求："她任务显示改成像你这样的"）★★
+   每个屏幕/操作类工具调用在聊天里占一行，像 DSH 的「> 正在运行命令 · xxx」：
+     ▶ 正在执行  focus_window|计算器
+     ✅ focus_window|计算器  1.2s
+     ❌ click|550,300  失败：坐标不在窗口内
+   为什么还要写进 chatlog：因为做任务时**聊天框是全程最小化的**（用户要求 #3），
+   所以必须持久化 —— 等任务结束她恢复聊天框，主人才能看到刚才每一步做了什么。
+   id 相同就复用同一个元素（running → ok/fail 是原地更新，不留两条）。 */
+function addStep(msg) {
+  const box = document.getElementById('msgs');
+  if (!box) return;
+  const id = 'step-' + String(msg.id || (msg.tool + '|' + (msg.arg || '')));
+  let el = document.getElementById(id);
+  if (!el) {
+    el = document.createElement('div');
+    el.id = id;
+    box.appendChild(el);
+  }
+  const status = msg.status || 'running';
+  el.className = 'step ' + status;
+  const dot = status === 'running' ? '▶' : (status === 'ok' ? '✅' : '❌');
+  const tool = esc(String(msg.tool || ''));
+  const argTxt = msg.arg ? ' <span class="steparg">' + esc(String(msg.arg).slice(0, 70)) + '</span>' : '';
+  const dur = msg.ms ? ' <span class="stepms">' + (Number(msg.ms) / 1000).toFixed(1) + 's</span>' : '';
+  const note = msg.note ? ' <span class="stepnote">' + esc(String(msg.note).slice(0, 90)) + '</span>' : '';
+  el.innerHTML = '<span class="stepdot">' + dot + '</span> ' + tool + argTxt + dur + note;
+  box.scrollTop = box.scrollHeight;
+}
+
 function addUser(text, opts) {
   const d = document.createElement('div');
   d.className = 'msg user';
@@ -1443,6 +1476,8 @@ if (window.petAPI.onEndAsk) window.petAPI.onEndAsk(() => { try { $('endBtn').cli
 if (window.petAPI.onChatLog) window.petAPI.onChatLog((msg) => {
   if (!msg) return;
   try {
+    /* ★ 步骤流水（任务中每一步做了什么）★ 见上面 addStep 的注释 */
+    if (msg.who === 'step') { addStep(msg); return; }
     if (msg.who === 'me') addUser(msg.text);
     else if (msg.who === 'pet') {
       if (!msg.en) return;

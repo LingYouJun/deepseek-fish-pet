@@ -57,10 +57,51 @@ function install(ctx) {
       if (doneOnDisk >= seq) { lastSeq = doneOnDisk; return; }
       /* ★ 跨进程独占锁：'wx' 在文件已存在时抛错 —— 谁先建成谁投递，其余一律退出。
          这才真正解决"应用反复重启导致多个 interval 抢同一条"的问题（见上面 install 的注释）。
-         投递失败要把锁删掉，否则这条永远没人投（照 seq=290 那次的教训）。 */
+         投递失败要把锁删掉，否则这条永远没人投（照 seq=290 那次的教训）。
+
+         ★★★ 僵尸锁（2026-10-03 实测踩到）★★★
+         抢到锁的那个进程如果**中途死了**（崩溃 / 被 kill / 启动到一半退出），
+         锁文件会留在磁盘上，而其它实例看到锁存在就 `lastSeq = seq; return;` ——
+         于是**这条消息永远投不出去，而且没有任何提示** ✗（又是"静默失败"）。
+         实测现场：pet-intercom.lock-573 留着、持锁 pid 21984 已死、
+         她从头到尾没收到那条消息，日志里一个字都没有。
+         判据（满足任一即视为僵尸锁，抢过来）：
+           · 锁文件存在超过 60 秒
+           · 持锁进程已经不存在（process.kill(pid, 0) 抛 ESRCH）
+         ⚠️ process.kill(pid, 0) 对"存在但没权限"的进程抛 EPERM —— 那说明它还活着，不算僵尸。 */
       const lock = lockPath(seq);
-      try { fs.writeFileSync(lock, String(process.pid), { flag: 'wx' }); }
-      catch { lastSeq = seq; return; }   // 别人正在投这条
+      let took = false;
+      try { fs.writeFileSync(lock, String(process.pid), { flag: 'wx' }); took = true; }
+      catch {
+        try {
+          const st = fs.statSync(lock);
+          const holderPid = Number(String(fs.readFileSync(lock, 'utf8')).trim()) || 0;
+          const ageMs = Date.now() - st.mtimeMs;
+          let alive = false;
+          if (holderPid > 0) {
+            try { process.kill(holderPid, 0); alive = true; }
+            catch (e2) { alive = (e2 && e2.code === 'EPERM'); }   // EPERM = 存在但没权限 → 活着
+          }
+          if (ageMs > 60000 || !alive) {
+            fs.writeFileSync(lock, String(process.pid));
+            took = true;
+            dbg('[intercom] 清掉僵尸锁 seq=' + seq + '（原持锁 pid=' + holderPid
+              + ' 存活=' + alive + ' 锁龄=' + Math.round(ageMs / 1000) + 's）—— 这条本来永远投不出去');
+          }
+        } catch (e2) { /* 拿不到锁信息就照旧跳过 */ }
+      }
+      if (!took) {
+        /* ★★★ 这里原来是 `lastSeq = seq; return;` —— 那是个坑（2026-10-03 实测）★★★
+           它的意思是"别人正在投这条，我就当它投过了"。可是如果那个"别人"**中途死了**
+           （崩溃 / 被 kill / 启动到一半退出），锁会被清掉或变成僵尸锁，
+           而**我们已经在内存里把这条划掉了** → 于是再也不会重试 ✗。
+           实测现场：lock-573 留着、持锁 pid 21984 已死、其它实例的 lastSeq 已经是 573，
+           结果那条消息几分钟都没投出去，日志里一个字都没有 ✗。
+           正确做法：**锁只负责互斥，不负责"标记完成"**。抢不到就静静等下一轮，
+           完成与否一律以 done 文件为准（那是唯一的事实来源）。
+           interval 只有 1.5s，重试的代价可以忽略。 */
+        return;
+      }
       let delivered = false;
       try {
         let w = chatWinOf();
