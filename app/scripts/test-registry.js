@@ -168,8 +168,15 @@ console.log('=== registry.js 单元测试（纯 Node）===');
     else if (d.tier !== tier) wrong.push(name + ':' + d.tier + '≠' + tier);
   }
   ok(wrong.length === 0, '★ §10 注册表权限档与冻结的老语义**逐条一致**', wrong.length ? wrong.join(', ') : '共核对 ' + Object.keys(FROZEN_TIERS).length + ' 个');
-  /* 反向：注册表里不该有冻结表之外、又不在新工具白名单里的（防止乱加） */
-  const NEW_OK = ['flow_run', 'flow_save', 'flow_list', 'flow_del'];
+  /* 反向：注册表里不该有冻结表之外、又不在新工具白名单里的（防止乱加）
+     ★ 这个守卫今天真的拦住了我一次（好事）：我加了 clipboard_read/clipboard_write/wait_for
+       三个工具却没登记，测试报"来历不明"✗ —— 说明它按设计工作 ✓。
+       登记时**必须连同权限档一起声明**，别只写名字 ✓ */
+  const NEW_OK = [
+    'flow_run', 'flow_save', 'flow_list', 'flow_del',
+    /* A3/A4（2026-10-03）：剪贴板 + 轮询等条件 */
+    'clipboard_read', 'clipboard_write', 'wait_for',
+  ];
   const extra = r.list('tool').map((t) => t.name).filter((n) => !FROZEN_TIERS[n] && NEW_OK.indexOf(n) < 0);
   ok(extra.length === 0, '★ §10 注册表里没有"来历不明"的工具', extra.join(', ') || '（干净）');
   /* §11 ★ tier 必须是 RANK 认得的取值（`look` 这种拼错会让 allowed() 永远 false） */
