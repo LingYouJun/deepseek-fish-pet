@@ -1193,6 +1193,55 @@ async function runInner(tool, arg) {
     const n2 = M2.delTemplate(app, String(arg || '').trim());
     return n2 ? '🗑 已删除模板「' + String(arg).trim() + '」' : '⚠️ 没有这个模板';
   }
+  if (tool === 'kill_app') {
+    /* 【清僵尸实例】—— 用户报"计算器托不出来、我也打不开、有两个计算器在跑"之后加的。
+       UWP 应用（计算器/设置/照片…）被反复开关会攒出**多个同名进程实例** ✗，
+       它们共享同一个 ApplicationFrameHost，老实例会变成"僵尸"：
+         visible=否 / cloaked=是 / 停在 -32000,-32000，点它没反应、focus 也抢不到前台 ✗
+       → 表现就是"窗口托不出来"，而且用户自己在界面上也点不开 ✗。
+       实测（2026-10-03）：杀掉多出来的旧实例后，剩下的那个 focusWindow 立刻
+         "OK step4-minimize show5 [前台已回读确认]" ✓，问题消失。
+       ⚠️ 安全约束：**只杀同名进程里【较老的那些】，保留最新一个** ✓，
+          并且**拒绝**一批系统关键进程（见 DENY）—— 免得她把资源管理器之类干掉。
+       用法：kill_app|CalculatorApp        （进程名，可以不带 .exe） */
+    const want = String(arg || '').trim().replace(/\.exe$/i, '');
+    if (!want) return '用法：kill_app|<进程名>   例如 kill_app|CalculatorApp';
+    const DENY = ['explorer', 'winlogon', 'csrss', 'wininit', 'services', 'lsass', 'dwm',
+      'sihost', 'taskhostw', 'ApplicationFrameHost', 'electron', 'node', 'powershell', 'pwsh',
+      'cmd', 'conhost', 'System', 'Registry', 'Memory Compression'];
+    if (DENY.some((d) => d.toLowerCase() === want.toLowerCase())) {
+      return '⛔ 拒绝：' + want + ' 是系统关键进程（或我自己），不能由你结束。'
+        + '\n（如果是 UWP 应用的僵尸实例，请杀它的应用进程名，例如 CalculatorApp / SystemSettings / Photos —— '
+        + '★不要杀 ApplicationFrameHost ★，它同时服务别的 UWP 应用。）';
+    }
+    const cp = require('child_process');
+    let rows = [];
+    try {
+      const out = cp.execSync('tasklist /FI "IMAGENAME eq ' + want + '.exe" /FO CSV /NH',
+        { encoding: 'utf8', windowsHide: true, timeout: 8000 });
+      rows = out.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.startsWith('"'))
+        .map((l) => { const c = l.split('","').map((x) => x.replace(/"/g, '')); return { name: c[0], pid: Number(c[1]) }; })
+        .filter((x) => Number.isFinite(x.pid));
+    } catch (e) { return '🔪 查进程失败：' + ((e && e.message) || e); }
+    if (!rows.length) return '🔪 没找到名为「' + want + '」的进程（它可能已经不在跑了）。';
+    /* ★ 只保留最新（pid 最大 ≈ 最后启动），杀掉其余 —— UWP 僵尸总是较老的那些 ★ */
+    rows.sort((a, b) => a.pid - b.pid);
+    const keep = rows[rows.length - 1];
+    const kill = rows.slice(0, -1);
+    if (!kill.length) {
+      return '🔪 「' + want + '」只跑了 1 个实例（pid ' + keep.pid + '），没有僵尸实例要清。'
+        + '\n如果它还是托不出来，试试：focus_window|' + want + ' 或 focus_window|<窗口标题>';
+    }
+    const killed = [];
+    for (const r of kill) {
+      try { cp.execSync('taskkill /PID ' + r.pid + ' /F', { stdio: 'ignore', windowsHide: true, timeout: 8000 }); killed.push(r.pid); } catch (e) {}
+    }
+    return '🔪 已清掉「' + want + '」的 ' + killed.length + ' 个多余实例（pid ' + killed.join(', ') + '），'
+      + '保留最新的 pid ' + keep.pid + ' ✓'
+      + '\n（UWP 僵尸就是这么来的：反复开关应用会攒出多个实例，它们共享 ApplicationFrameHost，'
+      + '老的会变成 visible=否 的僵尸 —— 窗口"托不出来"多半就是这个原因。）'
+      + '\n接下来再 focus_window|' + want + '（或它的窗口标题）试一次，应该就能出来了。';
+  }
   if (tool === 'uia_find') {
     /* 【UIA 通道】按"元素名字 / AutomationId"找控件 —— 对非游戏应用几乎零误差。
        参数：uia_find|<窗口标题片段>|<元素名字或 AutomationId>

@@ -155,7 +155,7 @@ console.log('=== registry.js 单元测试（纯 Node）===');
     web_open: 'web', web_click: 'web', web_type: 'web', web_read: 'web',
     screen_shot: 'full', screen_look: 'full',
     screen_diff: 'full',   // 新增：像素级帧比对（用户要求的那条）
-    uia_find: 'full', uia_dump: 'full',   // 新增：UIA 控件树通道（非游戏应用零识别定位）
+    uia_find: 'full', uia_dump: 'full', kill_app: 'full',   // 新增：UIA 控件树通道（非游戏应用零识别定位）
     click: 'full', rclick: 'full', dclick: 'full', move: 'full', drag: 'full', scroll: 'full', type: 'full', key: 'full',
     clickz: 'full', movez: 'full', rclickz: 'full', dclickz: 'full',
     game_start: 'full', game_stop: 'read', game_status: 'read',

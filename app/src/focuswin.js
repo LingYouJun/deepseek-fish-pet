@@ -224,19 +224,29 @@ function runPs(want, mode, timeoutMs) {
 function pickShown(cands) {
   const list = (cands || []).slice();
   if (!list.length) return { win: null, shown: 0, total: 0, note: 'no-candidates' };
-  const shown = list.filter((w) => w.visible !== false && !w.cloaked && !w.iconic);
-  if (shown.length) return { win: shown.sort((a, b) => b.w * b.h - a.w * a.h)[0], shown: shown.length, total: list.length, note: 'shown' };
-  const notIconic = list.filter((w) => !w.cloaked && !w.iconic && w.w > 1 && w.h > 1);
-  if (notIconic.length) return { win: notIconic.sort((a, b) => b.w * b.h - a.w * a.h)[0], shown: 0, total: list.length, note: 'none-shown-but-has-real-rect' };
-  /* ★★ 全都最小化时，**绝不能挑 cloaked 的那个**（2026-10-03 实测）★★
-     现场：计算器两个顶层窗都 iconic（最小化），一个是 cloaked=是 的幽灵、一个是正常的。
-     旧兜底直接取 list[0] —— 恰好是那个 cloaked 幽灵 ✗，
-     于是 focusWindowEx 拿着它去恢复，怎么都恢复不出来（step=FAIL）。
-     而单独验证过：对正确的那个 hwnd 调 ShowWindow(9) + SetForegroundWindow 是成功的 ✓。
-     → 兜底必须优先挑非 cloaked 的。 */
-  const notCloaked = list.filter((w) => !w.cloaked);
-  if (notCloaked.length) return { win: notCloaked.sort((a, b) => b.w * b.h - a.w * a.h)[0], shown: 0, total: list.length, note: 'none-shown-picked-non-cloaked' };
-  return { win: list[0], shown: 0, total: list.length, note: 'all-hidden-and-cloaked' };
+  const byArea = (a, b) => b.w * b.h - a.w * a.h;
+  /* ★★★ 分级挑选 —— 关键是【绝不挑 visible=否 的僵尸】★★★
+     2026-10-03 实测事故（用户报"她托不出计算器，我也打不开，有两个计算器在跑"）：
+       UWP 应用被反复开关会攒出**多个实例** ✗，共享同一个 ApplicationFrameHost，
+       老实例变成僵尸：visible=否 / cloaked=是 / 停在 -32000,-32000 ✗。
+       当时的兜底是"取 list[0]"，恰好挑中那个 visible=否 的僵尸 ✗ →
+       focus_window 反复对它操作 → 一直"显示了但抢不到前台" → 她以为窗口弄不出来 → 放弃。
+     ★分水岭就是 visible：僵尸是 visible=否，活着的窗口是 visible=是 ★
+     所以按这个顺序挑，任何一级命中就返回，绝不再无条件退到 list[0]。 */
+  const levels = [
+    { note: 'shown', f: (w) => w.visible !== false && !w.cloaked && !w.iconic },
+    { note: 'visible-not-cloaked', f: (w) => w.visible !== false && !w.cloaked },
+    { note: 'visible', f: (w) => w.visible !== false },
+    { note: 'has-real-rect', f: (w) => !w.cloaked && !w.iconic && w.w > 1 && w.h > 1 },
+    { note: 'last-resort', f: () => true },
+  ];
+  for (const lv of levels) {
+    const hit = list.filter(lv.f);
+    if (hit.length) {
+      return { win: hit.slice().sort(byArea)[0], shown: list.filter(levels[0].f).length, total: list.length, note: lv.note };
+    }
+  }
+  return { win: null, shown: 0, total: list.length, note: 'nothing' };
 }
 
 /* 列窗口。坐标已是物理像素（PS 声明了 DPI 感知）；同时把 DPI 报出来便于核对。 */
