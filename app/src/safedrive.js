@@ -230,6 +230,13 @@ function diffRegion(FD, beforeBmp, afterBmp, w, h, rect, opts) {
 async function target(title, opts) {
   const o = opts || {};
   const list = await fw.listWindows();
+  /* ★ 列窗口失败就必须显式失败 ★
+     实测：focuswin 的 PS 里 C# 编译失败时 listWindows 曾**静默返回 0 个窗口** ✗，
+     于是 target() 报"window-not-found"，看起来像"目标窗口不在" —— 完全是误导。
+     现在 listWindows 会带回 ok/error，这里必须认它。 */
+  if (list.ok === false) {
+    return { ok: false, reason: 'window-enumeration-failed', error: list.error, rawOut: list.rawOut };
+  }
   const want = String(title || '');
   /* ★ 同名窗口要优先挑【前台那个】★
      实测：Edge 会为同一个页面暴露多个顶层窗口，标题几乎一样（"公招计算 · 可露希尔基建终端…"），

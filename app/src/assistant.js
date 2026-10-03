@@ -103,6 +103,12 @@ async function captureScreenFallback() {
  * Windows OCR 的 $result.Text 有个坑：CJK 会被它当"词"，于是在每个汉字之间插空格，
  * 而且**完全丢掉了位置**。所以定位必须走 ocr.ps1 -Json（Lines/ Words/ BoundingRect）。
  * 坐标系：包围盒是**送进图片的像素坐标**，我们送的就是 1920x1080 的全屏抓帧 → 直接可用。 */
+/* ★ 最近一次 OCR 的真实失败原因 ★
+   为什么要有它：这个函数失败时一律返回 null，调用方看到的就是"没读到文字" ✗ ——
+   和 focuswin 那次"C# 编译失败 → 静默返回 0 个窗口"是同一类病（见 test-smoke.js 的说明）。
+   返回 null 的语义保持不变（避免连锁改动），但把原因记在这里，出错时能一眼分清
+   "真的没有文字" 和 "查询本身坏了"。 */
+let lastOcrError = '';
 function ocrJson(pngPath) {
   return new Promise((resolve) => {
     const script = path.join(__dirname, '..', 'scripts', 'ocr.ps1');
@@ -112,17 +118,37 @@ function ocrJson(pngPath) {
       child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-Path', pngPath, '-Json'],
         { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     } catch { return fin(null); }
-    const timer = setTimeout(() => { try { child.kill(); } catch {} fin(null); }, 25000);
+    const timer = setTimeout(() => { try { child.kill(); } catch {} lastOcrError = 'OCR 超时（25s）'; fin(null); }, 25000);
     const dec = new StringDecoder('utf8');
     child.stdout.on('data', (d) => { if (out.length < 400000) out += dec.write(d); });
     child.stderr.on('data', (d) => { if (err.length < 4000) err += dec.write(d); });
-    child.on('error', () => { clearTimeout(timer); fin(null); });
-    child.on('close', () => {
+    child.on('error', (e) => { clearTimeout(timer); lastOcrError = 'OCR 子进程错误：' + (e && e.message); fin(null); });
+    child.on('close', (code) => {
       clearTimeout(timer);
       const s = String(out || '').trim();
       const i = s.indexOf('{');
-      if (i < 0) return fin(null);
-      try { const j = JSON.parse(s.slice(i)); return fin(j && j.ok ? j : null); } catch { fin(null); }
+      /* ★ 静默失败整治（2026-10-03）★
+         以前这里无论什么原因（PS 编译失败 / 脚本抛错 / 超时 / 被杀）都只 fin(null)，
+         调用方看到的就是"这条 OCR 没读到文字" —— 方向完全错 ✗。
+         现在仍然返回 null（保持调用方原有语义，避免连锁改动），
+         但把真实原因记进模块级 lastOcrError。 */
+      if (i < 0) {
+        lastOcrError = 'OCR 无 JSON 输出' + (code ? '（退出码 ' + code + '）' : '')
+          + (err ? '：' + String(err).slice(0, 200) : '');
+        return fin(null);
+      }
+      try {
+        const j = JSON.parse(s.slice(i));
+        if (!j || !j.ok) {
+          lastOcrError = 'OCR 脚本报错：' + JSON.stringify(j || {}).slice(0, 200) + (err ? ' ' + String(err).slice(0, 200) : '');
+          return fin(null);
+        }
+        lastOcrError = '';
+        return fin(j);
+      } catch (e2) {
+        lastOcrError = 'OCR JSON 解析失败：' + e2.message;
+        fin(null);
+      }
     });
   });
 }
@@ -179,7 +205,8 @@ function ocr(pngPath) {
     try {
       child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-Path', pngPath],
         { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    } catch { return fin(''); }
+    } catch (e0) { return fin(''); }
+    /* ★ 同上的静默失败整治 ★ 下面 close 里会带上 stderr */
     const timer = setTimeout(() => { try { child.kill(); } catch {} fin(''); }, 25000);
     /* 用 StringDecoder 而不是 `out += d`：后者是**逐块隐式 toString('utf8')**，
        一个中文字被切在两次 data 事件之间就会解出 U+FFFD 乱码
@@ -340,7 +367,15 @@ async function runInner(tool, arg) {
     /* 放大看时**走无损的 PNG 路径**：帧流是 JPEG，把它的压缩噪点放大 3 倍只会更糊 ——
        实测她的原话："这几张放大图太糊，我定不准卡片坐标"。PNG 那条路径
        （desktopCapturer 原生图 → resize → PNG）是无损的，放大出来的字是锐利的。 */
-    const cap = zoomPre ? await captureScreenFallback() : await captureScreen(true);
+    /* ★ 不再画坐标网格（改成 false）★
+       为什么原来画：那时候是要模型给**像素坐标**，实测它"估位置"在贴边处能差近 300px
+       （鹰角启动器右下角按钮真实 (1837,1025)，它给 (1500,807)），有刻度它就能"读"而不是"估"。
+       为什么现在不画：**协议已经改成归一化坐标 (0~1)**（见下面提示词的【怎么告诉我位置】）。
+       刻度上写的是**像素数字**，留着只会诱导它报像素值；而它也没法从一个像素网格里
+       量出 0~1 的归一化位置。实测换协议后同一个模型一次命中，光标精准落在目标名字上。
+       ⚠️ 要退回旧协议（要像素坐标）就得把这个改回 true —— 两件事必须一起改，别只改一边。
+       （放大看时本来就不画网格，见下面的注释。） */
+    const cap = zoomPre ? await captureScreenFallback() : await captureScreen(false);
     if (!zoomPre) ZoomState = null;   // 普通看屏幕：清掉上一次的放大参数
     timing.captureMs = tick() - tCap;
     /* 【局部放大】用户点出的真问题："这不是游戏问题，而是你给她分辨率太低了"。
@@ -1202,6 +1237,14 @@ async function runInner(tool, arg) {
        所以这里那次补乘必须删掉 —— 否则又会偏大 25%（同一个 bug 换个方向再犯一次）。
        验收判据：本工具输出的窗口坐标，必须和 UI Automation 报的 BoundingRectangle 一致。 */
     const list = await require('./focuswin').listWindows();
+    /* ★ 列窗口失败必须说清楚，不能含糊成"没读到任何窗口" ★
+       实测（2026-10-03）：PS 侧 C# 编译失败时 listWindows 曾静默返回 0 个窗口 ✗，
+       旧的这句提示会让人以为是"被权限挡了"，方向完全错。
+       现在 listWindows 带回 ok/error，这里直接把真实原因转出去。 */
+    if (list && list.ok === false) {
+      return '🪟 ❌ 列窗口失败（不是"没有窗口"，是查询本身出错了）：' + (list.error || '未知原因')
+        + (list.rawOut ? '\n原始输出：' + String(list.rawOut).slice(0, 200) : '');
+    }
     const rows = (list && list.windows) || [];
     if (!rows.length) return '🪟 没读到任何可见窗口（可能被权限挡了）。';
     const fg = await require('./focuswin').foreground();
@@ -1316,4 +1359,5 @@ module.exports = {
   __repeatNote: (t, a) => REPEAT.note(t, a),
   __repeatState: () => ({ size: REPEAT.size(), cfg: REPEAT.config }),
   __ocrJson: (p) => ocrJson(p),
+  __lastOcrError: () => lastOcrError,   /* ★ 最近一次 OCR 的真实失败原因（空串=上次成功）★ */
 };

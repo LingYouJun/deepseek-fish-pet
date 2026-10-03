@@ -80,6 +80,11 @@ function computeCovered(target, allWindows, extraRects) {
 async function scene(opts) {
   const o = opts || {};
   const list = await fw.listWindows();
+  /* ★ 同上：列窗口失败不能当成"没有遮挡" ★
+     否则会得出"目标干净可见"的结论，而真相是根本没读到窗口列表。 */
+  if (list.ok === false) {
+    return { ok: false, reason: 'window-enumeration-failed', error: list.error, covered: [], selfRects: [] };
+  }
   const wins = list.windows || [];
   const selfPids = o.selfPids || [process.pid];
   const selfTitles = o.selfTitles || [];

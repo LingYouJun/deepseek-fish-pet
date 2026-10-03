@@ -196,7 +196,7 @@ function runPs(want, mode, timeoutMs) {
 
 /* 列窗口。坐标已是物理像素（PS 声明了 DPI 感知）；同时把 DPI 报出来便于核对。 */
 async function listWindows() {
-  const { out } = await runPs('', 'list');
+  const { out, err } = await runPs('', 'list');
   const rows = [];
   let dpi = 0, dpiOk = null;
   for (const line of out.split(/\r?\n/)) {
@@ -217,9 +217,27 @@ async function listWindows() {
     const m = line.match(/^FG (.*?) hwnd=(-?\d+)/);
     if (m) { foregroundTitle = m[1]; foregroundHwnd = Number(m[2]); break; }
   }
+  /* ★★★ 失败必须响亮，绝不能默默返回"0 个窗口" ★★★
+     实测事故（2026-10-03）：我给这段 PS 的 C# 加 cloaked 检测时写错了三处
+     （UIntPtr 应为 IntPtr、Thread 少了 System.Threading.、注释里放了反引号截断了模板串），
+     每一次都让 Add-Type 编译失败 —— 而这里只取了 out、**把 err 丢掉了** ✗，
+     于是 listWindows 返回 { windows: [] }，看起来就像"屏幕上没有窗口"。
+     我追着这个假象排查了两轮，还差点以为系统坏了。
+     现在：有 err 就显式报出来；此外"既没有 DPI 行也没有任何 WIN 行"也判为异常
+     （正常的 Windows 上至少会有桌面窗口 Program Manager）。 */
+  const ok = !err && (dpi > 0 || rows.length > 0);
+  const result = {
+    windows: rows, dpi, scale: dpi ? Math.round((dpi / 96) * 100) / 100 : null,
+    dpiContextOk: dpiOk, foregroundTitle, foregroundHwnd, ok,
+  };
+  if (!ok) {
+    result.error = err || 'PowerShell 返回了空结果（既没有 DPI 行也没有任何 WIN 行）—— '
+      + '通常是 PS 侧的 C# 编译失败或被安全软件拦了，请检查 focuswin 里那段 PS 脚本。';
+    result.rawOut = String(out).slice(0, 400);
+  }
   /* ★ 必须带 hwnd ★：实测 Edge 为同一页面暴露多个顶层窗口，**标题逐字相同**，
      只靠标题根本分不出哪个是当前可见的那个 —— 只有前台 HWND 是唯一的。 */
-  return { windows: rows, dpi, scale: dpi ? Math.round((dpi / 96) * 100) / 100 : null, dpiContextOk: dpiOk, foregroundTitle, foregroundHwnd };
+  return result;
 }
 
 /* 当前前台窗口 */
