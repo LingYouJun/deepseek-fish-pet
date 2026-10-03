@@ -108,6 +108,11 @@ async function captureScreenFallback() {
    和 focuswin 那次"C# 编译失败 → 静默返回 0 个窗口"是同一类病（见 test-smoke.js 的说明）。
    返回 null 的语义保持不变（避免连锁改动），但把原因记在这里，出错时能一眼分清
    "真的没有文字" 和 "查询本身坏了"。 */
+/* ★ 放大锚点守卫的状态（用途见 screen_look 分支里的长注释）★
+   streak: 连续放大了几次还没看过整屏；last: 上一次放大的区域（x,y,w,h）
+   ★为什么要有它★：实测她 44 次 screen_look 全是放大、一次整屏都没有 ✗，
+   而且"宽度不变只加高度"地原地反复试 —— 提示词提醒不够，必须程序拦 ✓ */
+const ZOOM_GUARD = { streak: 0, last: null };
 let lastOcrError = '';
 function ocrJson(pngPath) {
   return new Promise((resolve) => {
@@ -395,6 +400,38 @@ async function runInner(tool, arg) {
         const ry = Math.max(0, Math.min(_s.h - 40, Number(mm[2])));
         const rw = Math.max(40, Math.min(_s.w - rx, Number(mm[3])));
         const rh = Math.max(40, Math.min(_s.h - ry, Number(mm[4])));
+        /* ★★★ 放大锚点守卫（2026-10-03 的实测教训）★★★
+           现场：主人让她在公招计算器里找「水月」。她 44 次 screen_look
+           ★全部是放大、一次整屏都没有★ ✗，而且区域一直是 x=560 起、宽 540（右边界 1103）——
+           而水月在 x=1272~1660。★她不是"没看见"，是目标压根不在她的任何一张图里 ✗★。
+           更关键的是：她 4 次放大的**高度一路在加**（400→450→500）、**宽度纹丝不动** ——
+           说明她意识到"没看全"，但**只会在原地扩大** ✗。
+           ★为什么必须程序强制★：提示词里写"先整屏定位"是**不够的** ——
+           她自己那份规程里"看小字必须放大"那一条就是提示词，而它反而把她带进了坑 ✓。
+           两条硬约束（都是"拒绝这次调用 + 说清为什么"）：
+             ① 连续放大 ≥4 次且中间没看过整屏 → 拒绝，要求先整屏定位 ✓
+             ② 同一锚点「宽度没变、高度在加」→ 拒绝，提示"你漏的多半是左右" ✓
+           ⚠️ 这两条只会在**明显绕进死胡同**时触发，正常放大不受影响 ✓ */
+        const _prev = ZOOM_GUARD.last;
+        if (ZOOM_GUARD.streak >= 4) {
+          const _hit = ZOOM_GUARD.streak;
+          ZOOM_GUARD.streak = 0;
+          return '⚠️ 停一下 —— 你已经连续放大 ' + _hit + ' 次、中间**一次整屏都没看过** ✗\n'
+            + '放大等于主动把视野缩小：如果锚点猜错，目标就永远进不了你的图，而且**你看不出来** ✓\n'
+            + '（实测：你 44 次看屏幕全是放大，视野右边界卡在 1103，而要找的东西在 1272+ —— 永远找不到 ✓）\n'
+            + '★现在请先看一次整屏★：`screen_look|<问题>`（不要带 || 区域），\n'
+            + '问题这样问：「目标大概在屏幕的哪个位置？给我归一化坐标」。拿到位置后再放大那一块 ✓';
+        }
+        if (_prev && Math.abs(rw - _prev.w) <= 8 && rh > _prev.h + 20) {
+          ZOOM_GUARD.last = { x: rx, y: ry, w: rw, h: rh };
+          ZOOM_GUARD.streak++;
+          return '⚠️ 你这个放大区域和上一次比：【宽度没变（' + rw + '）、高度在加（' + _prev.h + '→' + rh + '）】✗\n'
+            + '★这个形状通常说明你漏的是【左右】，不是上下★ ✓\n'
+            + '（实测：你在 x=560~1100 这一条里反复加高，而目标在 x=1272+ —— 加多高都看不到 ✓）\n'
+            + '请回整屏看一次（`screen_look|<问题>`，不带 || 区域），确认目标到底在屏幕的哪一侧 ✓';
+        }
+        ZOOM_GUARD.streak++;
+        ZOOM_GUARD.last = { x: rx, y: ry, w: rw, h: rh };
         const { nativeImage } = require('electron');
         const img = nativeImage.createFromDataURL(cap.dataUrl).crop({ x: rx, y: ry, width: rw, height: rh });
         const scaled = img.resize({ width: Math.min(1920, rw * 3), quality: 'best' });
@@ -404,6 +441,9 @@ async function runInner(tool, arg) {
         ZoomState = { x: rx, y: ry, k: zoomInfo.k };
         zoomInfo.outW = Math.min(1920, rw * 3);
         zoomInfo.outH = Math.round(rh * zoomInfo.k);
+      } else {
+        /* 整屏看了一次 → 计数清零 ✓（这正是我们想鼓励的行为 ✓） */
+        ZOOM_GUARD.streak = 0; ZOOM_GUARD.last = null;
       }
     } catch (e) { zoomInfo = null; }
     const cfg = config.load();
@@ -1727,5 +1767,8 @@ module.exports = {
   __repeatNote: (t, a) => REPEAT.note(t, a),
   __repeatState: () => ({ size: REPEAT.size(), cfg: REPEAT.config }),
   __ocrJson: (p) => ocrJson(p),
-  __lastOcrError: () => lastOcrError,   /* ★ 最近一次 OCR 的真实失败原因（空串=上次成功）★ */
+  __lastOcrError: () => lastOcrError,
+  __zoomGuard: () => ({ streak: ZOOM_GUARD.streak, last: ZOOM_GUARD.last }),
+  __zoomGuardReset: () => { ZOOM_GUARD.streak = 0; ZOOM_GUARD.last = null; },
+  /* ★ 最近一次 OCR 的真实失败原因（空串=上次成功）★ */
 };
