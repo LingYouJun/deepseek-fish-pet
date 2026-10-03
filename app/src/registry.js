@@ -301,21 +301,88 @@ const TOOL_DEFS = [
      权限档、参数要求、超时、给模型的说明**四处同时生效**，不会再各说各话。 */
 const RANK = { off: 0, read: 1, normal: 2, web: 3, full: 4 };
 
+/* ★ 工具分组表（C4）★
+   按"她要做的事"分组，每组一句导航语。
+   ★为什么不只注入相关组的工具★：调研发现 token 开销不是瓶颈（full 档约 1543 tokens），
+   真问题是"72 个里挑一个"太难 ✗。分组把 72 选 1 变成"先选组、再组内挑" ✓，
+   而且一个工具都不少 —— 能力不丢 ✓。
+   顺序即优先级：越靠前越常用（实测她用得最多的 screen_look / focus_window / click 在 1~3 组）✓ */
+/* ★ 她实测用过的工具与次数（来自 chatlog 的 step 记录）—— 用来给组内排序 ★
+   screen_look 44 / focus_window 34 / key 24 / type 18 / windows_list 12 /
+   find_text 10 / click 9 / screen_shot 2 / find_template 2 / uia_find 2
+   越是她已经会用的，越排在前面 —— 让"熟悉的东西在手边"，新的工具紧跟其后 ✓ */
+const TOOL_GROUPS = [
+  { name: '看屏幕 / 感知（想知道屏幕上有什么，先看这组）',
+    hint: '看整屏、放大看小字、确认动作生效、列窗口、连续观察',
+    re: /^(screen_look|screen_shot|screen_diff|watch_screen|windows_list)$/, order: 'screen_look screen_shot screen_diff watch_screen windows_list' },
+  { name: '定位（要点某个东西之前，先用这组拿到精确坐标）',
+    hint: '★非游戏应用优先用 uia_snapshot + uia_find：应用自己报的坐标，零识别误差★；其次是模板/OCR；再不行才截图看',
+    re: /^(uia_snapshot|uia_find|uia_dump|find_template|find_template_scroll|find_text|make_template|template_list|template_del|search_code)$/, order: 'uia_snapshot uia_find uia_dump find_text find_template find_template_scroll make_template template_list template_del search_code' },
+  { name: '操作（点 / 打 / 滚 / 拖）',
+    hint: '★键盘只发给前台窗口 —— 目标不在前台就先 focus_window；UWP 抢不到前台时改用 click★',
+    re: /^(click|clickz|rclick|rclickz|dclick|dclickz|move|movez|drag|scroll|type|key)$/, order: 'click clickz dclick rclick move drag scroll type key movez rclickz dclickz' },
+  { name: '窗口 / 焦点 / 清理',
+    hint: '把窗口弄到前面、或怀疑「窗口托不出来」（多半是 UWP 僵尸实例）时用',
+    re: /^(focus_window|kill_app|wait_for)$/, order: 'focus_window wait_for kill_app' },
+  { name: '文件 / 项目 / 代码',
+    hint: '读改写文件、跑脚本、搜代码、检查代码；★shell_run 是常驻会话（cd/环境会保留）★',
+    re: /^(read_file|write_file|list_dir|run_file|proj_ls|proj_read|proj_write|proj_run|proj_rm|proj_open|shell_run|shell_status|shell_close|check_code|open_path)$/, order: 'read_file write_file list_dir shell_run shell_status shell_close check_code search_code run_file proj_ls proj_read proj_write proj_run proj_rm proj_open open_path' },
+  { name: '技能 / 记忆 / 人设',
+    hint: '★做事之前先 use_skill 看有没有现成套路，比瞎试快★；把学到的沉淀成技能',
+    re: /^(use_skill|skill_ls|skill_read|skill_write|skill_rm|tag_list|tag_set|tag_rm)$/, order: 'use_skill skill_ls skill_read skill_write skill_rm tag_list tag_set tag_rm' },
+  { name: '提醒 / 系统 / 剪贴板 / 打开',
+    hint: '定时提醒；查电量磁盘内存（单项更快）；读写剪贴板；打开网址或文件',
+    re: /^(remind_in|remind_at|remind_list|remind_cancel|sys_info|clipboard_read|clipboard_write|open_url|open_path)$/, order: 'remind_in remind_at remind_list remind_cancel sys_info clipboard_read clipboard_write open_url open_path' },
+  { name: '网络（受控浏览器里操作网页）',
+    hint: '查资料 / 填表单：能直接读页面内容，比截屏看浏览器可靠得多',
+    re: /^web_/, order: 'web_open web_read web_click web_type' },
+  { name: '确定性流程 / 游戏托管',
+    hint: '把跑通的动作序列存成流程重放；或让游戏助手接管（★只在主人明确要求时用★）',
+    re: /^(flow_run|flow_save|flow_list|flow_del|game_start|game_stop|game_status)$/, order: 'flow_run flow_save flow_list flow_del game_start game_stop game_status' },
+];
+
 /* 生成某权限档下、给模型看的工具清单（一行一个工具） */
 function buildToolList(tier, opts) {
   const o = opts || {};
   const limit = RANK[o.rank !== undefined ? o.rank : tier];
   if (limit === undefined) return '';
+  const taken = new Set();
   const lines = [];
-  for (const d of TOOL_DEFS) {
-    const t = d.tier === 'web' ? 'web' : d.tier;             /* web 档只对 web/full 开 */
-    const need = RANK[t];
-    if (need === undefined || limit < need) continue;
-    if (o.only && !o.only.test(d.name)) continue;
-    if (o.skip && o.skip.test(d.name)) continue;
-    lines.push('- ' + d.name + (d.needsArg ? '|<参数>' : '') + '  ' + (d.desc || ''));
+  const fmt = (d) =>
+    '- ' + d.name + (d.needsArg ? '|<参数>' : '') + '  ' + (d.desc || '');
+  const eligible = (d) => {
+    const need = RANK[d.tier];
+    if (need === undefined || limit < need) return false;
+    if (o.only && !o.only.test(d.name)) return false;
+    if (o.skip && o.skip.test(d.name)) return false;
+    return true;
+  };
+  /* ★ 组内排序：按 g.order 给的常用度列表；不在列表里的排后面（保持注册表顺序）★ */
+  const sortByOrder = (arr, order) => {
+    const idx = String(order || '').split(/\s+/).filter(Boolean);
+    return arr.slice().sort((a, b) => {
+      const ia = idx.indexOf(a.name), ib = idx.indexOf(b.name);
+      if (ia < 0 && ib < 0) return 0;
+      if (ia < 0) return 1;
+      if (ib < 0) return -1;
+      return ia - ib;
+    });
+  };
+  for (const g of TOOL_GROUPS) {
+    const inGroup = TOOL_DEFS.filter((d) => eligible(d) && !taken.has(d.name) && g.re.test(d.name));
+    if (!inGroup.length) continue;
+    inGroup.forEach((d) => taken.add(d.name));
+    lines.push('## ' + g.name);
+    lines.push('#   ' + g.hint);
+    for (const d of sortByOrder(inGroup, g.order)) lines.push(fmt(d));
+    lines.push('');
   }
-  return lines.join('\n');
+  const rest = TOOL_DEFS.filter((d) => eligible(d) && !taken.has(d.name));
+  if (rest.length) {
+    lines.push('## 其它工具');
+    for (const d of rest) lines.push(fmt(d));
+  }
+  return lines.join('\n').trim();
 }
 
 /* 建一个已经装好全部工具定义的注册表 */
@@ -325,4 +392,4 @@ function withTools(base) {
   return reg;
 }
 
-module.exports = { create, withTools, TOOL_DEFS, RANK, buildToolList };
+module.exports = { create, withTools, TOOL_DEFS, TOOL_GROUPS, RANK, buildToolList };
