@@ -861,12 +861,40 @@ let taskStopReason = null;
    原来这里直接判 completed 收尾 → 任务静默死掉（实测 4 次，用户两次问"她怎么不动了"）。
    现在最多把循环续 2 次、催她要 ACTION。 */
 let promiseNudge = 0;
+/* ★ 收尾核对（铁律 3 的程序强制）★
+   TASK_TARGET = 这一轮任务里"要找到的那个东西"（只认带引号的目标名 ✓）
+   targetChecked = 是否已经催过她一次（★只催一次，绝不无限循环 ✗★） */
+let lastUserText = "";
+let TASK_TARGET = null;
+let targetChecked = false;
+/* 从任务原文里提取"带引号的目标名"——★只认引号，避免把"所有干员"当目标 ✗★ */
+function extractTarget(text) {
+  const t = String(text || "");
+  const m = t.match(/找[出到]?[^「『"\']{0,6}[「『"\']([^「」『』"\']{1,14})[」』"\']/);
+  if (m && m[1]) return m[1].trim();
+  const m2 = t.match(/[「『"\']([^「」『』"\']{1,14})[」』"\']\s*(?:在哪|在什么位置|的位置)/);
+  return (m2 && m2[1]) ? m2[1].trim() : null;
+}
+/* 收尾里算不算"交代了目标" */
+function targetAddressed(said) {
+  if (!TASK_TARGET) return true;
+  const s2 = String(said || "");
+  if (s2.indexOf(TASK_TARGET) >= 0) return true;
+  return /没找到|找不到|没有找到|没看到|没看见|没有它|不在这|不在屏幕|无法找到|未见/.test(s2);
+}
+
 function newLoop() {
   if (!window.PetLoop) return null;
   return window.PetLoop.create({ lookOnlyTools: LOOK_ONLY_TOOLS, lookStreakMax: LOOK_STREAK_MAX, stepBudget: stepBudget });
 }
 async function runTask(msgEl, action, depth) {
-  if (depth === 1) { taskFailed = false; lookStreak = 0; taskStopReason = null; promiseNudge = 0; LOOP = newLoop(); }
+  if (depth === 1) {
+    taskFailed = false; lookStreak = 0; taskStopReason = null; promiseNudge = 0; LOOP = newLoop();
+    /* ★ 首轮：从这一轮任务的原文里取出"要找到的目标"★ */
+    targetChecked = false;
+    try { TASK_TARGET = extractTarget((lastUserText || "")); } catch (e) { TASK_TARGET = null; }
+    if (TASK_TARGET) addSys("🎯 这一轮的目标词是「" + TASK_TARGET + "」—— 收尾时我必须交代它找到了没有 ✓");
+  }
   if (LOOP) {
     const d = LOOP.beforeStep({ tool: action.tool });
     if (d.kind === 'stop') {
@@ -940,6 +968,34 @@ async function runTask(msgEl, action, depth) {
           speak(nn.en);
         }
       } catch {}
+    }
+    /* ★★★ 铁律 3 的程序强制：收尾必须交代"用户要的那个东西"★★★
+       ★只催一次★（targetChecked ✓）—— 误判可以接受，把她卡死不行 ✗ */
+    const _said = String(next.zh || "") + " " + String(next.en || "");
+    if (TASK_TARGET && !targetChecked && !targetAddressed(_said)) {
+      targetChecked = true;
+      addSys("🎯 停一下 —— 主人要的是「" + TASK_TARGET + "」，"
+        + "但你这条收尾里**既没提到它、也没说没找到** ✗。\n"
+        + "★请明确回答一句：找到了还是没找到？★"
+        + "（如果没找到，就说清试过什么、需要主人做什么 ✓ —— 这是允许的，比含糊过去好得多 ✓）");
+      try {
+        const _nn = await window.petAPI.chatContinue({
+          tool: "screen_look", arg: "（收尾核对）",
+          result: "🎯 主人这一轮要你找的是「" + TASK_TARGET + "」。你上一条收尾里"
+            + "既没有提到它、也没有说没找到 ✗。请**明确回答**："
+            + "① 找到了就说它在哪；② 没找到就直说\"我没找到 " + TASK_TARGET + "\"，"
+            + "并说清试过哪几种办法、需要主人做什么。★不要用别的观察来含糊过去 ✗★",
+        });
+        if (_nn && _nn.en) {
+          const _ne = addPet(_nn.en, _nn.zh, _nn.words);
+          renderChoices(_nn.choices);
+          if (_nn.action) { renderAction(_ne, _nn.action, () => runTask(_ne, _nn.action, depth + 1), () => {}); return; }
+          speak(_nn.en);
+          if (LOOP) taskStopReason = LOOP.finish("completed").reason;
+          reportTask();
+          return;
+        }
+      } catch (e) {}
     }
     if (LOOP) taskStopReason = LOOP.finish('completed').reason;
     speak(next.en);   // 最后一句才朗读
@@ -1041,6 +1097,7 @@ $('trInput').addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ct
 
 /* ---------------- 对话 ---------------- */
 async function send(text, opts) {
+  try { lastUserText = String(text || ""); } catch (e) {}
   text = String(text || '').trim();
   if (!text || busy) return;
   busy = true;

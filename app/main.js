@@ -426,6 +426,8 @@ function relayToChat(msg) {
 }
 
 ipcMain.handle('chat:log:all', () => chatlog.all(sessionId()));
+/* ★ 工具使用统计（只读）★ —— 不进她的提示词、她不会感知到 ✓ */
+ipcMain.handle('toolstat:summary', () => { try { return require('./src/toolstat').summary(); } catch (e) { return { error: String(e && e.message) }; } });
 
 function createChat() {
   if (chatWin && !chatWin.isDestroyed()) { chatWin.show(); chatWin.restore(); chatWin.focus(); return; }
@@ -1586,6 +1588,7 @@ let chatTaskHideTimer = null;
     'screen_diff', 'uia_find', 'uia_dump', 'match_template', 'skill_write', 'proj_run', 'web_open', 'web_read']);
   const wantStep = STEP_TOOLS.includes(stepTool);
   if (wantStep) {
+    try { require('./src/toolstat').note(stepTool, 'running'); } catch (e) {}
     relayToChat({ who: 'step', id: stepId, status: 'running', tool: stepTool, arg: stepArg });
     chatlog.add(sessionId(), { who: 'step', id: stepId, status: 'running', tool: stepTool, arg: stepArg, at: Date.now() });
   }
@@ -1601,6 +1604,7 @@ let chatTaskHideTimer = null;
       if (failed) note = String(txt).replace(/\s+/g, ' ').slice(0, 90);
       /* 结果里常带"已把窗口置到前台并通过回读校验"这种话，取第一句当备注更清楚 */
       else if (String(txt).trim()) note = String(txt).replace(/\s+/g, ' ').split(/[\n。]/)[0].slice(0, 70);
+      try { const _ts = require('./src/toolstat'); _ts.note(stepTool, failed ? 'fail' : 'ok'); _ts.noteMs(ms); } catch (e) {}
       relayToChat({ who: 'step', id: stepId, status: failed ? 'fail' : 'ok', tool: stepTool, arg: stepArg, ms, note });
       chatlog.add(sessionId(), { who: 'step', id: stepId, status: failed ? 'fail' : 'ok', tool: stepTool, arg: stepArg, ms, note, at: Date.now() });
     }
@@ -1879,6 +1883,15 @@ try {
     },
   });
 } catch (e) { dbg('[remind] 装上失败：' + (e && e.message)); }
+/* ★ 工具使用统计（纯记录）★
+   ★用户特别强调的约束★：不能妨碍她"总结情感"那套 ✓ —— 所以：
+     ① 绝不调用模型 ✗ ② 绝不写进她的对话/提示词 ✗ ③ 绝不碰 stats.json / skillmem.json ✗
+   它只读**步骤流水里已经在发生的事件** ✓，把"数工具使用"变成自动的事 ✓
+   （实测：她 58 个工具只用过 9 个 —— 那还是我手工翻 chatlog 数出来的 ✓）
+   见 src/toolstat.js 开头那段说明。 */
+try {
+  require('./src/toolstat').init({ file: require('path').join(app.getPath('userData'), 'toolstat.json') });
+} catch (e) { dbg('[toolstat] 装上失败：' + (e && e.message)); }
 try { require('./src/intercom').install({ chatWin: () => chatWin, createChat, dbg }); } catch (e) { dbg('[intercom] install failed ' + e); }
 
     memory.onAppStart().catch((e) => dbg('[memory] onAppStart err ' + e));
