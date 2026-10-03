@@ -243,6 +243,7 @@ const TOOL_DEFS = [
   { name: 'shell_run', tier: 'full', needsArg: true, timeoutMs: 300000, desc: '在【常驻】PowerShell 会话里跑一条命令。★和 proj_run 的区别：cd、环境变量、会话变量全都保留★，所以"进目录→装依赖→编译→看报错→改"可以连续做。参数就是命令本身（中文/多行都行，走 base64 通道不会乱码）。超时会明确告诉你"没跑完"而不是假装成功。' },
   { name: 'shell_status', tier: 'read', needsArg: false, timeoutMs: 10000, desc: '看常驻 shell 会话的状态：还活着吗、现在在哪个目录、上一条命令跑完多久了。' },
   { name: 'shell_close', tier: 'read', needsArg: false, timeoutMs: 10000, desc: '关掉常驻 shell 会话（会丢掉 cwd 和会话变量）。★一般不用手动关，空闲 10 分钟会自动回收★。' },
+  { name: 'check_code', tier: 'read', needsArg: true, timeoutMs: 200000, desc: '★改完代码后先检查这一个文件★：JS 走 node --check（语法）、TS 走 npx tsc --noEmit（类型，需 tsconfig）、Python 走 py_compile、JSON 直接解析。★参数是文件路径★。注意它**只查这一个文件**，语法过了不等于整个项目能跑（那要用 shell_run 跑项目的 lint/test）。检查器不存在时会明说"检查不了"，不会假报通过。' },
   { name: 'sys_info', tier: 'read', needsArg: false, timeoutMs: 20000, desc: '查这台电脑的系统信息：内存 / CPU / 开机时长 / 电池 / 磁盘剩余 / 网络。参数可选，写 battery、disk、net、mem 就只查那一项（★快得多★：全量约 3.7 秒，单项几百毫秒）。★主人问"还剩多少电""C 盘还有空间吗"时用它，别去截图里 OCR 那些小字★。' },
   { name: 'remind_in', tier: 'normal', needsArg: true, timeoutMs: 10000, desc: '★设置一个提醒★ —— 过 N 分钟后提醒主人做某件事。参数 <分钟>|<要提醒的内容>，例：remind_in|30|去喝水。' },
   { name: 'remind_at', tier: 'normal', needsArg: true, timeoutMs: 10000, desc: '★设置一个定时提醒★（今天的某个钟点；已经过了就是明天）。参数 <HH:MM>|<内容>，例：remind_at|14:30|开会。' },

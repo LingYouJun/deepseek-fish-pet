@@ -814,6 +814,17 @@ async function runInner(tool, arg) {
     if (!r.ok) return '⏰ ' + r.error;
     return '⏰ 记下了：' + fmt(r.item.at) + ' 提醒你「' + r.item.text + '」（编号 ' + r.item.id + '，可以用 remind_cancel|' + r.item.id + ' 取消）';
   }
+  if (tool === 'check_code') {
+    /* ★ 代码检查（C2）★ —— 不装 LSP，走语言自带的检查器（见 src/checkcode.js）
+       写程序时最卡人的一步就是"我改完这个文件它还能跑吗"，这里给出确定答案 ✓ */
+    const cc = require('./checkcode');
+    const f = String(arg == null ? '' : arg).trim();
+    if (!f) return '用法：check_code|<文件路径>';
+    const r = cc.check(f);
+    return (r.ok ? '✅ ' : '❌ ') + r.kind + '　' + (r.ms || 0) + 'ms\n'
+      + (r.note ? (r.note + '\n') : '')
+      + (r.error ? ('--- 问题 ---\n' + String(r.error).slice(0, 1500)) : '');
+  }
   if (tool === 'read_file') {
     /* 只读前 3000 字。以前是 readFileSync 整读再 slice——模型给个大文件路径
        （C:\Windows\Logs\CBS\CBS.log、视频、hiberfil.sys）主进程就同步卡死+内存暴涨，
