@@ -213,59 +213,91 @@ const TOOL_DEFS = [
   { name: 'template_list', tier: 'read', needsArg: false, timeoutMs: 10000, desc: '列出已有模板' },
   { name: 'template_del', tier: 'normal', needsArg: true, timeoutMs: 10000, desc: '删掉一个模板' },
   /* 键鼠 */
-  { name: 'click', tier: 'full', needsArg: true, timeoutMs: 15000 },
-  { name: 'rclick', tier: 'full', needsArg: true, timeoutMs: 15000 },
-  { name: 'dclick', tier: 'full', needsArg: true, timeoutMs: 15000 },
+  { name: 'click', tier: 'full', needsArg: true, timeoutMs: 15000, desc: '在屏幕坐标点一下左键。参数 <x>,<y>（整屏像素，左上原点）。★要按按钮/控件时优先用 uia_find 拿精确坐标再点，比看图猜准得多★。执行前后有安全断言（目标是否被遮挡、前台对不对）。' },
+  { name: 'rclick', tier: 'full', needsArg: true, timeoutMs: 15000, desc: '在屏幕坐标点一下右键（弹出上下文菜单）。参数 <x>,<y>。' },
+  { name: 'dclick', tier: 'full', needsArg: true, timeoutMs: 15000, desc: '在屏幕坐标双击左键（打开文件/进目录常用）。参数 <x>,<y>。' },
   { name: 'clickz', tier: 'full', needsArg: true, timeoutMs: 30000, desc: '放大后精确点击' },
   { name: 'rclickz', tier: 'full', needsArg: true, timeoutMs: 30000, desc: '放大后精确右键' },
   { name: 'dclickz', tier: 'full', needsArg: true, timeoutMs: 30000, desc: '放大后精确双击' },
-  { name: 'move', tier: 'full', needsArg: true, timeoutMs: 15000 },
+  { name: 'move', tier: 'full', needsArg: true, timeoutMs: 15000, desc: '把光标移到 <x>,<y>，不点击。用来悬停看 tooltip，或试探某位置能不能到。' },
   { name: 'movez', tier: 'full', needsArg: true, timeoutMs: 30000, desc: '放大后精确移动' },
-  { name: 'drag', tier: 'full', needsArg: true, timeoutMs: 25000 },
-  { name: 'scroll', tier: 'full', needsArg: true, timeoutMs: 15000 },
-  { name: 'key', tier: 'full', needsArg: true, timeoutMs: 15000 },
-  { name: 'type', tier: 'full', needsArg: true, timeoutMs: 60000 },
+  { name: 'drag', tier: 'full', needsArg: true, timeoutMs: 25000, desc: '从 <x1>,<y1> 拖到 <x2>,<y2>（按住左键移动后松开）。★拖完要用 screen_look 确认结果变了没有★。' },
+  { name: 'scroll', tier: 'full', needsArg: true, timeoutMs: 15000, desc: '在某点滚轮。参数 <x>,<y>,<方向>，方向写 up 或 down，可带次数如 scroll|960,540|down|5。★别用正负号★。' },
+  { name: 'key', tier: 'full', needsArg: true, timeoutMs: 15000, desc: '按一个键。参数是键名：enter / esc / tab / space / backspace / delete / up / down / left / right / home / end / pageup / pagedown / f1~f12；组合键用 + 连（如 ctrl+c、alt+tab）。★键盘只发给前台窗口 —— 目标不在前台就先 focus_window；UWP 应用抢不到前台时改用 click★。' },
+  { name: 'type', tier: 'full', needsArg: true, timeoutMs: 60000, desc: '输入一段文字（按字符发，不受键盘布局影响，中文和符号都能打）。参数是文本。★只发给前台窗口。要回车请另外用 key|enter★。' },
   /* 流程（确定性回放） */
   { name: 'flow_run', tier: 'full', needsArg: true, timeoutMs: 300000, desc: '跑一个确定性流程' },
-  { name: 'flow_save', tier: 'full', needsArg: true, timeoutMs: 10000 },
-  { name: 'flow_list', tier: 'read', needsArg: false, timeoutMs: 10000 },
-  { name: 'flow_del', tier: 'full', needsArg: true, timeoutMs: 10000 },
+  { name: 'flow_save', tier: 'full', needsArg: true, timeoutMs: 10000, desc: '把刚跑通的一串动作存成命名流程，以后能一键重放。参数 <名字>。★重复性任务（每日签到之类）值得存★。' },
+  { name: 'flow_list', tier: 'read', needsArg: false, timeoutMs: 10000, desc: '列出已保存的确定性流程。' },
+  { name: 'flow_del', tier: 'full', needsArg: true, timeoutMs: 10000, desc: '删掉一个已保存的流程。参数 <名字>。' },
   /* 文件（tier 照老表） */
-  { name: 'read_file', tier: 'read', needsArg: true, timeoutMs: 30000 },
-  { name: 'write_file', tier: 'full', needsArg: true, timeoutMs: 30000 },
-  { name: 'list_dir', tier: 'read', needsArg: true, timeoutMs: 20000 },
-  { name: 'run_file', tier: 'full', needsArg: true, timeoutMs: 120000 },
+  { name: 'read_file', tier: 'read', needsArg: true, timeoutMs: 30000, desc: '读一个文本文件的内容（大文件会截断）。参数是路径。★改文件之前先读，别凭记忆改★。' },
+  { name: 'write_file', tier: 'full', needsArg: true, timeoutMs: 30000, desc: '写入/覆盖一个文本文件。参数 <路径>||<内容>（注意是**两个竖线**分隔）。★会覆盖原文件 —— 改之前先 read_file 看清★。主人指定别的目录时用它，别用 proj_write。' },
+  { name: 'list_dir', tier: 'read', needsArg: true, timeoutMs: 20000, desc: '列出一个目录下的文件和子目录。参数是路径。★想知道某个目录里有什么时用它★。' },
+  { name: 'run_file', tier: 'full', needsArg: true, timeoutMs: 120000, desc: '用默认程序打开/运行一个文件（按扩展名交给对应程序）。参数是绝对路径。' },
   { name: 'open_path', tier: 'normal', needsArg: true, timeoutMs: 20000, desc: '用默认程序打开一个路径' },
   { name: 'open_url', tier: 'normal', needsArg: true, timeoutMs: 20000, desc: '用浏览器打开一个网址' },
-  { name: 'proj_read', tier: 'read', needsArg: true, timeoutMs: 20000 },
-  { name: 'proj_write', tier: 'normal', needsArg: true, timeoutMs: 20000 },
-  { name: 'proj_ls', tier: 'read', needsArg: false, timeoutMs: 10000 },
-  { name: 'proj_run', tier: 'normal', needsArg: true, timeoutMs: 120000 },
-  { name: 'proj_rm', tier: 'normal', needsArg: true, timeoutMs: 10000 },
-  { name: 'proj_open', tier: 'normal', needsArg: true, timeoutMs: 20000 },
+  { name: 'proj_read', tier: 'read', needsArg: true, timeoutMs: 20000, desc: '读项目脚本（她自己的脚本目录）。参数 <文件名>。' },
+  { name: 'proj_write', tier: 'normal', needsArg: true, timeoutMs: 20000, desc: '写入/覆盖一个项目脚本。参数 <文件名>||<内容>。★写小工具给自己用就放这里★。' },
+  { name: 'proj_ls', tier: 'read', needsArg: false, timeoutMs: 10000, desc: '列出项目脚本目录里有哪些脚本。' },
+  { name: 'proj_run', tier: 'normal', needsArg: true, timeoutMs: 120000, desc: '跑一个项目脚本并拿到输出。参数 <文件名> [参数…]。★这是她执行自己写的代码的地方；★一次性执行，进程不保留★——要连续会话请分步做★。' },
+  { name: 'proj_rm', tier: 'normal', needsArg: true, timeoutMs: 10000, desc: '删掉一个项目脚本。参数 <文件名>。' },
+  { name: 'proj_open', tier: 'normal', needsArg: true, timeoutMs: 20000, desc: '用默认编辑器打开一个项目脚本，方便主人自己看/改。参数 <文件名>。' },
   /* 技能 */
-  { name: 'use_skill', tier: 'read', needsArg: true, timeoutMs: 20000 },
-  { name: 'skill_read', tier: 'read', needsArg: true, timeoutMs: 20000 },
-  { name: 'skill_ls', tier: 'read', needsArg: false, timeoutMs: 10000 },
-  { name: 'skill_write', tier: 'normal', needsArg: true, timeoutMs: 30000 },
-  { name: 'skill_rm', tier: 'normal', needsArg: true, timeoutMs: 10000 },
+  { name: 'use_skill', tier: 'read', needsArg: true, timeoutMs: 20000, desc: '★按名字加载一个技能的完整说明书到上下文★。参数 <技能名>。★★做事之前先 use_skill 看有没有现成的套路，比瞎试快得多★。' },
+  { name: 'skill_read', tier: 'read', needsArg: true, timeoutMs: 20000, desc: '读一个技能文件的内容（只看，不加载进上下文）。参数 <路径>。' },
+  { name: 'skill_ls', tier: 'read', needsArg: false, timeoutMs: 10000, desc: '列出已有的技能（名字 + 一句话说明）。★不确定有没有相关技能时先列一遍★。' },
+  { name: 'skill_write', tier: 'normal', needsArg: true, timeoutMs: 30000, desc: '写入/更新一个技能文件，把学到的套路固化下来。参数 <路径>||<内容>。★一次任务成功后值得沉淀成技能，下次直接 use_skill★。' },
+  { name: 'skill_rm', tier: 'normal', needsArg: true, timeoutMs: 10000, desc: '删掉一个技能。参数 <名字>。' },
   /* 人格词条 */
-  { name: 'tag_list', tier: 'read', needsArg: false, timeoutMs: 10000 },
-  { name: 'tag_set', tier: 'normal', needsArg: true, timeoutMs: 10000 },
-  { name: 'tag_rm', tier: 'normal', needsArg: true, timeoutMs: 10000 },
+  { name: 'tag_list', tier: 'read', needsArg: false, timeoutMs: 10000, desc: '列出人格词条（性格/口头禅这类可调的小设定）。' },
+  { name: 'tag_set', tier: 'normal', needsArg: true, timeoutMs: 10000, desc: '设置一个人格词条。参数 <键>||<值>。' },
+  { name: 'tag_rm', tier: 'normal', needsArg: true, timeoutMs: 10000, desc: '删掉一个人格词条。参数 <键>。' },
   /* 网页（老表是 web） */
-  { name: 'web_open', tier: 'web', needsArg: true, timeoutMs: 60000 },
-  { name: 'web_read', tier: 'web', needsArg: false, timeoutMs: 60000 },
-  { name: 'web_click', tier: 'web', needsArg: true, timeoutMs: 30000 },
-  { name: 'web_type', tier: 'web', needsArg: true, timeoutMs: 30000 },
+  { name: 'web_open', tier: 'web', needsArg: true, timeoutMs: 60000, desc: '在内置浏览器窗口打开一个网址，之后可以用 web_read / web_click 操作它。参数是 URL。★比"开系统浏览器再截屏操作"可靠得多，因为它能直接读页面内容★。' },
+  { name: 'web_read', tier: 'web', needsArg: false, timeoutMs: 60000, desc: '读当前内置浏览器页面的文本内容。★查资料优先用它，而不是 screen_look 看浏览器画面★。' },
+  { name: 'web_click', tier: 'web', needsArg: true, timeoutMs: 30000, desc: '点击内置浏览器页面里的元素。参数 <CSS 选择器 或 元素文字>。' },
+  { name: 'web_type', tier: 'web', needsArg: true, timeoutMs: 30000, desc: '在内置浏览器页面的输入框里输入文字（可带回车）。参数 <CSS 选择器>||<文字>。' },
   /* 窗口（老表 full） */
-  { name: 'focus_window', tier: 'full', needsArg: true, timeoutMs: 25000 },
-  { name: 'windows_list', tier: 'full', needsArg: false, timeoutMs: 25000 },
+  { name: 'focus_window', tier: 'full', needsArg: true, timeoutMs: 25000, desc: '把某个窗口置到前台。参数是窗口标题片段，如 focus_window|计算器。★键盘输入要生效就必须先置前台★。★它会在同名窗口里自动挑真正显示着的那个；UWP 应用可能回"显示出来了但抢不到前台"——那是部分成功，接着用 click 点它，别用键盘；若一直托不出来，先 kill_app 清僵尸实例★。' },
+  { name: 'windows_list', tier: 'full', needsArg: false, timeoutMs: 25000, desc: '列出当前所有窗口（含最小化/隐藏的），并标出哪些是"隐藏窗口、不在屏幕上、不算遮挡"。★不知道目标窗口叫什么、或怀疑窗口托不出来时先用它★。' },
   /* 游戏托管（老表 game_stop/game_status 是 read） */
-  { name: 'game_start', tier: 'full', needsArg: true, timeoutMs: 300000 },
-  { name: 'game_stop', tier: 'read', needsArg: false, timeoutMs: 30000 },
-  { name: 'game_status', tier: 'read', needsArg: false, timeoutMs: 15000 },
+  { name: 'game_start', tier: 'full', needsArg: true, timeoutMs: 300000, desc: '★启动游戏托管助手：它会持续盯屏 + 自己决策 + 操作，替主人打一段游戏★。参数是任务描述，如 game_start|帮我打这次活动图。★启动时桌宠会自动收起，结束时放回来★。' },
+  { name: 'game_stop', tier: 'read', needsArg: false, timeoutMs: 30000, desc: '停止游戏托管助手，把桌宠放回屏幕。' },
+  { name: 'game_status', tier: 'read', needsArg: false, timeoutMs: 15000, desc: '查看游戏托管助手现在在干什么（是否在跑、跑了多久、最近的动作）。' },
 ];
+
+/* ★★★ 权限档排序 + 从注册表动态生成【给模型看的工具清单】★★★
+   2026-10-03 补完最后一张手写表。本文件开头的注释早就写了这件事：
+     "工具的元信息散在**三张手写表**里：TOOL_TIER、NOARG、★以及给模型看的工具清单字符串★"
+   前两张当时已经迁进注册表了，**第三张一直没迁** —— 后果今天被数据抓了个正着：
+     · registry 里有 58 个工具（名字/权限/参数/超时/说明都全）
+     · main.js 的 buildContinuePrompt 却手写了一份 39 个的字符串，
+       ★漏掉了 uia_find / uia_dump / find_text / screen_diff / kill_app / flow_* /
+         clickz / movez / watch_screen 等一大堆★ —— 其中 uia_find 恰恰是实测最好用的那个
+     · assistant.js 给视觉模型的清单更窄，只有 move_norm / find_text / find_template 三个
+   结果：**统计她 57 条动作记录，58 个工具她只碰过 9 个** ✗。
+   那不是模型笨，是**没人告诉她有这些东西**。
+   → 所以清单必须从注册表生成：以后加一个工具只改 TOOL_DEFS 一行，
+     权限档、参数要求、超时、给模型的说明**四处同时生效**，不会再各说各话。 */
+const RANK = { off: 0, read: 1, normal: 2, web: 3, full: 4 };
+
+/* 生成某权限档下、给模型看的工具清单（一行一个工具） */
+function buildToolList(tier, opts) {
+  const o = opts || {};
+  const limit = RANK[o.rank !== undefined ? o.rank : tier];
+  if (limit === undefined) return '';
+  const lines = [];
+  for (const d of TOOL_DEFS) {
+    const t = d.tier === 'web' ? 'web' : d.tier;             /* web 档只对 web/full 开 */
+    const need = RANK[t];
+    if (need === undefined || limit < need) continue;
+    if (o.only && !o.only.test(d.name)) continue;
+    if (o.skip && o.skip.test(d.name)) continue;
+    lines.push('- ' + d.name + (d.needsArg ? '|<参数>' : '') + '  ' + (d.desc || ''));
+  }
+  return lines.join('\n');
+}
 
 /* 建一个已经装好全部工具定义的注册表 */
 function withTools(base) {
@@ -274,4 +306,4 @@ function withTools(base) {
   return reg;
 }
 
-module.exports = { create, withTools, TOOL_DEFS };
+module.exports = { create, withTools, TOOL_DEFS, RANK, buildToolList };

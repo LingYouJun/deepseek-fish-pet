@@ -120,13 +120,36 @@ public class FW2 {
     }, IntPtr.Zero);
   }
 
+  /* ★★★ 成功返回前的统一收尾：补一次显示 + 回读可见性 ★★★
+     2026-10-03 抓到的铁证（对一个**本来可见**的 Windows 计算器窗口调 Focus）：
+       调用前  hwnd=196736 visible=是      ← 窗口本来是好好显示着的
+       返回    "OK step1 show5,"           ← 它报告成功了
+       调用后  hwnd=196736 ★visible=否★    ← ★这套操作反而把它弄成不可见了★
+     于是她读到"已置前台/回读确认"、截图上却只有壁纸，只能一次次重试然后放弃 ✗。
+     根因是原代码只看 Fg() == Hit 就 return —— **Windows 允许把一个隐藏窗口设成"前台"**，
+     所以 Fg()==Hit 根本不能证明"看得见" ✗。
+     ⚠️ 注意：这段 C# 是写在 JS 模板串里的，**注释里绝对不能出现反引号** ——
+        今天早些时候就因为这个把模板串提前结束过（编译报 SyntaxError），刚又踩了一次。
+     → 所有成功路径都必须经过这里：先补一次 SW_SHOW，再回读 IsWindowVisible；
+       看不见就降级成 step-showonly（部分成功 + 明确指引），绝不谎报成功。 */
+  static string Finish(string tag, string tried) {
+    ShowWindow(Hit, 5);                              /* SW_SHOW：补一次显示 */
+    if (!IsWindowVisible(Hit)) {
+      return "OK step-showonly fg-is=" + TitleOf(Fg()) + " tried=" + tried + ",finish-hidden"
+        + " || 置前动作执行完了，但回读发现这个窗口**不可见**（visible=否）——UWP 应用常见，不是你的错。"
+        + "接下来**用 click 直接点它的按钮**（点击不需要它在前台），别用键盘；"
+        + "如果它一直不可见，先用 kill_app|<进程名> 清掉僵尸实例，再重新打开它。";
+    }
+    return "OK " + tag + " " + tried;
+  }
+
   /* 真·置前台：分层尝试，每步回读校验 */
   public static string Focus() {
     if (Hit == IntPtr.Zero) return "NOTFOUND";
     string tried = "";
     if (IsIconic(Hit)) { ShowWindow(Hit, 9); tried += "restore1,"; }   /* SW_RESTORE */
     ShowWindow(Hit, 5); tried += "show5,";                             /* SW_SHOW */
-    if (SetForegroundWindow(Hit) && Fg() == Hit) return "OK step1 " + tried;
+    if (SetForegroundWindow(Hit) && Fg() == Hit) return Finish("step1", tried);
     /* Unlock: tap a modifier key. Windows only lets the foreground process set the
        foreground; injecting one real user input releases that lock.
        ★ 用 Shift(0x10) 而不是 Alt(0x12) ★
@@ -136,7 +159,7 @@ public class FW2 {
        Shift 同样被 Windows 算作"真实用户输入"，但不触发任何菜单，没有副作用。 */
     keybd_event(0x10, 0, 0, IntPtr.Zero);
     keybd_event(0x10, 0, 2, IntPtr.Zero);
-    if (SetForegroundWindow(Hit) && Fg() == Hit) return "OK step2-shift " + tried;
+    if (SetForegroundWindow(Hit) && Fg() == Hit) return Finish("step2-shift", tried);
     /* 万一还是被菜单之类的挡了，补一下 ESC 收尾（只关菜单，不动前台） */
     SendEsc();
     /* Attach to the current foreground thread's input queue (classic trick). */
@@ -147,12 +170,12 @@ public class FW2 {
     BringWindowToTop(Hit);
     bool ok3 = SetForegroundWindow(Hit);
     AttachThreadInput(tidFg, tidMe, false);
-    if (ok3 && Fg() == Hit) return "OK step3-attach " + tried;
+    if (ok3 && Fg() == Hit) return Finish("step3-attach", tried);
     /* Last resort: minimize then restore to force a z-order change, then set again. */
     ShowWindow(Hit, 6);                                                /* SW_MINIMIZE */
     ShowWindow(Hit, 9);                                                /* SW_RESTORE */
     SetForegroundWindow(Hit);
-    if (Fg() == Hit) return "OK step4-minimize " + tried;
+    if (Fg() == Hit) return Finish("step4-minimize", tried);
     /* ★★★ 抢不到前台 ≠ 失败（2026-10-03 实测，针对 UWP 应用）★★★
        现场：Windows 计算器被"隐藏"（visible=否 iconic=否）之后，
          ShowWindow(SW_SHOW) 能把它**显示出来**（实测 visible 立刻变 True ✓），

@@ -175,7 +175,7 @@ function buildSystemPrompt(cfg) {
     if (tier === 'full') {
       tools += '- screen_shot  (capture the user\'s screen and read any text on it — use this to "see" what is on screen before helping)\n';
       tools += '- screen_look|<question>||x,y,w,h (ZOOM: crop that screen region and blow it up - use it whenever small text or small buttons are hard to read; the coordinates you output are still full-screen 1920x1080)   - screen_look|<question>  (send a screenshot to a vision model to actually see the layout/buttons/icons and get coordinates; falls back to reading text if no vision model is configured)\n';
-      tools += '- click|x,y  (left-click; x,y are pixels in the 1280x720 screenshot, 0,0 = top-left)\n- rclick|x,y  (right-click)\n- dclick|x,y  (double-click)\n- move|x,y  (move mouse without clicking)\n- drag|x1,y1|x2,y2  (hold left button and drag from point 1 to point 2)\n- clickz|x,y  (ONLY after a zoomed screen_look: x,y are coordinates INSIDE that zoomed image)   - scroll|x,y|down  OR  scroll|x,y|down|5  OR  scroll|x,y|-600  (scroll wheel at that position; **prefer the word form**: up/down plus optional notches, default 5 notches. The raw number form follows the Windows convention where POSITIVE = UP, which is the opposite of how scrollTop works in a web page. Wheel events only reach the window under the cursor / with focus — if nothing moves, the target may be covered (including by your own pet window) or unfocused; click its blank area first, then scroll again.)\n- type|<text>  (type text into the currently focused field)\n- key|<name>  (press a key: enter / esc / tab / space / backspace / delete / up / down / left / right / home / end / f1..f12 / ctrl+c etc.)\n';
+      tools += '- click|x,y  (left-click; x,y are pixels in the ' + (function(){ try { const s = require('./src/input').space(); return s.w + 'x' + s.h; } catch (e) { return '1920x1080'; } })() + ' screen capture, 0,0 = top-left)\n- rclick|x,y  (right-click)\n- dclick|x,y  (double-click)\n- move|x,y  (move mouse without clicking)\n- drag|x1,y1|x2,y2  (hold left button and drag from point 1 to point 2)\n- clickz|x,y  (ONLY after a zoomed screen_look: x,y are coordinates INSIDE that zoomed image)   - scroll|x,y|down  OR  scroll|x,y|down|5  OR  scroll|x,y|-600  (scroll wheel at that position; **prefer the word form**: up/down plus optional notches, default 5 notches. The raw number form follows the Windows convention where POSITIVE = UP, which is the opposite of how scrollTop works in a web page. Wheel events only reach the window under the cursor / with focus — if nothing moves, the target may be covered (including by your own pet window) or unfocused; click its blank area first, then scroll again.)\n- type|<text>  (type text into the currently focused field)\n- key|<name>  (press a key: enter / esc / tab / space / backspace / delete / up / down / left / right / home / end / f1..f12 / ctrl+c etc.)\n';
       tools += '- game_start|<game name + goal + strategy>  (ONLY when the user explicitly asks you to play a game for them — start the game assistant; it watches the screen and plays. Append ||<maxSteps> to cap steps. Read the play-game skill first.)\n- game_stop  (stop the game assistant immediately)\n- game_status  (check whether it is still playing)\n';
       /* ★ 三个"确定性优先"的工具：能不让模型猜就不让模型猜 ★
          · screen_diff：做完动作客观确认界面变没变（像素比对，不会说谎）
@@ -183,6 +183,35 @@ function buildSystemPrompt(cfg) {
       tools += '- screen_diff|<秒数>  (grab two frames N seconds apart and compare them PIXEL BY PIXEL: tells you whether the UI actually changed and where. Use it after every action instead of asking "did it change?" — the vision model has lied about this before. If it says nothing changed, CHANGE YOUR APPROACH; never repeat the same action.)\n';
       tools += '- uia_find|<窗口标题片段>|<控件名字或AutomationId>  (UI Automation: ask the app itself for a control and get its EXACT rectangle/centre. Works for normal apps (Explorer, Settings, browsers, Electron apps) — the coordinates are reported by the app, not guessed, so no OCR/vision error. Try this BEFORE screen_look on non-game windows.)   - uia_dump|<窗口标题片段>  (list all controls of that window with their coordinates, to see what is available)\n';
     }
+    /* ★★★ 自动补全：注册表里有、但上面手写清单**没提到**的工具 ★★★
+       为什么要有这一层（2026-10-03 实测的教训）：
+         上面这段手写清单写得很细（英文说明比注册表里的还丰富），是精华，必须保留；
+         但它**会漏**：当天统计发现她的 57 条动作记录里，58 个工具**只碰过 9 个** ✗。
+         根因之一就是**手写清单跟 registry.js 脱节** —— 注册表里明明有的工具，
+         提示词里一个字都没提，模型自然永远不会选它（她连 uia_find 都没用过）。
+       所以：**手写详细说明保留（精华）＋ 注册表自动补全（保证没有隐形工具）**。
+       这样既不会丢质量，也不可能再出现"有工具但没人知道"的情况。
+       以后加工具只改 TOOL_DEFS 一行 —— 这个兜底会自动把它列出来。 */
+    try {
+      const { buildToolList } = require('./src/registry');
+      const mentioned = new Set();
+      /* ⚠️ 正则要能吃下**一行多个工具**的紧凑写法（手写清单就是那样：
+         `- open_url|...   - open_path|...   - windows_list  (list...)`）——
+         第一版用了 `/(?:^|\n)-\s+(\w+)/`，只认出 12 个，
+         于是 find_template / read_file / open_url 这些**明明写了**的又被补了一遍（重复）✗。
+         改成"任意位置的 `- 标识符`"就都认出来了。 */
+      const re = /-\s*([a-z_][a-z0-9_]*)/g;
+      let mm;
+      while ((mm = re.exec(tools))) mentioned.add(mm[1]);
+      const rest = buildToolList(tier).split('\n').filter((line) => {
+        const m = line.match(/^-\s+([a-z_][a-z0-9_]*)/);
+        return m && !mentioned.has(m[1]);
+      });
+      if (rest.length) {
+        tools += '\n# 其它可用工具（注册表自动补全 —— 上面没提到的都在这里，别以为没有）\n'
+          + rest.join('\n') + '\n';
+      }
+    } catch (e) { /* 补全失败绝不影响主流程 */ }
     const auto = (tier === 'full') ? 'You are fully trusted: your actions run automatically without asking each time.' : 'The user must approve before it runs.';
     actionSec = '\n# Computer actions (AI assistant)\nYou may request ONE computer action per reply by adding a final line to your reply:\nACTION: <tool>|<argument>\nTools:\n' + tools + 'Only add the ACTION line when the user explicitly asks you to do something on their computer. ' + auto + ' Otherwise omit the line entirely.\nYou can do a multi-step task: give ONE action per reply; the system runs it, shows you the result, and asks you to continue until the task is done.\n';
   }
@@ -1659,13 +1688,25 @@ function restoreOwnWindows(list) {
 function buildContinuePrompt(cfg) {
   const p = loadPersona();
   const tier = cfg.assistant || 'off';
-  let tools = '- open_url|https://...   - open_path|C:\\...   - list_dir|C:\\...   - read_file|C:\\...   - focus_window|<标题片段>（把窗口抬到最前）   - windows_list（列出可见窗口的标题+位置尺寸）   - make_template|<名字>|<x,y,w,h>（把屏幕上那块存成模板）   - find_template|<名字>（**模板匹配：精确返回它在当前屏幕上的像素位置** —— 小按钮/图标就用它，别自己估坐标）   - template_list   - run_file|C:\\abs\\path（跑绝对路径的脚本）   - write_file|C:\\abs\\path||<content>（绝对路径写入；主人指定目录时用它，别用 proj_write）   - use_skill|<skill id>\n';
-  tools += '- skill_ls|<path>   - skill_read|<path>   - skill_write|<path>||<text>   - skill_rm|<path>\n';
-  tools += '- proj_ls|<path>   - proj_read|<path>   - proj_rm|<path>   - proj_open|<path>   - proj_run|<path>   - proj_write|<path>||<content>\n';
-    tools += 'DRIFT in the continue prompt: dense UIs give slightly different coords for the same button each look. If a click changes nothing, do NOT repeat the same coordinate - try ~30-60px around it, or zoom in with screen_look|<question>||x,y,w,h first. **Do not give up early** (the user asked for this): keep trying DIFFERENT approaches up to 4-5 times (shifted coords, zoomed look, go back a level and re-enter, another entry point). Only after several different approaches failed, report honestly what you tried.\n';
+  /* ★★★ 工具清单改为【从能力注册表动态生成】——补完最后一张手写表 ★★★
+     原来这里是一长串手写的工具名，跟 src/registry.js 的 TOOL_DEFS **脱节**：
+       registry 里 58 个工具（名字/权限/参数/超时/说明都全），这里手写了 39 个，
+       ★漏掉了 uia_find / uia_dump / find_text / screen_diff / kill_app / flow_* /
+         clickz / movez / watch_screen…★ —— 其中 uia_find 恰恰是实测最好用的那个
+       （非游戏应用按控件名精确拿坐标，零识别、不受 DPI 影响）。
+     后果（有数据）：她的 57 条动作记录里，58 个工具**只碰过 9 个** ✗。
+     那不是模型笨，是没人告诉她有这些东西。
+     registry.js 开头的注释早就写了这件事（"三张手写表"），前两张当时迁了，这张一直没迁。
+     现在只认一个数据源：加工具 = 在 TOOL_DEFS 写一行，权限/参数/超时/说明四处同时生效。 */
+  const { buildToolList } = require('./src/registry');
+  let tools = buildToolList(tier);
+  if (tier === 'full' || tier === 'web') {
+    tools += '\nDRIFT in the continue prompt: dense UIs give slightly different coords for the same button each look. If a click changes nothing, do NOT repeat the same coordinate - try ~30-60px around it, or zoom in with screen_look|<question>||x,y,w,h first. **Do not give up early** (the user asked for this): keep trying DIFFERENT approaches up to 4-5 times (shifted coords, zoomed look, go back a level and re-enter, another entry point). Only after several different approaches failed, report honestly what you tried.\n';
     tools += 'Note: proj_* only works inside your own sandbox. When the user names another folder, use write_file with an ABSOLUTE path. If nothing can do it, say so plainly instead of doing something else and reporting success.\n';
-  if (tier === 'web' || tier === 'full') tools += '- web_open|<url>   - web_click|<css selector>   - web_type|<selector>||<text>   - web_read\n';
-  if (tier === 'full') tools += '- screen_shot   - screen_look|<问题>||x,y,w,h（**看不清小字/小按钮时用它放大那块区域**，坐标仍按整屏算）   - screen_look|<问题>||x,y,w,h  (ZOOM: crop that screen region and blow it up - use it whenever small text/buttons are hard to read; coordinates you output are still full-screen 1920x1080)   - screen_look|<question>   - click|x,y   - rclick|x,y   - dclick|x,y   - move|x,y   - drag|x1,y1|x2,y2   - scroll|x,y|down|5  (滚轮；方向用 up/down 词写，别用正负号)   - type|<text>   - key|<name>   - game_start|<game+goal+strategy>   - game_stop   - game_status\n';
+    /* ★ 优先顺序纪律（今天实测的教训，写进提示词而不是只写在文档里）★ */
+    tools += 'PRIORITY for locating things on screen: (1) uia_find|<window>|<element name or AutomationId> — the app reports its own rectangle, ZERO recognition error; try it FIRST for any non-game window (calculators, settings, browsers, Electron apps). (2) find_template / find_text — template or OCR matching, verified by the program. (3) screen_look + normalized coords — vision, use when the first two cannot work (games, canvas UIs). Never guess pixel coordinates when uia_find or find_text can name the target.\n';
+    tools += 'To confirm whether an action actually worked, use screen_diff|<seconds> (deterministic pixel compare) instead of asking the vision model "did it change". If a window "cannot be pulled up", check windows_list first and consider kill_app|<process name> to clear duplicate UWP instances.\n';
+  }
   return `You are "${p.name || '大肥鱼'}", a desktop pet (${p.personality || '傲娇、温柔、嘴硬'}). Stay in character.
 You are IN THE MIDDLE of a multi-step task the user asked for. Keep every line short.
 
