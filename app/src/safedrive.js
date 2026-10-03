@@ -256,7 +256,17 @@ async function target(title, opts) {
      而 target() 因为"前台 HWND 匹配"挑中了其中一个 —— 前台也会是这种幽灵窗口 ✗。
      DWM 的 cloaked = 被合成器隐藏（UWP 挂起 / 别的虚拟桌面 / 刚关掉的 Edge），
      Win32 的 IsWindowVisible 对这种窗口照样返回 true，只有它才靠得住。 */
-  const reallyShown = (w) => w.visible !== false && !w.cloaked && !w.iconic;
+  /* ★★ 不再强求 visible（2026-10-03 实测更正）★★
+     原来写的是 visible !== false && !cloaked && !iconic。但实测发现：
+     **UWP 应用（Windows 计算器）的 visible 标志会在"是/否"之间来回翻** ✗ ——
+     同一个 hwnd，focus 之前 visible=是、focus 之后 visible=否，而窗口其实好好地显示着。
+     更早我还见过一批 Edge 幽灵窗也是 visible=否（那批**确实不在屏幕上**）——
+     也就是说 **visible 这个标志区分不了"UWP 真窗口"和"真幽灵"** ✗。
+     现在只保留 !cloaked && !iconic（这两个是可靠的），
+     真正的"看得见吗"交给两道更强的判据：
+       · 遮挡前提断言（occlusion.scene，按 z 序 + 可见性剔除幽灵）
+       · 截图 / 帧比对（最终仲裁 —— 这也是用户教的那条："截图看看不就知道了吗"） */
+  const reallyShown = (w) => !w.cloaked && !w.iconic;
   let win = (list.foregroundHwnd ? cands.find((w) => w.hwnd === list.foregroundHwnd && reallyShown(w)) : null)
     || cands.find((w) => fgTitle && normT(w.title) === normT(fgTitle) && w.visible !== false)
     || cands.filter(reallyShown).sort((a, b) => b.w * b.h - a.w * a.h)[0]

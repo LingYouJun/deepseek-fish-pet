@@ -209,7 +209,15 @@ function pickShown(cands) {
   if (shown.length) return { win: shown.sort((a, b) => b.w * b.h - a.w * a.h)[0], shown: shown.length, total: list.length, note: 'shown' };
   const notIconic = list.filter((w) => !w.cloaked && !w.iconic && w.w > 1 && w.h > 1);
   if (notIconic.length) return { win: notIconic.sort((a, b) => b.w * b.h - a.w * a.h)[0], shown: 0, total: list.length, note: 'none-shown-but-has-real-rect' };
-  return { win: list[0], shown: 0, total: list.length, note: 'all-hidden' };
+  /* ★★ 全都最小化时，**绝不能挑 cloaked 的那个**（2026-10-03 实测）★★
+     现场：计算器两个顶层窗都 iconic（最小化），一个是 cloaked=是 的幽灵、一个是正常的。
+     旧兜底直接取 list[0] —— 恰好是那个 cloaked 幽灵 ✗，
+     于是 focusWindowEx 拿着它去恢复，怎么都恢复不出来（step=FAIL）。
+     而单独验证过：对正确的那个 hwnd 调 ShowWindow(9) + SetForegroundWindow 是成功的 ✓。
+     → 兜底必须优先挑非 cloaked 的。 */
+  const notCloaked = list.filter((w) => !w.cloaked);
+  if (notCloaked.length) return { win: notCloaked.sort((a, b) => b.w * b.h - a.w * a.h)[0], shown: 0, total: list.length, note: 'none-shown-picked-non-cloaked' };
+  return { win: list[0], shown: 0, total: list.length, note: 'all-hidden-and-cloaked' };
 }
 
 /* 列窗口。坐标已是物理像素（PS 声明了 DPI 感知）；同时把 DPI 报出来便于核对。 */
