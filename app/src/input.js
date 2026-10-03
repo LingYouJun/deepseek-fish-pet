@@ -41,9 +41,103 @@ function norm(x, y) {
   return [nx.toFixed(4), ny.toFixed(4)];
 }
 
+/* ★★★ D1：常驻 input.exe（省掉每次 spawn 的进程启动开销）★★★
+   实测：原来每个动作 spawnSync 一个新进程 —— ★49ms/次★（12 次移动 592ms）。
+   打游戏/连续操作要 5~10ms 才够用，所以必须常驻 ✓
+
+   ★架构上的一个关键判断★：
+     input.js 的返回值只表示"命令发出去了没有"✗ ——
+     真正的"做没做成"是由 safedrive 回读光标、截帧比对来验证的 ✓✓
+     （今天修的正是这个：以前 input.move() 返回 true 时光标可能差 551px ✗）
+   → 所以常驻模式下**只要把命令写进 stdin 就算发成功** ✓，
+     不需要等回复、不需要把 API 改成 async、不用动任何调用方 ✓
+   → 但回复里的 ERR 还是要收下来写日志 ✓（不然出错就彻底看不见了）
+
+   ★三条安全规矩（优化绝不能让键鼠失灵）★：
+     ① 常驻起不来/崩了/写失败 → ★自动回退一次性 spawn★ ✓（原路径一字不改）
+     ② 环境变量 PET_INPUT_ONESHOT=1 → 强制回退 ✓（一键关掉这个优化）
+     ③ 常驻进程空闲太久自动收掉 ✓（别留一个孤儿进程）
+*/
+let _proc = null;
+let _procAt = 0;
+let _procErrs = [];
+const PROC_IDLE_MS = 5 * 60 * 1000;
+
+function oneshotForced() {
+  return String(process.env.PET_INPUT_ONESHOT || '') === '1';
+}
+
+function procAlive() {
+  if (!_proc || _proc.killed || _proc.exitCode !== null) return false;
+  return true;
+}
+
+function ensureProc() {
+  if (oneshotForced()) return null;
+  if (procAlive()) {
+    if (Date.now() - _procAt > PROC_IDLE_MS) { try { _proc.stdin.write("quit\n"); } catch (e) {} try { _proc.kill(); } catch (e) {} _proc = null; }
+    else return _proc;
+  }
+  try {
+    const { spawn } = require('child_process');
+    _proc = spawn(exePath(), ['serve'], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    _proc.stdout.setEncoding('utf8');
+    _proc.stderr.setEncoding('utf8');
+    /* ★ 收 ERR 与崩溃信息：优化之后如果出错，必须还能看见 ✓ */
+    let acc = "";
+    const onData = (d) => {
+      acc += d;
+      let i;
+      while ((i = acc.indexOf("\n")) >= 0) {
+        const line = acc.slice(0, i).trim();
+        acc = acc.slice(i + 1);
+        if (line.indexOf("ERR ") === 0) {
+          _procErrs.push({ at: Date.now(), msg: line.slice(4) });
+          while (_procErrs.length > 20) _procErrs.shift();
+          try { require('./debug').log('[input] 常驻模式报错: ' + line.slice(4)); } catch (e) {}
+        }
+      }
+    };
+    _proc.stdout.on("data", onData);
+    _proc.stderr.on("data", onData);
+    _proc.on('exit', () => { _proc = null; });
+    _proc.on('error', () => { _proc = null; });
+    _procAt = Date.now();
+    return _proc;
+  } catch (e) { _proc = null; return null; }
+}
+
+/* 常驻进程的一次性调用（失败返回 false，由 run() 回退）*/
+function tryProc(action, args) {
+  const p = ensureProc();
+  if (!p || !p.stdin || p.stdin.destroyed) return false;
+  let line;
+  if (action === "type") {
+    /* ★ type 的文本必须走 base64★：协议按空格切，带空格/换行/中文的文本会被切碎 ✓ */
+    line = "type " + Buffer.from(String(args[0] == null ? "" : args[0]), "utf8").toString("base64");
+  } else {
+    line = [action].concat(args.map(String)).join(" ");
+  }
+  try {
+    p.stdin.write(line + "\n");
+    _procAt = Date.now();
+    return true;
+  } catch (e) {
+    _proc = null;
+    return false;
+  }
+}
+
+function procErrors() { return _procErrs.slice(); }
+
+function procStatus() {
+  return { persistent: procAlive(), oneshotForced: oneshotForced(), recentErrors: _procErrs.length };
+}
 function run(action, args) {
   const exe = exePath();
   if (!fs.existsSync(exe)) throw new Error('缺少 input.exe');
+  /* ★ 优先走常驻进程；任何一步不对就回退到原来的 spawnSync 路径 ✓ */
+  if (tryProc(action, args)) return true;
   const r = spawnSync(exe, [action].concat(args.map(String)), { encoding: 'utf8', timeout: 8000, windowsHide: true });
   if (r.error) throw r.error;
   if (r.status !== 0) throw new Error('input 失败：' + String(r.stderr || '').trim());
@@ -141,4 +235,4 @@ function releaseAll() {
   try { return run('releaseall', []); } catch { return false; }
 }
 
-module.exports = { click, rclick, dclick, move, drag, scroll, type, key, W, H, exePath, norm, releaseAll, validateKey, KEY_NAMES, space };
+module.exports = { click, rclick, dclick, move, drag, scroll, type, key, W, H, exePath, norm, releaseAll, validateKey, procStatus, procErrors, KEY_NAMES, space };

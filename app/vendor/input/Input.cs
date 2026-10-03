@@ -1,5 +1,7 @@
 // OS 级键鼠输入（Windows）
 // 编译：C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /out:input.exe Input.cs
+// ★D1 常驻模式★：input.exe serve
+//   stdin 逐行读 "<action> <arg...>"，执行完回一行 "OK" 或 "ERR <msg>"；type 的文本用 base64 传 ✓.cs
 // 用法（坐标一律是归一化 0..1，相对主屏）：
 //   input.exe move    fx fy
 //   input.exe click   fx fy
@@ -218,8 +220,69 @@ class Program
     static int Main(string[] args)
     {
         if (args.Length == 0) { Console.Error.WriteLine("no args"); return 1; }
+        /* ★ serve = 常驻模式（D1）★
+           为什么加：原来每次动作都要重新启动一次本程序 —— 实测 ★49ms/次★ ✗。
+           打游戏/连续操作时这个开销直接决定了能不能用（要 5~10ms 才够）。
+           常驻之后省掉进程启动，动作本身只剩 API 调用 + 少量 Sleep ✓
+           ⚠️ 一次性调用这条路**保留** ✓ —— 万一常驻版出问题，input.js 能立刻切回来。 */
+        if (args[0].ToLower() == "serve") return Serve();
+        try { Exec(args); return 0; }
+        catch (Exception e) { Console.Error.WriteLine(e.Message); return 1; }
+    }
+
+    /* ★ 常驻服务：从 stdin 逐行读命令，执行完回一行 OK / ERR <msg> ★
+       协议故意做成"一行一条 + 一行结果"，不用二进制 —— 好调试、好抓错 ✓
+       ★type 的文本走 base64★：协议按空格切，带空格/换行/中文的文本会被切碎 ✓
+       ★stdin/stdout 都设 UTF-8★：控制台默认 GBK，中文会乱码（今天在别处踩过多次）✓ */
+    static int Serve()
+    {
         try
         {
+            Console.InputEncoding = System.Text.Encoding.UTF8;
+            Console.OutputEncoding = System.Text.Encoding.UTF8;
+        }
+        catch (Exception) { }
+        string line;
+        while ((line = Console.In.ReadLine()) != null)
+        {
+            line = line.Trim();
+            if (line.Length == 0) continue;
+            if (line == "quit") break;
+            /* ★ 默认按空格全切开 ★
+               ⚠️ 第一版这里写的是 Split(new char[]{' '}, 2)（限制 2 段）✗ ——
+               于是 move 0.5 0.5 变成 ["move", "0.5 0.5"]，args[2] 不存在 → double.Parse 报
+               "输入字符串的格式不正确" ✓（实测编译后第一次跑就抓到了）。
+               限制 2 段**只有 type 需要**（它的文本可能含空格）✓ */
+            string[] parts = line.Split(' ');
+            if (parts.Length >= 2 && parts[0].ToLower() == "type")
+            {
+                int sp = line.IndexOf(' ');
+                string rest = (sp >= 0) ? line.Substring(sp + 1).Trim() : "";
+                try
+                {
+                    rest = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(rest));
+                }
+                catch (Exception) { /* 不是合法 base64 就按原文用 */ }
+                parts = new string[] { parts[0], rest };
+            }
+            try
+            {
+                Exec(parts);
+                Console.WriteLine("OK");
+            }
+            catch (Exception e)
+            {
+                string msg = (e.Message == null) ? "error" : e.Message.Replace("\r", " ").Replace("\n", " ");
+                Console.WriteLine("ERR " + msg);
+            }
+            Console.Out.Flush();
+        }
+        return 0;
+    }
+
+    /* 一次执行一条命令（serve 模式和一次性调用都走这里）*/
+    static void Exec(string[] args)
+    {
             string a = args[0].ToLower();
             double x, y, x2, y2; int delta;
             switch (a)
@@ -323,8 +386,5 @@ class Program
                 default:
                     throw new Exception("unknown action: " + a);
             }
-            return 0;
-        }
-        catch (Exception e) { Console.Error.WriteLine(e.Message); return 1; }
     }
 }
