@@ -592,6 +592,57 @@ async function runInner(tool, arg) {
       return '📋 写剪贴板失败：' + ((e && e.message) || e);
     }
   }
+  if (tool === 'uia_snapshot') {
+    /* ★★ 把窗口里所有【可交互控件】列成编号清单（抄 Windows-MCP 的 Snapshot 设计）★★
+       为什么需要（两条实测教训）：
+         ① 她 57 条动作记录里 58 个工具只用过 9 个，从没用过 uia_find ——
+            ★不是它不好用，是她不知道该拿什么名字去查★ ✓
+         ② 中文界面的控件名是中文：计算器数字键 5 的 name 是「五」而不是 "5" ✗
+            —— 光给 uia_find 一个工具，她只会一直猜错名字然后放弃 ✓
+       Windows-MCP 的做法是给一次全桌面 Snapshot，返回"可交互元素 id"，
+       模型选编号而不是猜像素。这里做同一件事，但走 UIA 控件树（零识别）✓。
+       ⚠️ 一律按 hwnd 取（先 listWindows + pickShown 挑真正显示着的那个）——
+         uia.js 的注释里有实战：3 个「计算器」窗口按标题 NOTFOUND，按 hwnd 一次拿到 ✓ */
+    const want = String(arg == null ? '' : arg).trim();
+    if (!want) return '用法：uia_snapshot|<窗口标题片段>   例：uia_snapshot|计算器';
+    const fw2 = require('./focuswin');
+    const l = await fw2.listWindows();
+    const cands = (l.windows || []).filter((w) => String(w.title).indexOf(want) >= 0);
+    if (!cands.length) {
+      return '🔎 没有找到标题含「' + want + '」的窗口。当前可见窗口：\n'
+        + (l.windows || []).filter((w) => w.visible !== false).slice(0, 12)
+            .map((w) => '  · ' + w.title).join('\n');
+    }
+    const picked = fw2.pickShown(cands);
+    const win = picked.win || cands[0];
+    const uia = require('./uia');
+    const r = await uia.listElements('', win.hwnd);
+    const els = (r && r.elements) || [];
+    if (!els.length) {
+      return '🔎 窗口「' + win.title + '」（hwnd=' + win.hwnd + '）的控件树是空的。\n'
+        + '★这通常说明它是【游戏 / 画布 / 自绘界面】—— 这类没有控件树，请改用 screen_look + 模板/OCR★';
+    }
+    /* 只留有名字的、且类型是可交互的 */
+    const INTERACTIVE = /^(Button|Edit|ComboBox|CheckBox|RadioButton|ListItem|MenuItem|TabItem|Hyperlink|Slider|Spinner|TreeItem|SplitButton|ToggleButton|DataItem|Text)$/i;
+    const clickable = els.filter((e) => e.name && String(e.name).trim() && INTERACTIVE.test(String(e.controlType || '')));
+    /* 按位置排序（上→下、左→右），编号才符合直觉 */
+    clickable.sort((a, b) => (Math.abs(a.y - b.y) > 8 ? a.y - b.y : a.x - b.x));
+    const list = clickable.slice(0, 60);
+    if (!list.length) {
+      return '🔎 窗口「' + win.title + '」里有 ' + els.length + ' 个控件，但**没有一个带名字的可交互控件** ✗\n'
+        + '→ 改用 screen_look 看画面，或用 find_text/find_template 定位。';
+    }
+    const lines = list.map((e, i) =>
+      String(i + 1).padStart(2) + '. 「' + String(e.name).slice(0, 26) + '」  '
+      + String(e.controlType || '?').padEnd(12)
+      + (e.automationId ? (' id=' + String(e.automationId).slice(0, 24)).padEnd(28) : ' '.repeat(28))
+      + ' 中心 ' + Math.round(e.x) + ',' + Math.round(e.y));
+    return '🔎 窗口「' + win.title + '」里可交互控件 ' + clickable.length + ' 个'
+      + (clickable.length > 60 ? '（只列前 60 个）' : '') + '：\n' + lines.join('\n')
+      + '\n\n★下一步：★ 挑一个控件，用 ACTION: uia_find|' + want + '|<它的名字或 id> 拿精确坐标，'
+      + '再 ACTION: click|<坐标>。\n'
+      + '（坐标是应用自己报的，不用看图；中文界面的名字就是中文，照抄清单里的「」内容即可。）';
+  }
   if (tool === 'wait_for') {
     /* ★★★ 轮询等条件 —— 治"固定睡 N 秒"这个顽疾 ★★★
        起因（实测）：她点"基建"之后**立刻** screen_look，而游戏切界面要 1~2 秒，

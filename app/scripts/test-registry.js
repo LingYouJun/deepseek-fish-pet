@@ -176,6 +176,7 @@ console.log('=== registry.js 单元测试（纯 Node）===');
     'flow_run', 'flow_save', 'flow_list', 'flow_del',
     /* A3/A4（2026-10-03）：剪贴板 + 轮询等条件 */
     'clipboard_read', 'clipboard_write', 'wait_for',
+    'uia_snapshot',
   ];
   const extra = r.list('tool').map((t) => t.name).filter((n) => !FROZEN_TIERS[n] && NEW_OK.indexOf(n) < 0);
   ok(extra.length === 0, '★ §10 注册表里没有"来历不明"的工具', extra.join(', ') || '（干净）');

@@ -209,6 +209,7 @@ const TOOL_DEFS = [
   { name: 'wait_for', tier: 'full', needsArg: true, timeoutMs: 130000, desc: '轮询等一个条件成立（比"固定睡 N 秒"可靠）。格式 wait_for|<类型>|<目标>|<超时秒>：window|<标题片段>|8 / element|<窗口标题>|<控件名>|8 / text|<画面上的文字>|8 / change|8（等画面变化）。★超时会告诉你最后一次检查到什么★。' },
   { name: 'kill_app', tier: 'full', needsArg: true, timeoutMs: 20000, desc: '结束同名进程的【多余实例】（UWP 僵尸：反复开关应用会攒出多个实例，导致窗口托不出来）' },
   { name: 'uia_find', tier: 'full', needsArg: true, timeoutMs: 45000, desc: 'UIA 控件树：按元素名字/AutomationId 精确拿坐标（非游戏应用，零识别）' },
+  { name: 'uia_snapshot', tier: 'full', needsArg: true, timeoutMs: 45000, desc: '把一个窗口里【所有可交互控件】列成编号清单（按钮/输入框/下拉/勾选/列表项…），带控件名和中心坐标。★这是"不知道控件叫什么"时的入口★：先 uia_snapshot 看清单，再用 uia_find|<窗口>|<控件名> 拿精确坐标去点。★中文界面的控件名也是中文（数字键 5 的名字是「五」）★，所以别猜名字，看清单。' },
   { name: 'uia_dump', tier: 'full', needsArg: true, timeoutMs: 45000, desc: 'UIA 控件树：列出某窗口的所有元素及其坐标' },
   /* 定位（老表都是 full） */
   { name: 'find_template', tier: 'full', needsArg: true, timeoutMs: 40000, desc: '按模板图精确定位' },
