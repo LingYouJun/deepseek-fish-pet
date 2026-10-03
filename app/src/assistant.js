@@ -728,6 +728,37 @@ async function runInner(tool, arg) {
     const items = fs.readdirSync(arg).slice(0, 80);
     return `📂 ${arg}（${items.length} 项）：\n${items.join('\n')}`;
   }
+  if (tool === 'shell_run' || tool === 'shell_status' || tool === 'shell_close') {
+    /* ★ 常驻 shell 会话（B1）★
+       为什么需要：proj_run 是一次性 spawn —— cd 不留、环境不留，
+       "进目录 → 装依赖 → 编译 → 看报错 → 改"这条链是断的。
+       实现见 src/shell.js（命令与输出都走 base64，避免 PowerShell 的 GBK stdin 把中文弄乱）。 */
+    const sh = require('./shell');
+    if (tool === 'shell_status') {
+      const st = sh.status();
+      return '🐚 常驻会话：' + (st.alive ? '活着' : '没开')
+        + '　当前目录：' + (st.cwd || '（未建立）')
+        + '　' + (st.busy ? '★正忙★' : '空闲') + '　'
+        + (st.lastAt ? ('上次活动 ' + Math.round(st.idleMs / 1000) + ' 秒前') : '');
+    }
+    if (tool === 'shell_close') {
+      const st = sh.status();
+      sh.close('她主动关');
+      return '🐚 已关闭常驻会话（' + (st.cwd ? ('原来在 ' + st.cwd) : '本来就没开') + '）。下次 shell_run 会自动重开一个。';
+    }
+    const cmd = String(arg == null ? '' : arg);
+    if (!cmd.trim()) return '用法：shell_run|<要执行的命令>';
+    let r;
+    try { r = await sh.run(cmd, timeoutFor('shell_run') || 300000); }
+    catch (e) { return '🐚 ❌ 执行失败：' + ((e && e.message) || e); }
+    const head = r.timeout
+      ? '⏱ ' + r.error
+      : (r.ok ? '✅ 跑完了（退出码 ' + (r.code === null ? '0/不适用' : r.code) + '）'
+              : '❌ 退出码 ' + (r.code === null ? '未知' : r.code));
+    return '🐚 ' + head + '　当前目录：' + (r.cwd || '?') + '\n--- 输出 ---\n'
+      + String(r.output || '').trim().slice(0, 6000)
+      + (r.error && !r.timeout ? ('\n' + r.error) : '');
+  }
   if (tool === 'read_file') {
     /* 只读前 3000 字。以前是 readFileSync 整读再 slice——模型给个大文件路径
        （C:\Windows\Logs\CBS\CBS.log、视频、hiberfil.sys）主进程就同步卡死+内存暴涨，

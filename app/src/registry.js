@@ -237,6 +237,12 @@ const TOOL_DEFS = [
   { name: 'flow_list', tier: 'read', needsArg: false, timeoutMs: 10000, desc: '列出已保存的确定性流程。' },
   { name: 'flow_del', tier: 'full', needsArg: true, timeoutMs: 10000, desc: '删掉一个已保存的流程。参数 <名字>。' },
   /* 文件（tier 照老表） */
+  /* ★ 常驻 shell 会话（B1）：补上她最大的结构性缺口 ★
+     proj_run 是一次性 spawn —— cd 不留、环境不留、后台进程留不下，
+     于是"进目录 → 装依赖 → 编译 → 看报错 → 改"这条链是断的。 */
+  { name: 'shell_run', tier: 'full', needsArg: true, timeoutMs: 300000, desc: '在【常驻】PowerShell 会话里跑一条命令。★和 proj_run 的区别：cd、环境变量、会话变量全都保留★，所以"进目录→装依赖→编译→看报错→改"可以连续做。参数就是命令本身（中文/多行都行，走 base64 通道不会乱码）。超时会明确告诉你"没跑完"而不是假装成功。' },
+  { name: 'shell_status', tier: 'read', needsArg: false, timeoutMs: 10000, desc: '看常驻 shell 会话的状态：还活着吗、现在在哪个目录、上一条命令跑完多久了。' },
+  { name: 'shell_close', tier: 'read', needsArg: false, timeoutMs: 10000, desc: '关掉常驻 shell 会话（会丢掉 cwd 和会话变量）。★一般不用手动关，空闲 10 分钟会自动回收★。' },
   { name: 'read_file', tier: 'read', needsArg: true, timeoutMs: 30000, desc: '读一个文本文件的内容（大文件会截断）。参数是路径。★改文件之前先读，别凭记忆改★。' },
   { name: 'write_file', tier: 'full', needsArg: true, timeoutMs: 30000, desc: '写入/覆盖一个文本文件。参数 <路径>||<内容>（注意是**两个竖线**分隔）。★会覆盖原文件 —— 改之前先 read_file 看清★。主人指定别的目录时用它，别用 proj_write。' },
   { name: 'list_dir', tier: 'read', needsArg: true, timeoutMs: 20000, desc: '列出一个目录下的文件和子目录。参数是路径。★想知道某个目录里有什么时用它★。' },
