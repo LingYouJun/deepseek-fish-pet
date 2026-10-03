@@ -202,6 +202,11 @@ const TOOL_DEFS = [
   { name: 'screen_shot', tier: 'full', needsArg: false, timeoutMs: 30000, desc: '截一张全屏图' },
   { name: 'watch_screen', tier: 'full', needsArg: true, timeoutMs: 180000, desc: '连续看屏幕并给逐帧时间线' },
   { name: 'screen_diff', tier: 'full', needsArg: true, timeoutMs: 30000, desc: '抓两帧做像素比对：界面到底变没变（确定性，不靠视觉模型）' },
+  /* ★ 剪贴板（A3）：5 行 API 就能做，不必接 MCP ✓ ★ */
+  { name: 'clipboard_read', tier: 'normal', needsArg: false, timeoutMs: 15000, desc: '读系统剪贴板里的文本。★主人说"复制了…"、"我刚复制的那个"时用它★；剪贴板为空或不是文本会说明。' },
+  { name: 'clipboard_write', tier: 'normal', needsArg: true, timeoutMs: 15000, desc: '把一段文本写进系统剪贴板（支持多行、中文）。参数就是文本本身。★写完要提醒主人"已经复制好了，去 Ctrl+V"★。' },
+  /* ★ 轮询等条件（A4）：治"没验证就重试"的顽疾 ✓ ★ */
+  { name: 'wait_for', tier: 'full', needsArg: true, timeoutMs: 130000, desc: '轮询等一个条件成立（比"固定睡 N 秒"可靠）。格式 wait_for|<类型>|<目标>|<超时秒>：window|<标题片段>|8 / element|<窗口标题>|<控件名>|8 / text|<画面上的文字>|8 / change|8（等画面变化）。★超时会告诉你最后一次检查到什么★。' },
   { name: 'kill_app', tier: 'full', needsArg: true, timeoutMs: 20000, desc: '结束同名进程的【多余实例】（UWP 僵尸：反复开关应用会攒出多个实例，导致窗口托不出来）' },
   { name: 'uia_find', tier: 'full', needsArg: true, timeoutMs: 45000, desc: 'UIA 控件树：按元素名字/AutomationId 精确拿坐标（非游戏应用，零识别）' },
   { name: 'uia_dump', tier: 'full', needsArg: true, timeoutMs: 45000, desc: 'UIA 控件树：列出某窗口的所有元素及其坐标' },

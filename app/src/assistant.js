@@ -547,6 +547,132 @@ async function runInner(tool, arg) {
     if (err) throw new Error(err);
     return `✅ 已打开：${arg}`;
   }
+  if (tool === 'clipboard_read') {
+    /* 【读剪贴板】主人说"我刚复制的那个"时用。
+       ★ 参数一律走 base64：命令行里直接塞中文/引号/换行会被吃掉（今天的教训：别猜，用编码）★ */
+    const { execFileSync } = require('child_process');
+    try {
+      /* ★★ 必须让 PS 输出 base64 ★★
+         第一版直接读 stdout，结果中文全变乱码（实测：写进去 24 字符，读回 33 字符的乱码）✗ ——
+         原因是 PowerShell 5.1 的输出编码默认是 GBK，而 Node 按 UTF-8 解 ✓。
+         （同一个坑今天早些时候在 Get-Content 上踩过一次。） */
+      const out = execFileSync('powershell.exe',
+        ['-NoProfile', '-Sta', '-Command', "[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((Get-Clipboard -Raw)))"],
+        { encoding: 'utf8', timeout: 10000, windowsHide: true });
+      let txt = '';
+      try { txt = Buffer.from(String(out || '').trim(), 'base64').toString('utf8'); } catch (e) { txt = ''; }
+      if (!txt.trim()) return '📋 剪贴板是空的（或者里面不是文本 —— 图片这种暂时读不了）。';
+      return '📋 剪贴板里有 ' + txt.length + ' 个字符：\n' + txt.slice(0, 3000)
+        + (txt.length > 3000 ? '\n…（只显示前 3000 字）' : '');
+    } catch (e) {
+      return '📋 读剪贴板失败：' + ((e && e.message) || e) + '（可能是剪贴板被别的程序独占，稍后再试一次）。';
+    }
+  }
+  if (tool === 'clipboard_write') {
+    /* 【写剪贴板】文本走 base64 传参，避免引号/换行/中文被命令行解析吃掉 */
+    const { execFileSync } = require('child_process');
+    const text = String(arg == null ? '' : arg);
+    if (!text) return '用法：clipboard_write|<要复制的文本>';
+    const b64 = Buffer.from(text, 'utf8').toString('base64');
+    const ps = "Set-Clipboard -Value ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('" + b64 + "')))";
+    try {
+      execFileSync('powershell.exe', ['-NoProfile', '-Sta', '-Command', ps], { encoding: 'utf8', timeout: 10000, windowsHide: true });
+      /* ★ 回读校验：写完立刻读回来对一遍，别假成功（今天的教训）★ */
+      let back = '';
+      try {
+        const rb = execFileSync('powershell.exe',
+          ['-NoProfile', '-Sta', '-Command', "[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((Get-Clipboard -Raw)))"],
+          { encoding: 'utf8', timeout: 10000, windowsHide: true });
+        try { back = Buffer.from(String(rb || '').trim(), 'base64').toString('utf8'); } catch (e) { back = ''; }
+      } catch (e) {}
+      const ok = back.trim() === text.trim();
+      return (ok ? '📋 ✅ 已经放进剪贴板了（回读核对一致），' : '📋 ⚠️ 写入后回读**对不上**（可能被别的程序改过），')
+        + '主人可以去 Ctrl+V 粘贴了。共 ' + text.length + ' 个字符。';
+    } catch (e) {
+      return '📋 写剪贴板失败：' + ((e && e.message) || e);
+    }
+  }
+  if (tool === 'wait_for') {
+    /* ★★★ 轮询等条件 —— 治"固定睡 N 秒"这个顽疾 ★★★
+       起因（实测）：她点"基建"之后**立刻** screen_look，而游戏切界面要 1~2 秒，
+       她看到旧画面就以为没点进去，换坐标再点、再点，连点三次 ✗。
+       原来的权宜之计是动作后统一固定等 actionSettleMs（默认 1500ms）——
+       等太短会看到旧画面，等太长就是白等 ✗。
+       ★ 正确做法：把"猜时间"换成"等条件"★ —— 条件成立立刻走，超时就说清最后检查到什么。
+       格式：wait_for|<类型>|<目标…>|<超时秒>   （★最后一段永远是超时秒数★）
+         window|<标题片段>|8
+         element|<窗口标题片段>|<控件名或AutomationId>|8
+         text|<画面上的文字>|8
+         change|8            （等画面变化）
+       四种条件的零件她**本来就全有**：uia.js / ocrJson / listWindows / framediff ✓ */
+    const parts = String(arg == null ? '' : arg).split('|').map((x) => x.trim());
+    const kind = String(parts[0] || '').toLowerCase();
+    if (!kind) return '用法：wait_for|<window|element|text|change>|<目标…>|<超时秒>\n例：wait_for|window|计算器|8';
+    const tail = parts[parts.length - 1];
+    const hasTimeout = parts.length > 1 && /^\d+(\.\d+)?$/.test(tail);
+    const timeoutS = Math.max(1, Math.min(120, hasTimeout ? Number(tail) : 10));
+    const targets = parts.slice(1, hasTimeout ? -1 : undefined).filter((x) => x !== '');
+    const t0 = Date.now();
+    let lastInfo = '（还没检查过）';
+    let baseline = null;
+    if (kind === 'change') {
+      try { baseline = await captureScreen(false); } catch (e) { lastInfo = '抓初始帧失败：' + e.message; }
+    }
+    const sleepMs = (n) => new Promise((r) => setTimeout(r, n));
+    while (Date.now() - t0 < timeoutS * 1000) {
+      try {
+        if (kind === 'window') {
+          const want = targets[0] || '';
+          const l = await require('./focuswin').listWindows();
+          const hit = (l.windows || []).find((w) => String(w.title).indexOf(want) >= 0 && w.visible !== false);
+          if (hit) return '✅ 条件成立（等了 ' + ((Date.now() - t0) / 1000).toFixed(1) + ' 秒）：窗口「' + hit.title + '」出现了，' + hit.x + ',' + hit.y + ' ' + hit.w + 'x' + hit.h;
+          const all = (l.windows || []).filter((w) => String(w.title).indexOf(want) >= 0);
+          lastInfo = all.length ? ('有 ' + all.length + ' 个标题含「' + want + '」的窗口，但都是隐藏/最小化的') : ('没有任何窗口标题含「' + want + '」');
+        } else if (kind === 'element') {
+          const win = targets[0] || ''; const name = targets[1] || '';
+          if (!win || !name) return '用法：wait_for|element|<窗口标题片段>|<控件名或AutomationId>|<超时秒>';
+          const uia = require('./uia');
+          /* ⚠️ 用 uia.locate() 而不是 findElement()：
+             实测 findElement 返回的是 {window, elements, count}（原始清单），
+             我第一版按 r.found 判断，于是控件明明在也一直判"没有" ✗
+             —— 是 live 测试（wait_for|element|计算器|num5Button 超时）抓出来的。 */
+          const r = await uia.locate(win, name);
+          if (r && r.ok) {
+            const nm = (r.extra && r.extra.name) || name;
+            return '✅ 条件成立（等了 ' + ((Date.now() - t0) / 1000).toFixed(1) + ' 秒）：控件「' + nm + '」出现了，中心 '
+              + Math.round(r.x) + ',' + Math.round(r.y) + '（' + (r.how || 'uia') + '）';
+          }
+          lastInfo = (r && r.reason) ? ('窗口「' + win + '」里还没找到「' + name + '」（' + r.reason + '）')
+            : ('窗口「' + win + '」里还没有名字含「' + name + '」的控件');
+        } else if (kind === 'text') {
+          const want = targets[0] || '';
+          if (!want) return '用法：wait_for|text|<画面上的文字>|<超时秒>';
+          const cap = await captureScreen(false);
+          const j = await ocrJson(cap && cap.path);
+          const f = findTextInOcr(j, want);
+          if (f) return '✅ 条件成立（等了 ' + ((Date.now() - t0) / 1000).toFixed(1) + ' 秒）：画面上出现了「' + want + '」，位置约 ' + Math.round(f.x) + ',' + Math.round(f.y);
+          lastInfo = '画面上还没看到「' + want + '」（OCR ' + (j && j.words ? j.words.length : 0) + ' 个词）';
+        } else if (kind === 'change') {
+          if (!baseline) { lastInfo = '没有基准帧，无法比对'; }
+          else {
+            const now = await captureScreen(false);
+            const fd = require('./framediff');
+            const d = fd.diffBgra(baseline.bgra, now.bgra, baseline.width, baseline.height);
+            const sum = fd.summarize(d);
+            if (sum && sum.ratio > 0.002) {
+              return '✅ 条件成立（等了 ' + ((Date.now() - t0) / 1000).toFixed(1) + ' 秒）：画面变了，约 ' + (sum.ratio * 100).toFixed(2) + '% 的像素不同';
+            }
+            lastInfo = '画面还没变化（差异 ' + (sum && sum.ratio != null ? (sum.ratio * 100).toFixed(3) + '%' : '?') + '）';
+          }
+        } else {
+          return '未知条件类型「' + kind + '」。可用：window / element / text / change';
+        }
+      } catch (e) { lastInfo = '检查时出错：' + ((e && e.message) || e); }
+      await sleepMs(300);
+    }
+    return '⏱ 超时 ' + timeoutS + ' 秒，条件仍未成立。\n最后一次检查：' + lastInfo
+      + '\n★ 别用同样的方式重试 —— 换个思路（换目标名、先 focus_window、或先确认窗口真的显示着）★';
+  }
   if (tool === 'list_dir') {
     const items = fs.readdirSync(arg).slice(0, 80);
     return `📂 ${arg}（${items.length} 项）：\n${items.join('\n')}`;
