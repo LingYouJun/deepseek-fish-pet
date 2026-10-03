@@ -825,6 +825,26 @@ async function runInner(tool, arg) {
       + (r.note ? (r.note + '\n') : '')
       + (r.error ? ('--- 问题 ---\n' + String(r.error).slice(0, 1500)) : '');
   }
+  if (tool === 'doc_read') {
+    /* ★ 文档读取（C3）★ —— 零新依赖（靠她已有的 unzipper + XML 解析）
+       为什么没走 MCP / Python：★这台机器上没有可用的 Python★（store 占位符，返回 9009），
+       而文档处理类 MCP server 绝大多数是 Python 写的 → 两条路都断 ✓
+       而 xlsx/docx 的格式就是 zip + XML，她 node_modules 里两样都有 ✓ */
+    const parts = String(arg == null ? '' : arg).split('|');
+    const f = String(parts[0] || '').trim();
+    const sheet = String(parts[1] || '').trim();
+    if (!f) return '用法：doc_read|<文件路径>|<可选的工作表名>';
+    const docs = require('./docs');
+    let r;
+    try { r = await docs.read(f, sheet ? { sheet } : {}); }
+    catch (e) { return '📄 读文档出错：' + ((e && e.message) || e); }
+    if (!r.ok) return '📄 ' + (r.error || '读不了这个文件');
+    return '📄 ' + r.kind + '　' + (r.chars || 0) + ' 字'
+      + (r.paragraphs ? ('／' + r.paragraphs + ' 段') : '')
+      + (r.sheets && r.sheets.length ? ('／工作表：' + r.sheets.join('、')) : '')
+      + (r.truncated ? '　★内容太长已截断★' : '')
+      + '\n--- 内容 ---\n' + String(r.text || '');
+  }
   if (tool === 'read_file') {
     /* 只读前 3000 字。以前是 readFileSync 整读再 slice——模型给个大文件路径
        （C:\Windows\Logs\CBS\CBS.log、视频、hiberfil.sys）主进程就同步卡死+内存暴涨，

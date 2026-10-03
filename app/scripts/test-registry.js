@@ -185,6 +185,8 @@ console.log('=== registry.js 单元测试（纯 Node）===');
     'sys_info', 'remind_in', 'remind_at', 'remind_list', 'remind_cancel',
     /* C2（2026-10-03）：代码检查 */
     'check_code',
+    /* C3（2026-10-03）：文档读取 */
+    'doc_read',
   ];
   const extra = r.list('tool').map((t) => t.name).filter((n) => !FROZEN_TIERS[n] && NEW_OK.indexOf(n) < 0);
   ok(extra.length === 0, '★ §10 注册表里没有"来历不明"的工具', extra.join(', ') || '（干净）');

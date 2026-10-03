@@ -250,6 +250,7 @@ const TOOL_DEFS = [
   { name: 'remind_list', tier: 'read', needsArg: false, timeoutMs: 10000, desc: '列出还没响的提醒（带编号、还有多少分钟）。' },
   { name: 'remind_cancel', tier: 'normal', needsArg: true, timeoutMs: 10000, desc: '取消一个提醒。参数是编号（先用 remind_list 看）。' },
   { name: 'search_code', tier: 'read', needsArg: true, timeoutMs: 60000, desc: '在目录里搜索**文件内容**（正则或普通文字），返回 文件:行号:那一行。★这是找"哪个文件里有这个函数/这个配置"的正确工具★ —— list_dir 只能看名字，read_file 要一个个试。用法 search_code|<模式>|<目录>|<扩展名开关，如 js,ts>。自动跳过 node_modules/.git/dist/浏览器缓存等，跳过二进制和 >2MB 的文件；有 15 秒预算和 60 条命中上限，★没搜完会明确说"截断了"而不是假装没有★。' },
+  { name: 'doc_read', tier: 'read', needsArg: true, timeoutMs: 60000, desc: '★读文档内容★：Word(.docx) 抽正文、Excel(.xlsx) 还原成表格（支持多工作表，可选表名）、CSV/TXT/MD/JSON 当文本读。用法 doc_read|<文件路径>|<可选的工作表名>。★PDF 和老版 .doc/.xls 读不了，会明确告诉你并给替代方案（不会返回乱码）★。★主人发来一个文件说"看看这个"时用它，别去猜内容★。' },
   { name: 'read_file', tier: 'read', needsArg: true, timeoutMs: 30000, desc: '读一个文本文件的内容（大文件会截断）。参数是路径。★改文件之前先读，别凭记忆改★。' },
   { name: 'write_file', tier: 'full', needsArg: true, timeoutMs: 30000, desc: '写入/覆盖一个文本文件。参数 <路径>||<内容>（注意是**两个竖线**分隔）。★会覆盖原文件 —— 改之前先 read_file 看清★。主人指定别的目录时用它，别用 proj_write。' },
   { name: 'list_dir', tier: 'read', needsArg: true, timeoutMs: 20000, desc: '列出一个目录下的文件和子目录。参数是路径。★想知道某个目录里有什么时用它★。' },
