@@ -1551,7 +1551,10 @@ let chatTaskHideTimer = null;
   const stepArg = String(a && a.arg || '').slice(0, 90);
   const stepT0 = Date.now();
   /* 只给"会改屏幕/看屏幕/跑东西"的工具做流水，杂项（配置读写之类）不刷屏 */
-  const STEP_TOOLS = SCREEN_TOOLS.concat(['find_text', 'find_template', 'find_template_scroll', 'screen_diff', 'uia_find', 'uia_dump', 'match_template', 'skill_write', 'proj_run']);
+  /* ⚠️ windows_list / screen_shot 之类"只读但确实是她看世界的一步"也要进流水 ——
+     实测漏了 windows_list，于是她只用它回答问题时一条 step 都没有 ✗。 */
+  const STEP_TOOLS = SCREEN_TOOLS.concat(['windows_list', 'find_text', 'find_template', 'find_template_scroll',
+    'screen_diff', 'uia_find', 'uia_dump', 'match_template', 'skill_write', 'proj_run', 'web_open', 'web_read']);
   const wantStep = STEP_TOOLS.includes(stepTool);
   if (wantStep) {
     relayToChat({ who: 'step', id: stepId, status: 'running', tool: stepTool, arg: stepArg });

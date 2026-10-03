@@ -1245,16 +1245,34 @@ async function runInner(tool, arg) {
       return '🪟 ❌ 列窗口失败（不是"没有窗口"，是查询本身出错了）：' + (list.error || '未知原因')
         + (list.rawOut ? '\n原始输出：' + String(list.rawOut).slice(0, 200) : '');
     }
-    const rows = (list && list.windows) || [];
-    if (!rows.length) return '🪟 没读到任何可见窗口（可能被权限挡了）。';
+    const allRows = (list && list.windows) || [];
+    if (!allRows.length) return '🪟 没读到任何可见窗口（可能被权限挡了）。';
+    /* ★★ 必须把"幽灵窗"滤掉或标注出来（2026-10-03）★★
+       实测事故：她自己说"计算器一直被一个全屏的「任务切换」浮层盖住" ——
+       而那个「任务切换」是 **cloaked=是 / visible=否 的隐藏帮手窗**（Task View 的宿主窗），
+       **根本不在屏幕上** ✗。她这么判断，源头就是这里：
+       旧的 windows_list 把所有窗口一视同仁地列出来，幽灵窗看起来就像个正常浮层。
+       → 现在：幽灵窗单独分组、明确标注"看不到、不算遮挡"，真窗口排前面。 */
+    const isGhost = (w) => (w.cloaked === true) || (w.visible === false);
+    const rows = allRows.filter((w) => !isGhost(w));
+    const ghosts = allRows.filter(isGhost);
     const fg = await require('./focuswin').foreground();
     const lines = rows.slice(0, 30).map((r) => '- 「' + r.title + '」 左上('
       + r.x + ',' + r.y + ') 大小 ' + r.w + 'x' + r.h
       + (r.iconic ? '  【最小化】' : '')
       + (fg && fg.title === r.title ? '  ★当前前台★' : ''));
-    return '🪟 当前可见窗口（坐标是**物理像素**，可直接用于 click / focus_window）：\n'
+    let out = '🪟 当前可见窗口（坐标是**物理像素**，可直接用于 click / focus_window）：\n'
       + lines.join('\n')
       + '\n（★标的是当前前台窗口 —— 键盘输入只会发给它。要让别的窗口收键盘，先 focus_window。）';
+    if (ghosts.length) {
+      /* 只列前几个，免得刷屏；关键是让模型明白"这些不在屏幕上、不构成遮挡" */
+      out += '\n\n⚠️ 另有 ' + ghosts.length + ' 个**隐藏窗口**（cloaked 或 visible=false）—— '
+        + '**它们没有显示在屏幕上，不算遮挡，不要因为它们而以为自己被挡住了**：\n'
+        + ghosts.slice(0, 6).map((r) => '   · 「' + r.title + '」 ' + r.w + 'x' + r.h).join('\n')
+        + (ghosts.length > 6 ? '\n   · …还有 ' + (ghosts.length - 6) + ' 个' : '')
+        + '\n（实测：她曾把「任务切换」这个 cloaked 的宿主窗当成"盖住我的全屏浮层"，一直围着它绕。）';
+    }
+    return out;
   }
   if (tool === 'type') {
     /* 【分段可中断输入】抄自参考项目 Coopanion（packages/cortico-world-cua/src/engine-child.ts:113-126）：
