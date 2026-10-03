@@ -740,6 +740,67 @@ function addSys(text) {
   $('msgs').appendChild(d); scroll();
 }
 
+/* ★★ 过程气泡（照 DSH 的设计做）★★
+   用户诉求："现在做一次任务这输出太多了，得像你这样的显示"。
+   根因：原来多步任务的**每个中间步骤**都是 addPet —— 一整条中英双语消息 + 一排选项，
+   一个 8 步任务刷 8 条长消息 ✗。
+   DSH 的做法（我读它的 client.js 学到的）：**一个过程气泡装一组调用**，
+   标题按【种类】聚合（「已读取文件，运行了命令」），运行中显示「正在运行命令」，
+   细节收在里面可展开 —— 而不是一条调用一条消息。
+   这里的实现刻意**极简、零新增风险**：
+     · 不引入新消息类型、不加新 CSS 类、不动任何初始化路径
+     · 只复用已经能正常工作的 addSys()（它做的就是 appendChild 一个 div.msg.sys）
+     · 全程维护**同一个元素**，只改它的 textContent
+   → 最坏情况也只是这一行文字不对，绝不可能像前两次那样把整个聊天窗弄空白 ✗✓。 */
+let PROC = null;
+const PROC_KIND = {
+  look: '看屏幕', commands: '操作', window: '找窗口', web: '网页', write: '写入', other: '操作',
+};
+/* 把工具名映射成 DSH 那种"种类" */
+function procKind(tool) {
+  const t = String(tool || '');
+  if (/^(screen_look|screen_shot|screen_diff|watch_screen)$/.test(t)) return 'look';
+  if (/^(click|rclick|dclick|move|drag|scroll|type|key)$/.test(t)) return 'commands';
+  if (/^(focus_window|windows_list|find_text|find_template|find_template_scroll|uia_find|uia_dump)$/.test(t)) return 'window';
+  if (/^(web_open|web_read|web_click|web_type)$/.test(t)) return 'web';
+  if (/^(skill_write|proj_run|memory_)/.test(t)) return 'write';
+  return 'other';
+}
+/* 刷新那一行的文字（聚合摘要，照 DSH 的 processTitle 思路） */
+function procRender(live) {
+  try {
+    if (!PROC || !PROC.el) return;
+    const cnt = {};
+    for (const it of PROC.items) cnt[it.kind] = (cnt[it.kind] || 0) + 1;
+    const kinds = Object.keys(cnt).sort((a, b) => cnt[b] - cnt[a]).slice(0, 3)
+      .map((k) => (PROC_KIND[k] || k) + (cnt[k] > 1 ? '×' + cnt[k] : ''));
+    const summary = kinds.length ? kinds.join(' · ') : '准备';
+    const more = Object.keys(cnt).length > 3 ? ' 等 ' + Object.keys(cnt).length + ' 类' : '';
+    const failN = PROC.items.filter((x) => x.ok === false).length;
+    PROC.el.textContent = live
+      ? '⏳ 进行中：' + summary + more + '　（' + String(live).slice(0, 60) + '）'
+      : '✅ 已完成：' + summary + more + (failN ? '　（其中 ' + failN + ' 步失败）' : '');
+    if (typeof scroll === 'function') scroll();
+  } catch (e) { /* ★ 绝不外抛 ★ */ }
+}
+/* 开始/继续一个过程（一个任务只有一个气泡） */
+function procAdd(tool, detail, ms, ok) {
+  try {
+    if (!PROC) {
+      addSys('⏳ 开始…');
+      const box = $('msgs');
+      PROC = { el: box.lastElementChild, items: [] };
+    }
+    PROC.items.push({ kind: procKind(tool), tool: String(tool || ''), text: String(detail || ''), ms: ms || 0, ok });
+    procRender(String(tool || '') + ' ' + String(detail || ''));
+    return PROC.el;
+  } catch (e) { PROC = null; return null; }
+}
+/* 任务收尾：把同一行改成总结 */
+function procDone() {
+  try { if (PROC) { procRender(''); PROC = null; } } catch (e) { PROC = null; }
+}
+
 // 共享屏幕：把助手看到的截图直接贴进对话
 function addShot(dataUrl) {
   const d = document.createElement('div');
@@ -822,8 +883,17 @@ async function runTask(msgEl, action, depth) {
     reportTask();
     return;
   }
+  /* ★ 过程气泡：这一小步开始（沿用 DSH"一个气泡装一组调用"的思路）★ */
+  const _pt0 = Date.now();
+  procAdd(action.tool, action.arg, 0, null);
   const r = await execAction(action);
-  if (!r) { if (LOOP) taskStopReason = LOOP.finish('no-result').reason; reportTask(); return; }
+  /* ★ 标成完成/失败 —— 仍然是同一个气泡，只更新文字 ★ */
+  try {
+    const _txt = (r && (r.result || r.text)) ? String(r.result || r.text) : '';
+    const _bad = /^(❌|⚠️|✗)/.test(_txt.trim()) || /失败|错误|FAIL|被拦|不支持/.test(_txt.slice(0, 120));
+    procAdd(action.tool, action.arg, Date.now() - _pt0, !_bad);
+  } catch (e) {}
+  if (!r) { if (LOOP) taskStopReason = LOOP.finish('no-result').reason; procDone(); reportTask(); return; }
   if (r.action) {
     const box = document.createElement('div');
     box.className = 'msg sys';
@@ -837,12 +907,19 @@ async function runTask(msgEl, action, depth) {
     next = await window.petAPI.chatContinue({ tool: action.tool, arg: action.arg, result: r.result });
   } catch (e) { if (LOOP) taskStopReason = LOOP.fail(e).reason; addErr('模型继续失败：' + e.message); reportTask(); return; }
   if (!next || !next.en) { if (LOOP) taskStopReason = LOOP.finish('no-next').reason; reportTask(); return; }
-  const pe = addPet(next.en, next.zh, next.words);
-  renderChoices(next.choices);
+  /* ★★ 关键：中间步骤不再生成整条中英双语消息（用户："输出太多了"）★★
+     有下一步动作 → 只更新那个过程气泡（一行摘要）；
+     没有动作（=收尾）→ 才 addPet 完整渲染 + 朗读。 */
   if (next.action) {
-    // 中间步骤：只显示不朗读，继续下一步
-    renderAction(pe, next.action, () => runTask(pe, next.action, depth + 1), () => {});
+    const holder = document.createElement('div');
+    holder.className = 'msg step-holder';
+    holder.style.display = 'none';
+    $('msgs').appendChild(holder);
+    renderAction(holder, next.action, () => runTask(holder, next.action, depth + 1), () => {});
   } else {
+    procDone();
+    const pe = addPet(next.en, next.zh, next.words);
+    renderChoices(next.choices);
     /* ★ 她这条只说话、没给 ACTION —— 以前直接当"做完了"收尾，任务就静默冻死。
        如果她那句话**听起来还在继续做**（"我这就去/找到了/再看一眼/稍等"），
        就把循环续上、明确催她要 ACTION（最多 2 次，避免死循环）。 */

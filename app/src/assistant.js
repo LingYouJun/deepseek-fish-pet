@@ -886,6 +886,13 @@ async function runInner(tool, arg) {
        + **回读 GetForegroundWindow 确认**，不成功就返回 FAIL（绝不假成功）。
        ★ 它还会记下这次的目标窗口，供 key/type/click 做"前台断言"★（见下面的 lastFocus）。 */
     const r = await require('./focuswin').focusWindow(arg);
+    /* ★ step-showonly：窗口显示出来了但没抢到前台（UWP 常见）★
+       ⚠️ 这时**不能**设 lastFocus ✗ —— 设了会让后续 key/type 去断言前台而失败 ✓，
+       但正确做法本来就不是用键盘（键盘只发前台 ✗），而是用 click 点它 ✓。
+       所以：不设 lastFocus，并把"改用点击"讲清楚，别让她卡在"窗口没弄出来"的错觉里。 */
+    if (/step-showonly/.test(r)) {
+      return '🪟 ' + r.replace(/^OK step-showonly\s*/, '');
+    }
     if (r.startsWith('OK')) {
       lastFocus = String(arg || '').trim();            // 记下来：后续键鼠动作要断言前台还是它
       return '🪟 已把窗口置到前台并通过回读校验：' + r.slice(3)

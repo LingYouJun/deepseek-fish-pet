@@ -153,7 +153,26 @@ public class FW2 {
     ShowWindow(Hit, 9);                                                /* SW_RESTORE */
     SetForegroundWindow(Hit);
     if (Fg() == Hit) return "OK step4-minimize " + tried;
-    return "FAIL fg-is=" + TitleOf(Fg()) + " tried=" + tried;
+    /* ★★★ 抢不到前台 ≠ 失败（2026-10-03 实测，针对 UWP 应用）★★★
+       现场：Windows 计算器被"隐藏"（visible=否 iconic=否）之后，
+         ShowWindow(SW_SHOW) 能把它**显示出来**（实测 visible 立刻变 True ✓），
+         但 SetForegroundWindow 怎么也抢不到前台 ✗ ——
+         因为 Windows 只允许**前台进程**改前台，而计算器是 UWP，
+         它的窗口属于 ApplicationFrameHost.exe，跟我们的进程不在同一个"前台锁"体系里。
+       旧代码这时直接返回 FAIL ✗，于是她以为"窗口没弄出来"，
+       在日志里说 "Calculator is minimized and won't come front"，然后反复重试、最终放弃 ✗。
+       但那其实是**部分成功**：窗口已经可见了，只是当前台不是它。
+       对这类目标正确做法是**别依赖键盘**（键盘只发给前台 ✗），
+       改用 click 直接点它的按钮 ✓ —— 那就必须先让她知道"窗口已经出来了" ✓。
+       所以这里判一下可见性：只要它现在是可见的，就报 OK step-showonly ✓，
+       并附一句明确指引，让她接着用点击而不是继续跟前台较劲。 */
+    bool shownNow = IsWindowVisible(Hit);
+    if (shownNow) {
+      return "OK step-showonly fg-is=" + TitleOf(Fg()) + " tried=" + tried
+        + " || 窗口已经显示出来了，但抢不到前台（UWP 应用常见，不是你的错）。"
+        + "接下来不要用键盘输入（键盘只会发给前台窗口），改用 click 直接点它的按钮/区域。";
+    }
+    return "FAIL fg-is=" + TitleOf(Fg()) + " visible=" + shownNow + " tried=" + tried;
   }
 }
 '@
@@ -281,6 +300,14 @@ async function focusWindow(title) {
   const { out } = await runPs(want, 'focus');
   const first = out.split(/\r?\n/)[0] || '';
   const fg = (out.match(/^FGTITLE (.*)$/m) || [])[1] || '';
+  /* ★ step-showonly：窗口显示了但抢不到前台 —— 不能再说"前台已回读确认" ✗ ★
+     那是假成功：她读到的会是"已置前台 ✓"，于是接着用 type 打字 ✗，
+     而键盘只发给前台窗口 ✗ → 字打到别处 ✗ → 她以为窗口坏了 ✓。 */
+  if (/step-showonly/.test(first)) {
+    const tip = (first.split('||')[1] || '').trim();
+    return '🪟 ' + (tip || '窗口已经显示出来了，但抢不到前台（UWP 应用常见）。改用 click 直接点它，别用键盘。')
+      + '\n（回读到的前台是：「' + fg + '」）';
+  }
   if (first.startsWith('OK')) return first + '  [前台已回读确认]';
   if (first === 'NOTFOUND') {
     const { windows } = await listWindows();
@@ -297,7 +324,15 @@ async function focusWindowEx(title) {
   const { out } = await runPs(want, 'focus');
   const first = out.split(/\r?\n/)[0] || '';
   const fgTitle = (out.match(/^FGTITLE (.*)$/m) || [])[1] || '';
-  return { ok: first.startsWith('OK'), raw: first, step: first.replace(/^OK /, '').split(' ')[0], foreground: fgTitle };
+  /* ★ step-showonly = "窗口显示了，但抢不到前台"（UWP 常见）★
+     这算**部分成功**：窗口已经可见，她可以接着用 click 点它（不需要它当前台）。
+     把 PS 附的那句指引也带出去，让 assistant.js 能原样转达。 */
+  const shownOnly = /step-showonly/.test(first);
+  const tip = (first.split('||')[1] || '').trim();
+  return {
+    ok: first.startsWith('OK'), raw: first, shownOnly, tip,
+    step: first.replace(/^OK /, '').split(' ')[0], foreground: fgTitle,
+  };
 }
 
 /* 光标真值（物理像素，PS 已声明 DPI 感知）—— 动作的效果断言要用它回读 */
