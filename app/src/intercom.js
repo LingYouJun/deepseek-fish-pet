@@ -82,11 +82,28 @@ function install(ctx) {
             try { process.kill(holderPid, 0); alive = true; }
             catch (e2) { alive = (e2 && e2.code === 'EPERM'); }   // EPERM = 存在但没权限 → 活着
           }
-          if (ageMs > 60000 || !alive) {
+          /* ★★★ 只有"持锁者已死"或"锁老到不可能是正常投递"才抢 ★★★
+             2026-10-03 实测：原判据是 ageMs > 60000 || !alive —— 60 秒就抢 ✗，
+             **哪怕持锁进程还活着** ✓。日志里留下了铁证：
+               [intercom] 清掉僵尸锁 seq=579（原持锁 pid=23832 ★存活=true★ 锁龄=60s）
+             而她在跑多步任务时，一次投递（要等模型 + 执行动作）**本来就可能超过 60 秒**，
+             于是"抢活人的锁"变成了常态 ✗ —— 两边同时投，消息可能被投两遍或投丢 ✓。
+             新判据分三种情况：
+               · !alive             → 立刻抢 ✓（真僵尸：持锁进程已经不在了）
+               · alive 且 > 10 分钟  → 抢 ✓（活着但明显卡死了，不能再等）
+               · 其余               → 老实等着 ✓（这是"别人正在干活"，不是僵尸）
+             日志也分开写，免得以后再看到"存活=true"却标着"僵尸锁"这种自相矛盾的记录 ✓。 */
+          const STALE_MS = 600000;   // 10 分钟
+          if (!alive) {
             fs.writeFileSync(lock, String(process.pid));
             took = true;
             dbg('[intercom] 清掉僵尸锁 seq=' + seq + '（原持锁 pid=' + holderPid
-              + ' 存活=' + alive + ' 锁龄=' + Math.round(ageMs / 1000) + 's）—— 这条本来永远投不出去');
+              + ' 已不存在，锁龄=' + Math.round(ageMs / 1000) + 's）—— 这条本来永远投不出去');
+          } else if (ageMs > STALE_MS) {
+            fs.writeFileSync(lock, String(process.pid));
+            took = true;
+            dbg('[intercom] 抢占超时锁 seq=' + seq + '（原持锁 pid=' + holderPid
+              + ' 仍存活，但锁龄已 ' + Math.round(ageMs / 1000) + 's > ' + (STALE_MS / 1000) + 's，判定卡死）');
           }
         } catch (e2) { /* 拿不到锁信息就照旧跳过 */ }
       }
