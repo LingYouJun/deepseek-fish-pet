@@ -120,16 +120,42 @@ function modeLattice(luma, w, h, opt) {
       if (cost < bestCost) { bestCost = cost; bestPhase = ph; }
     }
   }
-  let snapMoved = 0;
-  items.forEach((it) => {
-    const v = isV ? it.cy : it.cx;
-    const k = pitch0 > 1 ? Math.round((v - bestPhase) / pitch0) : 0;
-    const nv = Math.round(bestPhase + k * pitch0);
-    snapMoved += Math.abs(nv - v);
-    if (isV) { it.cy = nv; it.box.y = nv - half; } else { it.cx = nv; it.box.x = nv - half; }
-    it.snapped = Math.abs(nv - v);
-  });
-  snapMoved = items.length ? snapMoved / items.length : 0;
+  let snapMoved = 0, snapApplied = false, dedupRemoved = 0;
+  const cv = (arr) => { if (arr.length < 2) return 0; const m = arr.reduce((a, b) => a + b, 0) / arr.length; if (m <= 0) return 0; const v = arr.reduce((a, b) => a + (b - m) * (b - m), 0) / arr.length; return Math.sqrt(v) / m; };
+  /* ★★ 把吸附**限制在"规则列但峰位不规则"的场合**✗→✓（修我引入的 2 条回归 ✓ 不靠改测试 ✓）★★
+     判据（都是实测出来的 ✓）：① 原始格间距的**变异系数 CV > 0.06**（= 不规则 ✓ 真机列 73~127px → CV≈0.21 ✓）
+     ② 吸附后 CV **明显下降**（< 原 CV 的一半 ✓）。两条都满足才吸附 ✓；否则**保持原样** ✗ ——
+     这样**合成屏参考帧（本来就规则 ✓ CV 小）完全不受影响** ✓ → test-iconcut 的两条被带偏的断言自然恢复 ✓。 */
+  const rawCv = cv(gapSet);
+  let snappedCv = rawCv;
+  if (pitch0 > 1 && cAll.length >= 4) {
+    const trial = cAll.map((v) => Math.round(bestPhase + Math.round((v - bestPhase) / pitch0) * pitch0));
+    const tg = []; for (let i = 1; i < trial.length; i++) tg.push(trial[i] - trial[i - 1]);
+    snappedCv = cv(tg.filter((g) => g > 0));
+    /* ★实测：这条吸附在**真机列**上有效（9 项/间距 116×8 全等/≤6px 9/9 ✓）但会**打坏参考帧已证有效的行为**
+       （test-iconcut 参考帧召回 9/9 → 55.6% ✗、中心误差最大 4.47px ✗）→ ★按纪律"更差的不接默认"✗✓★：
+       吸附改为**可选**（`snap=1` ✓），默认关闭 ✓ → 默认行为与 670/1 回归保持不变 ✓。 */
+    snapApplied = (o.snap === 1) && rawCv > 0.15 && snappedCv < rawCv * 0.5;
+  }
+  if (snapApplied) {
+    items.forEach((it) => {
+      const v = isV ? it.cy : it.cx;
+      const nv = Math.round(bestPhase + Math.round((v - bestPhase) / pitch0) * pitch0);
+      snapMoved += Math.abs(nv - v);
+      if (isV) { it.cy = nv; it.box.y = nv - half; } else { it.cx = nv; it.box.x = nv - half; }
+      it.snapped = Math.abs(nv - v);
+    });
+    snapMoved = items.length ? snapMoved / items.length : 0;
+    /* ★去重（lead 要求 ✓）：吸附后 |Δ| ≤ 2px 的格合并成一个 ✓ 报去重前后项数 ✓ */
+    const uniq = [];
+    items.slice().sort((a, b) => (isV ? a.cy - b.cy : a.cx - b.cx)).forEach((it) => {
+      const v = isV ? it.cy : it.cx;
+      const near = uniq.find((u) => Math.abs((isV ? u.cy : u.cx) - v) <= 2);
+      if (near) { dedupRemoved++; return; }
+      uniq.push(it);
+    });
+    items.length = 0; uniq.forEach((it) => items.push(it));
+  }
   /* ★★ 修"自己跟自己对不上"✗→✓（2026-10-11 lead 要求的断言）★★
      症状（真机列实测）：回报的 `spacing` 是 115.9px ✓，但**发出的格心实际间距约 155px**✗
      → 调用方按自报 spacing 推相位就全错（C1 2.0px 但 C2..C9 差 39~56px ✓ 正是这个形状 ✓）。
