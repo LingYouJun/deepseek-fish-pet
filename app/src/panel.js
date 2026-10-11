@@ -35,6 +35,12 @@ const PANELS = {
   select: { label: '干员选择面板（选人）', words: ['清空选择', '确认', '进驻状态', '信赖值', '收起>'] },
   queue: { label: '进驻队列面板（会客室/制造站等的队列）', words: ['当前进驻', '房间2/12', '（2/3）'] },
   dsh: { label: '桌宠/DSH 自己的窗口（不是游戏 ✗）', words: ['对话', '轨迹', '深度求索'] },
+  /* ★★ 2026-10-11 真机事故补：会客室「装扮界面」原来报 unknown ✗（她因此不知道自己在哪 ✓）★★
+     ★指纹词来源（如实标注）：lead 转述的**现场事实**（她那一屏可见：左侧竖排「设施信息 / 进驻信息 / 装扮 / 好友」、
+     底部编辑栏、计数「5/12」✓）—— ★我**没有**这一屏的帧，所以未做逐帧交叉核对 ✗（取样依据=现场描述 ✓）。
+     风险控制：只收"该屏特征强、其它屏少见"的词 ✓；`装扮`/`设施信息`/`进驻信息`/`好友` 四个词用 minHits≥2 ✓ 才判 ✓
+     → 单次误命中也只到 1 分不构成判定 ✓（不会把别的屏误判成装扮 ✓）。 */
+  face: { label: '会客室·装扮界面（左侧竖排：设施信息/进驻信息/装扮/好友）', words: ['设施信息', '进驻信息', '装扮', '好友', '编辑栏', '5/12'] },
 };
 
 function norm(s) { return String(s == null ? '' : s).replace(/\s+/g, ''); }
@@ -54,10 +60,19 @@ function detect(ocr, opt) {
   const minHits = o.minHits == null ? 2 : Number(o.minHits);
   const all = Object.keys(PANELS).map((k) => hits(ocr, k)).filter(Boolean).sort((a, b) => b.score - a.score);
   const best = all[0] || null, second = all[1] || null;
-  if (!best || best.score === 0) return { panel: null, label: null, score: 0, best, second, verdict: 'unknown', all, note: '一个指纹词都没命中 ✗ → 我不知道这是哪个面板（不猜 ✓）' };
-  if (best.score < minHits) return { panel: null, label: null, score: best.score, best, second, verdict: 'unknown', all, note: '命中 ' + best.score + ' 个词 < ' + minHits + ' → 证据不足 ✗（不猜 ✓）' };
-  if (second && second.score === best.score) return { panel: null, label: null, score: best.score, best, second, verdict: 'uncertain', all, note: '「' + best.label + '」和「' + second.label + '」并列最高（各 ' + best.score + '）✗ → 不确定 ✓' };
-  return { panel: best.name, label: best.label, score: best.score, best, second, verdict: 'ok', all, note: '依据：命中 ' + JSON.stringify(best.hits) + '（第二是 ' + (second ? second.label + ' ' + second.score : '无') + ' ✓）' };
+  /* ★★ "unknown 也要给线索"✗→✓（lead 要求的第二条）★★
+     现场：她调 panel_state 得到光秃秃的 unknown ✗ → 不知道自己在哪一屏、也推不出该点哪里 ✓。
+     现在：无论 verdict 是 ok/unknown/uncertain，都附
+       ① hitWords = **本屏实际命中过的所有指纹词**（跨面板汇总 ✓ 这是"她在哪"的最强线索 ✓）
+       ② hint = 下一步可执行建议（退出当前视图 / 用大字标签做锚点 ✓）✓。 */
+  const hitWords = Array.from(new Set([].concat.apply([], all.map((a) => a.hits || []))));
+  const hint = hitWords.length
+    ? ('★线索★：本屏命中了 ' + JSON.stringify(hitWords) + ' ✓ → 若这不是你想在的屏：先按 act|<键>|key=ESC 或点「返回/关闭」退出 ✓，再 panel_state 复核 ✓，然后重新 locate ✓。')
+    : '★一个指纹词都没命中✗★：先把整屏 OCR 文本（含读到的词）原样报出来 ✓，别猜屏也别反复点同一个坐标 ✗；可先 act ESC 退回上一层再试 ✓。';
+  if (!best || best.score === 0) return { panel: null, label: null, score: 0, best, second, verdict: 'unknown', all, hitWords, hint, note: '一个指纹词都没命中 ✗ → 我不知道这是哪个面板（不猜 ✓）' };
+  if (best.score < minHits) return { panel: null, label: null, score: best.score, best, second, verdict: 'unknown', all, hitWords, hint, note: '命中 ' + best.score + ' 个词 < ' + minHits + ' → 证据不足 ✗（不猜 ✓）' };
+  if (second && second.score === best.score) return { panel: null, label: null, score: best.score, best, second, verdict: 'uncertain', all, hitWords, hint, note: '「' + best.label + '」和「' + second.label + '」并列最高（各 ' + best.score + '）✗ → 不确定 ✓' };
+  return { panel: best.name, label: best.label, score: best.score, best, second, verdict: 'ok', all, hitWords, hint, note: '依据：命中 ' + JSON.stringify(best.hits) + '（第二是 ' + (second ? second.label + ' ' + second.score : '无') + ' ✓）' };
 }
 
 /* 某面板的"可用判据词"（给 click_checked 建议 ✓：★只在成功后出现的词✓★） */
