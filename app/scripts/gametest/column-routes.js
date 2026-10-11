@@ -18,7 +18,9 @@ const IC = require(path.join(APP, 'src/iconcut'));
 const GC = require(path.join(APP, 'src/gridcount'));
 const Jimp = require('jimp').Jimp;
 const OUT = 'C:/deepseek/gametest';
-const F = 'C:/deepseek/desktop-pet/shots/win-Arknights-1791645099248.jpg';
+/* ★可指定帧（主人新给的干净真机列帧用这个跑 ✓）：--frame=<png> */
+const F = (require('process').argv.find((a) => a.startsWith('--frame=')) || '').split('=')[1]
+  || 'C:/deepseek/desktop-pet/shots/win-Arknights-1791645099248.jpg';
 const BAND = { x0: 1770, y0: 40, x1: 1919, y1: 1040 };
 const SPACING = 115.9;                       // ★独立来源：grid_count 同帧三次一致 ✓
 const TOLS = [6, 2];
@@ -58,6 +60,14 @@ const TOLS = [6, 2];
       + (dark / n > 0.6 ? '　★疑似被遮挡✗（这张不能用于验收 ✓）★' : '　✓ 未见大面积遮挡 ✓'));
   }
   console.log('真值 9 格 y：' + truth.map((t) => t.cy + (t.certain ? '✓' : '✗')).join(' '));
+  /* ★右边界裁切验证（lead 要求先验 ✓）：中心 + 半宽 ≤ 图宽 才算完整落在画面内 ✓ */
+  {
+    const w = img.width;
+    const clipped = truth.filter((t) => t.x + t.w / 2 > w || t.x - t.w / 2 < 0);
+    console.log('右边界裁切验证（图宽 ' + w + ' ✓）：格中心 x=' + truth[0].x + ' 半宽 ' + (truth[0].w / 2) + ' → 右边 ' + (truth[0].x + truth[0].w / 2)
+      + ' ≤ ' + w + ' ? ' + (truth[0].x + truth[0].w / 2 <= w ? '✓ 未越界 ✓' : '★越界✗★')
+      + '　→ ' + (clipped.length ? ('★有 ' + clipped.length + ' 格被裁 ✗ 可用 ' + (9 - clipped.length) + ' 格★') : '★9 格都完整落在画面内 ✓★'));
+  }
 
   /* ── 两条路 ── */
   const blob = await IC.scan(F, { mode: 'b', region: BAND });
