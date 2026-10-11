@@ -1,8 +1,19 @@
 /* score.js —— ★离线帧跑分（不抓帧、不注入、不点击 ✓ 只读帧目录 ✓）★
- * 用法：node app\scripts\gametest\score.js --frames=C:\deepseek\gametest\frames [--tolPx=6] [--perClass=999]
- * 做什么：每个 PNG → OCR（PowerShell 管道 ✓）→ locate（text/dup 类）/ icon_scan（icon 类）→ 与 layout.js 真值比对
- * 判定：定位中心落在目标框内（或中心误差 ≤ tolPx）算通过 ✓；否则记 not-found / ambiguous / wrong-target
- * 落盘：C:\deepseek\gametest\score.json + 控制台表格 ✓
+ *
+ * 用法：node app\scripts\gametest\score.js --frames=<目录> --ocrDir=<目录> [--tolPx=6] [--perClass=N]
+ *
+ * ★输入约定（lead 批量产帧时按这个给 ✓ 详见同目录 README.md ✓）★
+ *   · 帧图：`<frames>/fNNN.png`（f000 / f001 … 三位数字从 000 起 ✓），★必须 1920x1080 物理像素✓★
+ *   · OCR：`<ocrDir>/ocr-fNNN.json`（与帧同名 + 前缀 `ocr-` ✓ 一一对应 ✓）
+ *         结构 `{ok,imgW,imgH,text,lines:[{text,words:[{t,x,y,w,h}]}]}`
+ *         ★字段名是 `t`✗不是 text ✓；坐标在 x/y/w/h ✓ 不在 boundingRect 里 ✓；单位=截图像素（本机=物理 ✓）★
+ *         UTF-8（无 BOM 最好 ✓ 带 BOM 会 strip ✓）；不给 --ocrDir 时脚本自己试着调 OCR ✓
+ *         （★本会话里 Node→PowerShell 不可靠✗ → 建议直接传 --ocrDir ✓★）
+ *   · 真值：★直接 require layout.js✗（不手抄 ✓）★；帧必须由 render.js（同一份 layout.js）生成 ✓
+ *   · 判定：定位中心落在目标框内或误差 ≤ tolPx ✓；否则记 notfound / ambiguous / wrong ✓
+ *   · 输出：C:\deepseek\gametest\score.json（分类通过率 + 中心误差三项 + 逐行 verdict ✓）
+ *
+ * ★本脚本**不**启动任何 Electron✗★（抓帧与真点击都由 lead 侧执行 ✓）。
  */
 'use strict';
 const fs = require('fs');

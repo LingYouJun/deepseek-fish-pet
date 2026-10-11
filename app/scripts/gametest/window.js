@@ -1,11 +1,16 @@
 /* window.js —— ★假游戏测试屏（Electron 全屏窗 + 自己记录"实际被点到的是谁"= 真值 ✓）★
  *
- * 启动：Start-Process electron.exe -ArgumentList "<repo>\app\scripts\gametest\window.js","--user-data-dir=<临时目录>"
- *   ★自己带 --user-data-dir ✓ → 绝不与她的实例抢单实例锁 ✓ 也绝不碰她的进程 ✓★
- * 记录：每次 mousedown → 追加一行 JSONL 到 C:\deepseek\gametest\clicks.jsonl
- *       （字段：t 时间戳、id 被点按钮的 id、label、kind、x/y 窗口内坐标、sx/sy 屏幕坐标 ✓）
- * 反馈：被点按钮描边 + 屏上计数（便于截图核对 ✓）
- * 应急：★按 ESC 立刻关窗✗★（绝不把主人的屏幕占死 ✓）
+ * ★启动（lead/主人执行 ✓ 我不起 Electron ✗）★：
+ *   Start-Process electron.exe -ArgumentList "--no-sandbox","<repo>\app\scripts\gametest\window.js","--user-data-dir=C:\deepseek\gametest\ud-live"
+ *   ★--no-sandbox 是关键✓★（lead 实测这样能起窗 ✓）；独立 --user-data-dir ✓ 不抢她的锁 ✓。
+ *
+ * ★真值接口（按批次读）★：C:\deepseek\gametest\clicks.jsonl
+ *   每次启动**清空**并先写一行 batch-start ✓ → ★一批 = 一次启动 = 一个 batch 号★ ✓（要留上一批先拷走 ✓）
+ *   字段：batch（启动时间戳 ms ✓ 同批所有行相同 ✓）| kind（batch-start|click ✓）| t（点击时刻 ms ✓）
+ *         id（★被点到的元素 id = 真值✗★）| label / class（该元素文字/分类 ✓）| x,y（窗口内＝物理 ✓）| sx,sy（屏幕 ✓）
+ *   ★空白处点击不记录✗★（页面只对 .btn 记 ✓）→ "报成功但日志没有对应行" = **假成功**✗ ✓
+ *   另写 C:\deepseek\gametest\layout-snapshot.json（布局真值快照 ✓ 与画面同源 ✓）
+ *   ★ESC 立即关窗✗★（不占屏 ✓）；布局 = layout.js ✓（102 元素 ✓）。
  */
 'use strict';
 const fs = require('fs');
@@ -14,8 +19,17 @@ const LAY = require('./layout');
 
 const OUTDIR = 'C:/deepseek/gametest';
 const CLICKS = path.join(OUTDIR, 'clicks.jsonl');
+const SNAPSHOT = path.join(OUTDIR, 'layout-snapshot.json');
+/* ★批次号 = 这次启动的时间戳（ms ✓）★：每次启动**清空** clicks.jsonl 并写一行 batch-start ✓
+   → ★一批 = 一次启动 = 一个 batch 号★ ✓（lead 按 batch 读真值 ✓；要留上一批先拷走文件 ✓） */
+const BATCH = 'b' + Date.now();
 fs.mkdirSync(OUTDIR, { recursive: true });
-try { fs.writeFileSync(CLICKS, ''); } catch (e) {}   // 每次启动清空 ✓（跑测试前先清 ✓）
+try { fs.writeFileSync(CLICKS, ''); } catch (e) {}
+try {
+  fs.writeFileSync(CLICKS, JSON.stringify({ batch: BATCH, kind: 'batch-start', t: Date.now(), counts: LAY.counts, screen: { w: LAY.width, h: LAY.height }, note: '本批所有行 batch 相同 ✓ 空白处点击不记录 ✓' }) + '\n');
+  fs.writeFileSync(SNAPSHOT, JSON.stringify({ batch: BATCH, at: new Date().toISOString(), layout: LAY }, null, 2));
+} catch (e) {}
+try { require('fs').writeFileSync(path.join(OUTDIR, 'batch.txt'), BATCH); } catch (e) {}
 
 const el = require('electron');
 const { app, BrowserWindow, globalShortcut, screen, ipcMain } = el;
