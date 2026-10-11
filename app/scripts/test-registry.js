@@ -186,6 +186,10 @@ console.log('=== registry.js 单元测试（纯 Node）===');
     'find_owned', 'click_checked',
     /* ★ 2026-10-11：面板状态判定（"我现在在哪个面板"，指纹词来自真机实测）★ */
     'panel_state',
+    /* ★ 2026-10-11：切图标·给每格中心（两模式 + 逐格放大 OCR）★ */
+    'icon_scan',
+    /* ★ 2026-10-11：按契约重做的三个接口 locate / act / zoom ★ */
+    'locate', 'act', 'zoom',
     'flow_run', 'flow_save', 'flow_list', 'flow_del',
     /* A3/A4（2026-10-03）：剪贴板 + 轮询等条件 */
     'clipboard_read', 'clipboard_write', 'wait_for',

@@ -377,6 +377,115 @@ async function runInner(tool, arg) {
     return await dw.run(tool, arg);
   }
 
+  /* ★★★ 2026-10-11：icon_scan —— ★把屏幕上每个图标切出来、给每格中心（+可选逐格放大 OCR）★★★
+     主人原话：「切割屏幕上每个图标，输出每一个图标中心的坐标，图标里有文字再让 OCR 识别，精度要求非常高」。
+     两模式：A 规则排列（格距+相位+质心细化 ✓）/ B 不规则摆放（连通域 ✓）；自动选并说明依据 ✓。
+     ★坐标只由几何/像素算出✗★；OCR 只用来读文字 ✓（认得就给文本，读不出就说没读出 ✓ 绝不瞎编 ✓）。 */
+  if (tool === 'icon_scan') {
+    const IC = require('./iconcut');
+    IC.install({
+      space: () => require('./input').space(),
+      display: () => {
+        try {
+          const { screen } = require('electron');
+          const d = screen.getPrimaryDisplay();
+          return { w: d.size.width, h: d.size.height, scaleFactor: d.scaleFactor || 1 };
+        } catch (e) { const s = require('./input').space(); return { w: s.w, h: s.h, scaleFactor: 1 }; }
+      },
+    });
+    const a = String(arg || '').split('|').map((s) => s.trim());
+    const target = a[0];
+    if (!target) return '❌ 用法：icon_scan|<图或进程名>|<x,y,w,h 可省>|<模式 auto|A|B 可省>|<期望格数 可省>|<ocr=1 逐格放大 OCR 可省>';
+    let imgPath = target, shot = null;
+    if (!/\.(png|jpe?g|bmp)$/i.test(target)) {
+      const DW = require('./desktopwin');
+      shot = await DW.shotWindow(target, {}).catch(() => null);   // 按进程截一张 ✓（遮挡时它自己会说明 ✓）
+    }
+    if (shot) imgPath = shot.path;
+    const kv = {};
+    for (const part of a) { const m = /^([A-Za-z_][\w]*)=(.*)$/.exec(part); if (m) kv[m[1].toLowerCase()] = m[2]; }
+    const opt = { mode: (kv.mode || 'auto'), expect: Number(kv.expect) || 0, dir: 'v' };
+    if (kv.region) { const p = kv.region.split(',').map(Number); if (p.length === 4) opt.region = { x0: p[0], y0: p[1], x1: p[0] + p[2], y1: p[1] + p[3] }; }
+    else if (a[1] && /^\d+,\d+,\d+,\d+$/.test(a[1])) { const p = a[1].split(',').map(Number); opt.region = { x0: p[0], y0: p[1], x1: p[0] + p[2], y1: p[1] + p[3] }; }
+    if (/^[aAbB]$/.test(a[2] || '')) opt.mode = a[2].toLowerCase();
+    if (Number(a[3]) > 0) opt.expect = Number(a[3]);
+    const r = await IC.scan(imgPath, opt);
+    const lines = [];
+    lines.push('🧩 icon_scan：' + r.imageSize.w + 'x' + r.imageSize.h + '，★' + r.count + ' 个图标★，模式=' + r.mode
+      + '（' + r.modeWhy.join('；') + '）');
+    lines.push('  ★坐标系★：space=' + r.space + '　依据：' + r.spaceBasis);
+    if (r.spacing) lines.push('  几何：格距 ' + r.spacing.toFixed(1) + 'px，残差 ' + (r.residual * 100).toFixed(1) + '%（★只用来描述排列，不是"精度承诺"✗★）');
+    const maxN = Number(kv.max) > 0 ? Number(kv.max) : 20;
+    const wantOcr = kv.ocr === '1';
+    let withText = 0;
+    for (const it of r.items.slice(0, maxN)) {
+      let text = '', conf = 0;
+      if (wantOcr) {
+        try {
+          /* ★逐格裁剪 + 放大 3 倍再 OCR ✗→✓★（整屏 OCR 对小字更差 ✓）—— 纯 jimp ✓ 不依赖 Electron ✓ */
+          const Jimp = require('jimp').Jimp;
+          const fs2 = require('fs');
+          const im = await Jimp.fromBuffer(fs2.readFileSync(imgPath));
+          const bx = Math.max(0, it.box.x), by = Math.max(0, it.box.y);
+          const bw = Math.max(4, Math.min(it.box.w, im.width - bx)), bh = Math.max(4, Math.min(it.box.h, im.height - by));
+          const crop = im.clone().crop({ x: bx, y: by, w: bw, h: bh });
+          crop.resize({ w: bw * 3, h: bh * 3 });
+          const tmp = require('path').join(require('os').tmpdir(), 'iconcell-' + Date.now() + '-' + Math.floor(Math.random() * 1e6) + '.png');
+          fs2.writeFileSync(tmp, await crop.getBuffer('image/png'));
+          const j = await ocrJson(tmp);
+          text = String((j && j.text) || '').replace(/\s+/g, '');
+          conf = text.length >= 2 ? 0.6 : 0;   // ★置信度是**近似值**✗：Windows OCR 不返回逐词概率 ✓ → 只按"读出了几个字"给一个保守值 ✓ 并如实标注 ✓
+        } catch (e) {}
+      }
+      if (text) withText++;
+      lines.push('  ' + it.id + '　中心 ' + it.cx + ',' + it.cy + '　' + it.w + 'x' + it.h + '　source=' + it.source
+        + (wantOcr ? ('　text=' + (text ? '「' + text.slice(0, 24) + '」conf=' + conf + '（近似 ✓）' : '★没读出文字✗★')) : ''));
+    }
+    if (r.items.length > maxN) lines.push('  …（还有 ' + (r.items.length - maxN) + ' 个没列）');
+    if (wantOcr) lines.push('  ★逐格文字★：' + withText + '/' + Math.min(maxN, r.items.length) + ' 格读到文字（★读不出就是读不出✗，绝不瞎编 ✓✗★）');
+    lines.push('  ⚠️ 清单可排序、可重复（同一帧两次结果一致 ✓）；★要点击请用 locate → act（本工具只给清单 ✓）★');
+    return lines.join('\n');
+  }
+
+  /* ★★★ 2026-10-11：★按契约重做的三个接口（locate / act / zoom）★★★
+     主人的原话：「不是模型差，是我们写的视觉工具差」✓ —— 缺陷清单见 src/percept.js 头部 ✓。
+     · locate：唯一框，否则 ambiguous + 候选清单（含归属证据 ✓）；内部复用 OCR/模板/几何/图标库 ✓
+     · act   ：★只接受 locate 给的编号✗，不接受裸坐标✗★；自动跑 stateBefore/stateAfter ✓；
+               用 prov 账本做"坐标来源证明 + 同一目标最多点 2 次" ✓
+     · zoom  ：裁剪 + 放大（+可选编号）→ 交给视觉模型**只问描述/编号** ✓（"让模型看得清"的正路 ✓） */
+  if (tool === 'locate' || tool === 'act' || tool === 'zoom') {
+    const pe = require('./percept');
+    pe.install({
+      capture: async () => await captureScreenFallback(),
+      ocrJson: (p) => ocrJson(p),
+      /* 动作仍走**原来那几条路** ✓（click/rclick/dclick/move ✓）—— 不另写鼠标注入 ✗ */
+      act: async (kind, x, y) => {
+        const t = kind === 'right' ? 'rclick' : (kind === 'double' ? 'dclick' : (kind === 'move' ? 'move' : 'click'));
+        return await run(t, x + ',' + y);
+      },
+      /* 只把放大图交给视觉模型问**描述** ✓（不问坐标 ✓） */
+      vision: async (pngPath, question) => {
+        const b = require('fs').readFileSync(pngPath);
+        const dataUrl = 'data:image/png;base64,' + b.toString('base64');
+        const cfg2 = config.load();
+        return await vision.describe(cfg2, dataUrl, question, cfg2.visionDetail || 'high');
+      },
+      space: () => require('./input').space(),
+      display: () => {
+        try {
+          const { screen } = require('electron');
+          const d = screen.getPrimaryDisplay();
+          return { w: d.size.width, h: d.size.height, scaleFactor: d.scaleFactor || 1 };
+        } catch (e) { const s = require('./input').space(); return { w: s.w, h: s.h, scaleFactor: 1 }; }
+      },
+      shotDir: () => {
+        try { const { app } = require('electron'); return require('path').join(app.getPath('userData'), 'shots'); } catch (e) { return null; }
+      },
+      dbg: (m) => dbg('[' + tool + '] ' + m),
+    });
+    return await pe.run(tool, arg);
+  }
+
   /* ★★★ 2026-10-10：点击的两道保险（find_owned / click_checked）★★★
      为什么需要 ✗→✓：主人亲眼看到她点「编辑队列」时点到了**制造站1**的按钮 ✓，
      然后因为"屏幕变了"就以为成功了 ✓，接着在一个根本不存在的"确认"按钮上反复找 ✓。
@@ -683,33 +792,15 @@ if (tool === 'som_look') {
         usedVision = true;
         const m = text.match(/ACTION\s*[:：]\s*([a-z_]+)\s*\|\s*(.+)/i);
         if (m && m[1].trim().toLowerCase() === 'move_norm') {
-          /* ★★ ACTION: move_norm|<nx>,<ny> —— 归一化坐标，只移动光标、不点击 ★★
-             为什么单独开这一条：今天实测（在公招计算器上找水月）——
-               让视觉模型给**归一化坐标**，它一次命中，光标精准落在目标名字上 ✓；
-               而让它"顺着刻度网格读像素坐标"，同一个卡片它报高了整整一行 ✗。
-             为什么只允许"移动"、不允许"点击"：见下面那段事故注释 ——
-               带像素坐标的点击曾经把已经选好的干员**取消掉**（屏幕正中央正好是一张卡）。
-               移动光标没有副作用，所以可以放心交给它。 */
+          /* ★★★ 2026-10-11：move_norm 的**执行体已删除✗**（主人的第 3 条缺陷：活雷 ✓）★★★
+             原来这里会照着模型给的归一化坐标**真的移动光标**✗ —— 只靠提示词禁止是"活雷" ✓
+             （提示词改一次、它照样能输出 ✓）。
+             现在：★一律不执行✗★，只记日志 + 在回执里明确写"这条通道已废除" ✓，
+             并把正确的出口指给它（locate → act ✓）。 */
           const nm = String(m[2]).match(/(-?\d*\.?\d+)\s*[,，]\s*(-?\d*\.?\d+)/);
-          if (nm) {
-            const nx = Number(nm[1]), ny = Number(nm[2]);
-            if (Number.isFinite(nx) && Number.isFinite(ny) && nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1) {
-              const _s = require('./input').space();
-              const px = Math.round(nx * _s.w), py = Math.round(ny * _s.h);
-              try {
-                require('./input').move(px, py);
-                dbg('[look] move_norm ' + nx + ',' + ny + ' → 屏幕 (' + px + ',' + py + ')');
-                text += '\n\n【程序已执行】把光标移到了归一化坐标 (' + nx + ',' + ny + ') 对应的屏幕位置 ('
-                  + px + ',' + py + ') —— 只是悬停，没有点击。';
-              } catch (e) {
-                text += '\n\n【程序未能移动光标】' + ((e && e.message) || e);
-              }
-            } else {
-              text += '\n\n【move_norm 被忽略】归一化坐标必须都在 0~1 之间，收到的是 (' + nm[1] + ',' + nm[2] + ')。';
-            }
-          } else {
-            text += '\n\n【move_norm 被忽略】没解析出两个数字。';
-          }
+          dbg('[look] ★move_norm 通道已废除✗★（模型给了 ' + (nm ? nm[1] + ',' + nm[2] : String(m[2]).slice(0, 40)) + '，没有移动任何光标 ✓）');
+          text += '\n\n【move_norm 通道已废除 ✗】★我不会再照着模型给的坐标移动光标了★（主人第 3 条缺陷 ✓）。'
+            + '要"把光标移到某个东西上"请用：★locate|<描述>|<容器> → act|<编号>|move★ ✓（坐标只由工具算 ✓）。';
         } else if (m) {
           const t = m[1].trim().toLowerCase();
           /* ★★ 只接受"有可验证目标"的动作 —— **裸坐标的点击一律拒绝** ★★
