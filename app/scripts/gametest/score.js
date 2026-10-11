@@ -55,6 +55,16 @@ function inBox(cx, cy, b, tol) {
       space: () => ({ w: 1920, h: 1080 }), display: () => ({ w: 1920, h: 1080, scaleFactor: 1 }), shotDir: () => OUT,
     });
 
+    /* ★★ 几何路线（lead 指出的更大杠杆）✗→✓：小元素**不读小字**，改用几何定位 ★★
+       做法：整帧跑 icon_scan（blob：局部能量→连通域→尺寸/长宽比过滤→合并 ✓），
+       再把真值框配给"最近的检出块" ✓ —— ★全程不读任何文字✗★，所以字号/裁字都影响不到它 ✓。
+       这就是机器人的"锚点 + 相对几何" ✓，与 OCR 路线形成对照 ✓（两条都报数字 ✓）。 */
+    let geoItems = [];
+    try {
+      const rg = await IC.scan(png, { mode: 'b', region: { x0: 0, y0: 0, x1: 1919, y1: 1079 } });
+      geoItems = rg.items || [];
+    } catch (e) { geoItems = []; }
+
     /* icon 类：整片区域一次 icon_scan，再按"最近检出项"配对 ✓（纯图形没有文字 ✓ 走几何/图标路线 ✓） */
     let iconItems = [];
     try {
@@ -72,10 +82,19 @@ function inBox(cx, cy, b, tol) {
       if (per[cls].n >= PER_CLASS) continue;
       per[cls].n++;
       let cx = null, cy = null, verdict = 'notfound';
+      let route = 'ocr';
       if (t.kind === 'icon') {
+        route = 'geometry';
         const near = iconItems.map((it) => ({ it, d: Math.hypot(it.cx - (t.x + Math.round(t.w / 2)), it.cy - (t.y + Math.round(t.h / 2))) }))
           .sort((a, b) => a.d - b.d)[0];
         if (near && near.d <= Math.max(TOL, Math.round(t.w / 2) + 4)) { cx = near.it.cx; cy = near.it.cy; verdict = 'ok'; }
+        else if (near) { cx = near.it.cx; cy = near.it.cy; verdict = 'wrong'; }
+      } else if (t.kind === 'small' || t.kind === 'edge') {
+        /* ★小元素走**几何路线**（lead 的重点 ✓）：不读小字 ✓，用整帧连通域块最近邻 ✓ */
+        route = 'geometry';
+        const near = geoItems.map((it) => ({ it, d: Math.hypot(it.cx - (t.x + Math.round(t.w / 2)), it.cy - (t.y + Math.round(t.h / 2))) }))
+          .sort((a, b) => a.d - b.d)[0];
+        if (near && near.d <= Math.max(TOL, Math.round(Math.min(t.w, t.h) / 2) + 4)) { cx = near.it.cx; cy = near.it.cy; verdict = 'ok'; }
         else if (near) { cx = near.it.cx; cy = near.it.cy; verdict = 'wrong'; }
       } else {
         const loc = await PE.run('locate', (t.label || '') + '||img=' + png + '|region=' + [t.x, t.y, t.w, t.h].join(','));

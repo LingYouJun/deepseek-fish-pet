@@ -20,7 +20,7 @@ for (const b of L.buttons) {
       + '<circle cx="50" cy="50" r="38" fill="#1f5f3a"/><rect x="18" y="42" width="64" height="14" fill="#7a3b12"/></svg>'
     : '<span>' + esc(b.label) + '</span>';
   parts.push('<div class="btn" id="' + b.id + '" data-kind="' + b.kind + '" style="left:' + b.x + 'px;top:' + b.y
-    + 'px;width:' + b.w + 'px;height:' + b.h + 'px;background:' + FILL[b.kind] + ';border:2px solid ' + BORDER[b.kind] + '">' + inner + '</div>');
+    + 'px;width:' + b.w + 'px;height:' + b.h + 'px;font-size:' + (b.font || 28) + 'px;background:' + FILL[b.kind] + ';border:2px solid ' + BORDER[b.kind] + '">' + inner + '</div>');
 }
 /* 两个**不许放按钮**的区域（假阳性测试 ✓ 只放虚线框 + 纯文字区里放一行小字 ✓） */
 for (const r of L.noButtonRegions) {
