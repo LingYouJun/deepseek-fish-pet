@@ -234,6 +234,12 @@ const TOOL_DEFS = [
      ②用**确定性像素算法**数格子（模型完全不参与"在哪" ✗）。 */
   { name: 'win_shot', tier: 'full', needsArg: true, timeoutMs: 120000, desc: '【按进程截那一个窗口】调 MCP desktop-auto 的 bot_screenshot：★只给那一个窗口的图 + 精确 windowBounds★（图落盘可复查 ✓）。用法 win_shot|<进程名，如 Arknights>|<activate，可选>。★拿到 windowBounds 的意义★：窗口内坐标 ↔ 整屏坐标 ↔ 你的坐标空间全变成算术 ✓，还能直接出"窗口内 bbox 0~1000"喂给 bot_click ✓。★★真机实测的两条实话✗★：①这台机器上它返回的其实是**整屏图**（实测 1920×1080 vs 窗口 1536×864，与整屏截图逐像素平均差 1.7/255 ✓）→ 本工具**自己按 windowBounds 裁**（裁完尺寸会断言 ✓）；②★它挡不住遮挡★（走的是"抓屏幕再按窗口矩形裁"✓，别的窗口盖在上面照样拍进去 ✓）→ ★要干净画面必须 win_shot|<进程>|activate★（先把那个窗口提到最前 ✓）。⚠️ 返回的是 **JPEG（q100）**★，不是无损 ✗。' },
   { name: 'grid_count', tier: 'full', needsArg: true, timeoutMs: 120000, desc: '【数格子·确定性】★一列/一行上有几个等距格子、各自中心在哪★ —— 纯像素计算，★模型不参与定位✗★。用法 grid_count|<图片路径 或 进程名>|<v竖|h横>|<x,y,w,h 可省>|<期望个数 可省>。★它和 find_grid 的区别（真机实测）★：find_grid 用"整行平均亮度 + 全局阈值"✗，在**深色图标压深色背景**上量不出东西（实测职业列只测到 1 段 ✗）；本工具用 ★局部对比度能量（对深色压深色一视同仁 ✓）+ 抗异常值阈值（中位数+MAD ✓）+ 谐波投票估格距 + 残差判定 ✓★ —— 实测明日方舟右侧职业列 ★9 格、格距 115.6px、残差 5.8% ✓★。★输出★：每格中心（标注"测到的/推算补的/不在主格距上的"✓ 三种都如实标 ✗不混）+ 格距/残差 + 可信度结论（不可信会明说 ✗）。给进程名时还会顺带把每格换算成 ★你的坐标空间坐标★ 和 ★bot_click 用的 bbox 0~1000★ ✓。⚠️ **只给几何**✗："第几格是哪个职业"是外部知识 ✓（顺序见技能 ✓）；它不猜含义、不给建议 ✗。⚠️ 期望个数凑不出来时会**明说凑不出来**✓，不会编 ✗。' },
+  /* ★★★ icon_lib（2026-10-10）：★认图标 = 几何(grid_count) + 模板库(iconlib)★ ✗→✓ ★★★
+     为什么需要它：游戏里那列职业图标是**纯图形、没文字、不在控件树里**✗ → find_text / uia 都看不见 ✓；
+     grid_count 只说"格子在哪"（实测 9 格 / 115.7px / 残差 4.6% ✓）；find_template 一遇亮度/缩放/JPEG 变化就掉分 ✗。
+     → 本工具：★切格 → 每格和模板库比 → 得到名字 + 分数 ✓，位置和名字都不经过模型 ✗✓★
+       （模型只负责给"名字那一串"这个外部知识 ✓）。 */
+  { name: 'icon_lib', tier: 'full', needsArg: true, timeoutMs: 120000, desc: '【图标模板库·认图标】★把纯图形图标变成"可复用的模板库"，以后认图标=切格+比模板★（★位置由几何给 ✓、名字由模板库给 ✓，模型不需要报坐标✗★）。三种用法：① icon_lib|save|<图或进程名>|<库名>|<v|h>|<x,y,w,h 可省>|<期望格数 可省>|<名字按从上到下的顺序、逗号分隔> —— ★截一次、切 N 格、每格存一个模板★（名字可给人给的 ✓，不给就是 #序号 ✓）；② icon_lib|match|<图或进程名>|<库名>|<v|h>|<x,y,w,h 可省>|<期望格数 可省> —— ★逐格报告"匹配到哪个模板 + 分数 + 领先第二名多少"★，★匹配不到就如实说"没匹配上" ✗ 不硬凑 ✓★；③ icon_lib|list|<库名> 看库里有什么。★模板文件名**带位置序号**（t03_狙击.png ✓）★：序号是几何给的 ✓、名字是人给的 ✓，分开存 —— 免得再出现"名字写着狙击、其实是近卫那一格"✗（今天真出过 ✓）。★抗变化★：灰度 z-score 归一化（对整体亮度/对比度免疫 ✓）+ 多尺度（0.85~1.15 ✓）+ NCC 打分 + dHash 粗筛 ✓，纯 Node 零编译 ✓。⚠️ ★名字只有你给的那串里有✗★：它**不猜含义** ✓（"第几格是哪个职业"是外部知识 ✓，顺序见技能 ✓）。⚠️ 库存在 userData/iconlib/<库名>/ ✓。' },
   { name: 'watch_screen', tier: 'full', needsArg: true, timeoutMs: 180000, desc: '连续看屏幕并给逐帧时间线' },
   { name: 'screen_diff', tier: 'full', needsArg: true, timeoutMs: 30000, desc: '抓两帧做像素比对：界面到底变没变（确定性，不靠视觉模型）' },
   /* ★ 剪贴板（A3）：5 行 API 就能做，不必接 MCP ✓ ★ */
@@ -361,8 +367,8 @@ const TOOL_GROUPS = [
     re: /^(screen_look|screen_shot|screen_diff|watch_screen|windows_list|win_shot|icon_pick|grid_scan|tile_read|strip_read|som_look)$/,
     order: 'screen_look win_shot screen_shot screen_diff watch_screen windows_list som_look strip_read icon_pick grid_scan tile_read' },
   { name: '定位（★只有确定性来源 —— "在哪"的答案只许从这一组来★）',
-    hint: '★非游戏应用优先 uia_snapshot + uia_find：应用自己报的坐标，零识别误差★；其次是模板 / OCR / 像素量距（find_text / find_template / grid_count 数格子 / find_grid）',
-    re: /^(uia_snapshot|uia_find|uia_dump|find_template|find_template_scroll|find_text|make_template|template_list|template_del|find_grid|grid_count|search_code)$/, order: 'uia_snapshot uia_find uia_dump find_text find_template find_template_scroll grid_count find_grid make_template template_list template_del search_code' },
+    hint: '★非游戏应用优先 uia_snapshot + uia_find：应用自己报的坐标，零识别误差★；其次是模板 / OCR / 像素量距（find_text / find_template / grid_count 数格子 / icon_lib 认图标 / find_grid）',
+    re: /^(uia_snapshot|uia_find|uia_dump|find_template|find_template_scroll|find_text|make_template|template_list|template_del|find_grid|grid_count|icon_lib|search_code)$/, order: 'uia_snapshot uia_find uia_dump find_text find_template find_template_scroll grid_count icon_lib find_grid make_template template_list template_del search_code' },
   { name: '操作（点 / 打 / 滚 / 拖）',
     hint: '★键盘只发给前台窗口 —— 目标不在前台就先 focus_window；UWP 抢不到前台时改用 click★',
     re: /^(click|clickz|rclick|rclickz|dclick|dclickz|move|movez|drag|scroll|type|key)$/, order: 'click clickz dclick rclick move drag scroll type key movez rclickz dclickz' },

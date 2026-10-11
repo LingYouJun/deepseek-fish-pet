@@ -350,7 +350,10 @@ async function runInner(tool, arg) {
      这里只注入**依赖**（她的坐标空间 / 显示器信息 / 落图目录 ✓）——
      ★同一份 desktopwin.js 因此能在**纯 Node 探针**里跑真机验证 ✓★
      （app/scripts/probe-desktopwin.js ✓，不用开 Electron 窗口 ✓）。 */
-  if (tool === 'win_shot' || tool === 'grid_count') {
+  /* ★ 2026-10-10：icon_lib 也挂在这条路上 ✓ —— 它要的依赖和 win_shot/grid_count 完全一样
+     （图片路径 / 窗口截图 / 落盘目录 ✓），而且★认图标=几何(grid_count)+模板库(iconlib)★ ✓
+     → 位置和名字都不经过模型 ✗✓（模型只给"名字那一串"这个外部知识 ✓）。 */
+  if (tool === 'win_shot' || tool === 'grid_count' || tool === 'icon_lib') {
     const dw = require('./desktopwin');
     dw.install({
       space: () => require('./input').space(),

@@ -269,10 +269,110 @@ async function gridCount(arg) {
   return lines.join('\n');
 }
 
+/* ───────────────────────── 工具 ③：icon_lib（图标模板库：切格 → 存名 → 认名 ✓） ─────────────────────────
+ * 用法：
+ *   icon_lib|save|<图或进程名>|<库名>|<v|h>|<x,y,w,h 可省>|<期望格数 可省>|<名字按顺序、逗号分隔，可省>
+ *   icon_lib|match|<图或进程名>|<库名>|<v|h>|<x,y,w,h 可省>|<期望格数 可省>
+ *   icon_lib|list|<库名>
+ * ★核心✗→✓：位置由 grid_count 的几何给 ✓；名字由模板库给 ✓；★全程不让模型报坐标✗★。
+ * ★为什么文件名带序号✗★：今天真出过"名字写着狙击、其实是近卫"✓ → 序号（几何给的 ✓）与名字（人给的 ✓）
+ *   分开存 ✓，`t03_狙击.png` 一眼看出"这是第 3 格" ✓。 */
+async function iconLib(arg) {
+  const a = seg(arg);
+  const mode = String(a[0] || '').toLowerCase();
+  const libbase = require('path').join(shotDir(), '..', 'iconlib');   // <userData>/iconlib ✓
+  const IL = require('./iconlib');
+  if (mode === 'list') {
+    const lib = a[1];
+    if (!lib) return '用法：icon_lib|list|<库名>';
+    const idx = IL.loadIndex(libbase, lib);
+    if (!idx) return '❌ 没有这个库：「' + lib + '」（先用 icon_lib|save 建 ✓）';
+    return '📚 ' + lib + '：★' + (idx.entries || []).length + ' 个模板★（建库时间 ' + new Date(idx.at).toLocaleString() + '）'
+      + '\n  格距 ' + (idx.spacing || 0).toFixed(1) + 'px　区域 ' + JSON.stringify(idx.region) + '　方向 ' + idx.dir
+      + '\n' + (idx.entries || []).map((e) => '  ' + String(e.index).padStart(2) + '. ' + e.name
+        + (e.given ? ' ✓人给的名字' : ' ✗（没人给名字 → 用默认 #序号）') + '　' + e.file).join('\n');
+  }
+  if (mode !== 'save' && mode !== 'match') {
+    return '❌ 用法：\n'
+      + '  icon_lib|save|<图或进程名>|<库名>|<v|h>|<x,y,w,h 可省>|<期望格数 可省>|<名字按顺序、逗号分隔>\n'
+      + '  icon_lib|match|<图或进程名>|<库名>|<v|h>|<x,y,w,h 可省>|<期望格数 可省>\n'
+      + '  icon_lib|list|<库名>';
+  }
+  const target = a[1];
+  const libName = a[2];
+  if (!target || !libName) return '❌ 缺参数：icon_lib|' + mode + '|<图或进程名>|<库名>|…';
+  const dir = String(a[3] || 'v').toLowerCase().startsWith('h') ? 'h' : 'v';
+  let box = null;
+  if (a[4]) {
+    const p = a[4].split(',').map((x) => Number(String(x).trim()));
+    if (p.length === 4 && p.every((v) => Number.isFinite(v))) box = { x: p[0], y: p[1], w: p[2], h: p[3] };
+    else return '❌ 区域格式应为 x,y,w,h（收到「' + a[4] + '」）';
+  }
+  const expect = Number(a[5]) > 0 ? Number(a[5]) : 0;
+  const names = a[6] ? String(a[6]).split(/[,，]/).map((s) => s.trim()) : [];
+
+  /* 图哪来：图片路径 ✓ 或进程名（顺手按窗口截一张 ✓ + 换算坐标 ✓） */
+  let shot = null, imgPath = target;
+  if (!/\.(png|jpe?g|bmp)$/i.test(target)) { shot = await shotWindow(target, {}); imgPath = shot.path; }
+  else if (!fs.existsSync(imgPath)) return '❌ 找不到这张图：' + imgPath;
+
+  const o = { image: imgPath, baseDir: libbase, libName, dir, expect, half: undefined };
+  if (box) o.region = { x0: box.x, y0: box.y, x1: box.x + box.w, y1: box.y + box.h };
+
+  if (mode === 'save') {
+    const r = await IL.buildLibrary(Object.assign({ names }, o));
+    const lines = [];
+    lines.push('📚 已建图标库「' + libName + '」：★切出 ' + r.index.cells + ' 个模板★（' + r.dir + ' 方向）');
+    lines.push('  目录：' + r.dir + '　索引：' + r.indexFile);
+    lines.push('  几何：格距 ' + (r.analysis.spacing || 0).toFixed(1) + 'px，残差 ' + (r.analysis.cv * 100).toFixed(1)
+      + '%，' + (r.analysis.consistent ? '等距 ✓' : '不等距 ✗'));
+    lines.push('  ★文件名带序号✗→✓★（序号是几何给的 ✓，名字是人给的 ✓，分开存 ✓ —— 免得再出现"写着狙击其实是近卫"✗）：');
+    r.index.entries.forEach((e) => {
+      let extra = '';
+      if (shot) { const K = coordsFrom(shot, e.box.x + Math.round(e.box.w / 2), e.box.y + Math.round(e.box.h / 2)); extra = '　她的坐标空间 ' + K.space.x + ',' + K.space.y; }
+      lines.push('    ' + String(e.index).padStart(2) + '. ' + (e.given ? '「' + e.name + '」✓' : '（未命名 #' + e.index + '）')
+        + '　' + e.file + '　中心 ' + e.center + extra);
+    });
+    lines.push('  ⚠️ 名字**只**来自你给的那串（顺序 = 从上到下 ✓）—— ★我不猜含义✗★；'
+      + '要给名字就按顺序写在最后一个参数里（例：ALL,先锋,近卫,重装,狙击,术师,医疗,辅助,特种 ✓）。');
+    return lines.join('\n');
+  }
+
+  const r = await IL.matchLibrary(Object.assign({ min: undefined }, o));
+  const lines = [];
+  lines.push('🔍 认图标（库「' + libName + '」，' + r.dir + ' 方向，★' + r.rows.length + ' 格★）');
+  lines.push('  ★判据（真机实测调的）★：最优分 ≥ ' + r.matchMin + ' **且** 领先次优 ≥ ' + r.marginMin
+    + ' 才算"就是它" ✓；分数 ≥ ' + r.candMin + ' 但不够以上两条 → 报"⚠️ 不确定" ✗ 不硬选 ✓；低于 ' + r.candMin + ' → "❌ 没找到" ✓');
+  if (shot) lines.push('  图：' + shot.path);
+  const tally = { match: 0, uncertain: 0, none: 0 };
+  r.rows.forEach((row) => {
+    tally[row.verdict] = (tally[row.verdict] || 0) + 1;
+    let extra = '';
+    if (shot) { const K = coordsFrom(shot, row.box.x + Math.round(row.box.w / 2), row.box.y + Math.round(row.box.h / 2)); extra = '　坐标 ' + K.space.x + ',' + K.space.y; }
+    const second = row.second ? ('，次名「' + row.second.name + '」' + row.second.score.toFixed(3)) : '';
+    const margin = (row.margin == null) ? '-' : row.margin.toFixed(3);
+    if (row.verdict === 'match') {
+      lines.push('  ' + String(row.index).padStart(2) + '. ★就是它：「' + row.name + '」★　分数 ' + row.score.toFixed(3)
+        + '　领先次优 ' + margin + '　尺度 ' + (row.scale == null ? '-' : row.scale) + extra);
+    } else if (row.verdict === 'uncertain') {
+      lines.push('  ' + String(row.index).padStart(2) + '. ⚠️ ★不确定★（最高「' + (row.all[0] ? row.all[0].name : '-') + '」' + row.score.toFixed(3)
+        + '，领先次优只有 ' + margin + '，不到 ' + r.marginMin + '）→ ★我不硬选✗：请把区域收窄/换个角度再来一次，或让你/主人给一次答案 ✓★' + second + extra);
+    } else {
+      lines.push('  ' + String(row.index).padStart(2) + '. ❌ ★没找到★（最高只有 ' + row.score.toFixed(3) + '，低于 ' + r.candMin + '）' + second + extra);
+    }
+  });
+  lines.push('  ★统计★：就是它 ' + tally.match + ' 格 ✓　不确定 ' + tally.uncertain + ' 格 ⚠️　没找到 ' + tally.none + ' 格 ❌'
+    + '（共 ' + r.rows.length + ' 格）');
+  lines.push('  ⚠️ 名字来自模板库 ✓（人给过的顺序 ✓）；★认不出时明说 ✗ 不硬凑 ✓★；'
+    + '要点击请用上面的坐标，点完用 screen_diff 确认 ✓。');
+  return lines.join('\n');
+}
+
 async function run(tool, arg) {
   if (tool === 'win_shot') return await winShot(arg);
   if (tool === 'grid_count') return await gridCount(arg);
+  if (tool === 'icon_lib') return await iconLib(arg);
   throw new Error('desktopwin 不认识这个工具：' + tool);
 }
 
-module.exports = { install, run, winShot, gridCount, shotWindow, coordsFrom };
+module.exports = { install, run, winShot, gridCount, iconLib, shotWindow, coordsFrom };

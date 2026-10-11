@@ -180,6 +180,8 @@ console.log('=== registry.js 单元测试（纯 Node）===');
     'mcp_list', 'mcp_call',
     /* ★ 2026-10-10：按 DSH 的架构约定补的两件（按进程截窗口 + 确定性数格子）★ */
     'win_shot', 'grid_count',
+    /* ★ 2026-10-10：图标模板库（几何给位置 + 模板库给名字，模型不报坐标）★ */
+    'icon_lib',
     'flow_run', 'flow_save', 'flow_list', 'flow_del',
     /* A3/A4（2026-10-03）：剪贴板 + 轮询等条件 */
     'clipboard_read', 'clipboard_write', 'wait_for',
