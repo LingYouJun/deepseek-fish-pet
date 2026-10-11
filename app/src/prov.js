@@ -35,6 +35,7 @@ function create(opt) {
   const maxSame = o.maxSame == null ? MAX_SAME : o.maxSame;
   let offers = [];    // [{x,y,from,at,label}]
   let clicks = [];    // [{x,y,at,from}]
+  let bypasses = [];  // ★逃生门放行记录★（谁/什么时候/什么用途 —— 事后审计用 ✓）
 
   function prune() {
     const t = now();
@@ -59,7 +60,10 @@ function create(opt) {
     let best = null, bestD = Infinity;
     for (const v of offers) {
       const d = Math.hypot(v.x - X, v.y - Y);
-      if (d <= nearPx && d < bestD) { bestD = d; best = v; }
+      /* ★同样近时取**更新**的那一条★（2026-10-11 修）：
+         "复点必须有新证据"看的是 offer 的时间 ✓ —— 若一直取最早那条，
+         重新定位之后仍然被判成"没有新证据"✗（真机/探针都复现过 ✓）。 */
+      if (d <= nearPx && (d < bestD - 0.001 || (Math.abs(d - bestD) <= 0.001 && best && v.at > best.at))) { bestD = d; best = v; }
     }
     return best ? { offer: best, dist: bestD } : null;
   }
@@ -87,10 +91,11 @@ function create(opt) {
    *   "点对一次又点掉一次" = **两次独立的单击打在同一个 toggle 上**（第一下开/选中，第二下关/取消）。
    *   所以：★复点必须有**新证据**★ —— 这个坐标要在**上一次点它之后**被某个确定性工具
    *   **重新报过一次**（= 新鲜帧重新定位、重新自证 ✓）；证不过就拒绝 ✗。
-   *   · n===0（第一次）：★默认仍然要求来源证明★（`requireOffer` 默认开 —— 这条线的契约是
-   *     "模型自己写的坐标一律不执行" ✓，percept 的单测就是按这个冻住的 ✓）；
-   *     裸 click 那条路要放宽时**显式**传 `{requireOffer:false}` ✓（safedrive 就是这么做的，
-   *     理由写在那边：游戏助手那种"只有画面没有控件"的场景还得能点 ✓）。
+   *   · n===0（第一次）：★默认要求来源证明★（`requireOffer` 默认开 —— 这条线的契约是
+   *     "模型自己写的坐标一律不执行" ✓，percept 的单测就是按这个冻住的 ✓）
+   *     ★逃生门（2026-10-11 主人的要求）★：`{requireOffer:false, why:'<用途>'}` ——
+   *     `why` **必填**（空 → 拒绝 `bypass-without-why` ✓）；放行时**留痕**（返回 bypass + 写日志 ✓）；
+   *     只给探针/开发/诊断用，★不写进她读得到的工具表★（否则模型会学会绕 ✗）。
    *   · n>=1：必须有**比上一次点击更新的** offer，否则 code='repeat-needs-fresh-evidence'
    *   · n>=maxSame(2)：一律拒绝，code='repeat-too-many'（第 3 次）
    *   · {allowStaleOffer:true} 只给单测/诊断用，生产别传 ✓ */
@@ -98,6 +103,15 @@ function create(opt) {
     prune();
     const o = opt || {};
     const wantOffer = o.requireOffer !== false;
+    /* ★逃生门必须说清用途★（说不清就直接拒 —— 免得它变成事实上的常规通道 ✗） */
+    const why = String(o.why == null ? '' : o.why).trim();
+    if (!wantOffer && !why) {
+      return {
+        ok: false, code: 'bypass-without-why',
+        reason: '★放行"没有定位来源的坐标"必须写清用途 ✗★（`{requireOffer:false, why:"…"}`）—— 收到的是空 why ✓',
+        hint: '★这是给探针/开发/诊断用的逃生门✗★，不是常规通道：真要放行就把用途写清楚（会被记进日志 ✓）。',
+      };
+    }
     const hit = findOffer(x, y);
     const n = sameTargetCount(x, y);
     if (n >= 1) {
@@ -129,22 +143,43 @@ function create(opt) {
       }
     }
     /* 第一次点：★默认要求来源证明★（契约：模型自己写的坐标一律不执行 ✓）；
-       裸 click 那条路显式传 {requireOffer:false} 才放宽 ✓ */
+       ★逃生门★：显式 `{requireOffer:false, why:'…'}` 才放宽 —— 且必须留痕 ✓ */
     if (n === 0 && wantOffer && !hit) {
       return {
         ok: false, code: 'no-provenance',
         reason: '★这个坐标 (' + Math.round(Number(x)) + ',' + Math.round(Number(y))
           + ') 不是任何**确定性工具**刚给出的✗★（最近 ' + Math.round(ttl / 1000) + ' 秒内没有任何 '
-          + 'find_text/find_template/grid_count/icon_lib/find_owned/click_checked/locate 报过它附近 ' + nearPx + 'px 的点 ✓）',
-        hint: '★模型自己写的坐标一律不执行✗★ —— 要点击请先用 find_text|<文字> 或 find_owned|<按钮>|<房间> 拿到坐标 ✓，'
+          + 'uia_find/find_text/find_template/find_owned/click_checked/grid_count/icon_lib/locate 报过它附近 ' + nearPx + 'px 的点 ✓）',
+        hint: '★模型自己写的坐标一律不执行✗★ —— 要点击请先用 find_text|<文字> / uia_find / find_owned 拿到坐标 ✓，'
           + '或者直接用 click_checked / locate → act（它们自己找坐标 + 点后核对判据 ✓）。',
       };
     }
+    const bypass = (!wantOffer && !hit) ? why : null;
+    if (bypass) recordBypass(action, x, y, bypass);
     return {
       ok: true, offer: hit ? hit.offer : null, dist: hit ? hit.dist : null,
       alreadyClicked: n, action: String(action || ''),
       freshEvidence: n >= 1 ? true : null,
+      bypass,
     };
+  }
+
+  /* ★逃生门的留痕★（主人要求："每次放行都要在日志里留一行，方便事后审计"）
+     · 写 testlog（结构化，好统计 ✓）+ debug.log（人看得懂 ✓）
+     · 任何一步失败都不能影响动作本身 ✓ */
+  function recordBypass(action, x, y, why) {
+    /* ★去重★：同一次动作会被 safedrive 和 input **两道闸门各问一次** ✓ ——
+       不去重会记两条（审计时看着像放了两次行 ✗）。3 秒内同动作同坐标同用途只记一条 ✓ */
+    const last = bypasses[bypasses.length - 1];
+    if (last && last.action === String(action || '') && last.x === Number(x) && last.y === Number(y)
+      && last.why === String(why) && (now() - last.at) < 3000) return last;
+    /* 同时挂一份在实例上：回执要把它写出来（谁、什么时候、什么用途 ✓） */
+    const rec = { at: now(), action: String(action || ''), x: Number(x), y: Number(y), why: String(why) };
+    bypasses.push(rec);
+    if (bypasses.length > 50) bypasses = bypasses.slice(-50);
+    try { require('./testlog').log('click', 'provenance-bypass', rec); } catch (e) {}
+    try { require('./debug').log('[prov] ★逃生门放行★ ' + rec.action + ' (' + rec.x + ',' + rec.y + ') 用途=' + rec.why); } catch (e) {}
+    return rec;
   }
 
   /* 真的点完（或确认已经发出）之后记账 ✓ */
@@ -166,10 +201,11 @@ function create(opt) {
 
   function stats() {
     prune();
-    return { offers: offers.length, clicks: clicks.length, ttlMs: ttl, nearPx, maxSame };
+    return { offers: offers.length, clicks: clicks.length, bypasses: bypasses.length, ttlMs: ttl, nearPx, maxSame };
   }
 
   return { offer, gate, note, clear, stats, lastClickAt, sameTargetCount,
+    bypasses: () => bypasses.slice(),
     offers: () => offers.slice(), clicks: () => clicks.slice() };
 }
 

@@ -224,7 +224,8 @@ const REASON_TEXT = {
   'repeat-needs-fresh-evidence': '这个目标点过了，而且没有新的证据（复点要先重新定位）',
   'repeat-too-many': '这个目标已经点过 2 次了，不许再点（别再打了）',
   'repeat-blocked': '被"不许复点"的账本拦住了',
-  'no-provenance': '这个坐标不是任何确定性工具刚给出的',
+  'no-provenance': '这个坐标不是任何定位工具刚给出的（默认不许写坐标）',
+  'bypass-without-why': '要走"没有定位来源"的逃生门，必须写清用途（why 不能空）',
   'point-outside-target-window': '坐标不在目标窗口里',
   'cursor-did-not-reach-target': '光标没到目标（命令发了，但一次都没采到）',
   'target-is-minimized': '目标窗口是最小化的',
@@ -392,22 +393,26 @@ async function clickSafe(x, y, opts) {
      ⚠️ 纯 Node 单测里没有账本副作用也没关系（prov 是纯逻辑 ✓）；o.skipRepeatGuard 只给探针/诊断用 ✓ */
   if (!o.skipRepeatGuard) {
     const ledger = require('./prov').instance;
-    /* ⚠️ 这里**显式放宽**"第一次点击必须有来源证明" ✗→✓：
-       prov 的契约默认是严格的（模型自己写的坐标一律不执行 ✓，percept 的单测冻住的就是它 ✓），
-       但**裸 click** 这条路上有游戏助手那种"只有画面、没有控件/文字可定位"的场景 ——
-       一下全掐掉会把那条路废掉 ✗，而那不是这次要解决的问题。
-       要收紧就在调用处传 `requireProvenance:true`（一行即可，接口已备好 ✓）。 */
-    const g = ledger.gate(kind, x, y, { requireOffer: !!o.requireProvenance });
-    out.repeatGuard = { ok: g.ok, code: g.code || null, alreadyClicked: g.alreadyClicked == null ? null : g.alreadyClicked };
-    if (!g.ok) {
-      return blockFail(out, g.code === 'repeat-too-many' ? 'repeat-too-many' : (g.code || 'repeat-blocked'),
-        '★不许复点★：' + g.reason + '\n' + (g.hint || ''), o);
-    }
+    /* ★★ 2026-10-11 主人的决定：默认必须有**定位来源**★★
+       坐标必须来自本次会话已登记的 offer（uia_find / find_text / find_template / find_owned /
+       click_checked / grid_count / icon_lib / locate ✓，且只认**已换算成她坐标空间**的那种 ✓）；
+       没登记 → 抛 ❌（no-provenance）✓。
+       ★逃生门★：`{requireOffer:false, why:'<用途>'}`（why 必填、放行会记日志 ✓）——
+         只给探针/开发/诊断用，**不写进她读得到的工具表** ✗。
+       ⚠️ input.js 里还有一道同样的闸门（drag/scroll 直接调它 ✓）—— 两处共用同一本账 ✓，
+         结论必然一致 ✓；这一道负责把结构化信息（repeatGuard / bypass）带进回执 ✓。 */
+    const g = ledger.gate(kind, x, y, { requireOffer: o.requireOffer, why: o.why });
+    out.repeatGuard = {
+      ok: g.ok, code: g.code || null, bypass: g.bypass || null,
+      alreadyClicked: g.alreadyClicked == null ? null : g.alreadyClicked,
+    };
+    if (!g.ok) return blockFail(out, g.code || 'no-provenance', g.reason + '\n' + (g.hint || ''), o);
+    if (g.bypass) out.bypass = { why: g.bypass, at: Date.now() };
   }
-  /* ③ 动作 */
+  /* ③ 动作（把两个选项**透传**给 input：它在那一层还要再判一次 ✓，drag/scroll 也靠它 ✓） */
   const IN = getInput();
   const fn = (typeof IN[kind] === 'function' ? IN[kind] : IN.click).bind(IN);
-  out.result = await fn(x, y);
+  out.result = await fn(x, y, { requireOffer: o.requireOffer, why: o.why });
   /* ★点完记一笔账★（不管有没有确认到位都记：重点是"这一点刚刚已经点过了" ✓） */
   if (!o.skipRepeatGuard) {
     try { require('./prov').instance.note(kind, x, y, 'clickSafe'); } catch (e) {}
@@ -469,6 +474,15 @@ async function moveSafe(x, y, opts) {
         + sp.w + 'x' + sp.h + ' —— 越界坐标会被静默夹到边缘，落到完全别的位置。',
     });
   }
+  /* ⓪b ★移动也要**定位来源**★（2026-10-11 主人的决定：move 也在收紧名单里 ✓）——
+     理由：move 不改界面，但"模型自己写一个坐标让光标过去"同样是错坐标的来源之一 ✓
+     （而且它会把 userinput 的"主人动鼠标"判定搅乱 ✓）。规则/逃生门同 clickSafe ✓。 */
+  if (!o.skipRepeatGuard) {
+    const g = require('./prov').instance.gate('move', x, y, { requireOffer: o.requireOffer, why: o.why });
+    out.moveGuard = { ok: g.ok, code: g.code || null, bypass: g.bypass || null };
+    if (!g.ok) return blockFail(out, g.code || 'no-provenance', g.reason + '\n' + (g.hint || ''), o);
+    if (g.bypass) out.bypass = { why: g.bypass, at: Date.now() };
+  }
   if (o.expectForeground) {
     const f = await ensureForeground(o.expectForeground, o);
     out.foreground = f;
@@ -479,7 +493,7 @@ async function moveSafe(x, y, opts) {
     out.inWindow = p;
     if (!p.ok) return Object.assign(out, { ok: false, blocked: true, reason: 'point-outside-target-window' });
   }
-  out.result = await getInput().move(x, y);
+  out.result = await getInput().move(x, y, { requireOffer: o.requireOffer, why: o.why });
   /* ★ 效果断言：轮询等它到达（旧写法是单次 570ms 后的回读 → 会把"其实到了"误判成没到）★ */
   const arr = await pollCursorArrival({ x, y }, { tolerance: o.tolerance, budgetMs: o.arriveMs, intervalMs: o.sampleMs });
   out.cursorAfter = arr.pos;

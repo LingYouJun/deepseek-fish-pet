@@ -1604,6 +1604,12 @@ if (tool === 'som_look') {
     const cxS = Math.round(rxS + rwS / 2), cyS = Math.round(ryS + rhS / 2);
     const { nativeImage } = require('electron');
     const MS = require('./matcher');
+    /* ★这一步的坐标是**确定性的**：它就是调用方声明的列表区域中心（不是模型猜的 ✓），
+       所以先记进账本再动光标 ✓ —— 2026-10-11 起"动鼠标必须有定位来源"是默认闸门，
+       不登记的话这里（以及下面滚回原位的两次）会被拦掉 ✗。 */
+    if (true) {
+      try { require('./prov').instance.offer(cxS, cyS, 'find_template_scroll(列表区域中心)', nmS); } catch (e) {}
+    }
     input.move(cxS, cyS);                       // 光标必须先落在列表上（滚轮作用于光标下的窗口）
     await new Promise((r) => setTimeout(r, 220));
     let scrolledS = 0;

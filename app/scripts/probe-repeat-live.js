@@ -60,13 +60,31 @@ const OPTS = {
 };
 
 (async () => {
-  L('=== probe-repeat-live（不许复点：safedrive × prov 集成）===');
-  /* 桩光标：让"到达确认"通过（safedrive 内部用 electron → 拿不到时走 PS 慢路径；
-     这里直接注入 cursorFn 不可行，所以只用 clickSafe 的 softBlock 结果看闸门 ✓） */
+  L('=== probe-repeat-live（定位来源闸门 + 不许复点：safedrive × prov 集成）===');
+  /* §0 ★默认路径：没有定位来源 → 拒绝，而且一次都没发★（主人 2026-10-11 的决定 ✓） */
+  PROV.instance.clear();
+  const c0 = await SD.clickSafe(X, Y, OPTS);
+  info('默认(没登记坐标): ok=' + c0.ok + ' reason=' + c0.reason + ' guard=' + JSON.stringify(c0.repeatGuard));
+  ok(c0.ok === false && c0.reason === 'no-provenance', '★默认路径：没登记过坐标 → 拒绝（no-provenance）★', String(c0.reason));
+  ok(clicks.length === 0, '★被拒时 input 一次都没被调用★', 'clicks=' + clicks.length);
+  /* §0b 逃生门：不写用途 → 一样拒；写了用途 → 放行 + 留痕 ✓ */
+  PROV.instance.clear();
+  const c0b = await SD.clickSafe(X, Y, Object.assign({}, OPTS, { requireOffer: false }));
+  ok(c0b.ok === false && c0b.reason === 'bypass-without-why', '★逃生门不说用途 → 一样拒绝★', String(c0b.reason));
+  PROV.instance.clear();
+  const c0c = await SD.clickSafe(X, Y, Object.assign({}, OPTS, { requireOffer: false, why: 'probe: 复点闸门集成验证' }));
+  const bys = PROV.instance.bypasses();
+  info('逃生门(带用途): ok=' + c0c.ok + ' bypass=' + JSON.stringify(c0c.bypass) + ' 留痕 ' + bys.length + ' 条');
+  ok(c0c.ok === true && clicks.length === 1, '★带用途的逃生门 → 放行（探针/诊断路径 ✓）★', 'clicks=' + clicks.length);
+  ok(bys.length >= 1 && bys[bys.length - 1].why === 'probe: 复点闸门集成验证', '★放行留痕（动作/坐标/用途/时间）★',
+    JSON.stringify(bys[bys.length - 1] || null));
+
+  /* §1 ★正常生产流程：先定位（拿到 offer）→ 再点★ */
+  PROV.instance.clear(); clicks.length = 0;
+  PROV.instance.offer(X, Y, 'find_text', '编辑队列');
   const c1 = await SD.clickSafe(X, Y, OPTS);
-  info('第 1 次: ok=' + c1.ok + ' repeatGuard=' + JSON.stringify(c1.repeatGuard));
-  ok(clicks.length === 1, '第 1 次：真的发出了 1 次点击（input 被调用 1 次）', 'clicks=' + clicks.length);
-  ok(!c1.repeatGuard || c1.repeatGuard.alreadyClicked === 0, '第 1 次：账本里还是 0 次', JSON.stringify(c1.repeatGuard));
+  info('第 1 次(定位过): ok=' + c1.ok + ' repeatGuard=' + JSON.stringify(c1.repeatGuard));
+  ok(c1.ok === true && clicks.length === 1, '第 1 次：定位过 → 放行，真的发了 1 次点击', 'clicks=' + clicks.length);
 
   const c2 = await SD.clickSafe(X, Y, OPTS);
   info('第 2 次(无新证据): ok=' + c2.ok + ' reason=' + c2.reason + ' guard=' + JSON.stringify(c2.repeatGuard));
@@ -87,15 +105,14 @@ const OPTS = {
   ok(c4.ok === false && c4.reason === 'repeat-too-many', '★同一目标第 3 次 → 一律拒绝（上限 2）★', String(c4.reason));
   ok(clicks.length === 2, '★第 3 次也没有发出去（还是 2 次）★', 'clicks=' + clicks.length);
 
-  /* 判据满足（确认状态真的变了）→ 清账 → 又能点 ✓ */
+  /* 判据满足（确认状态真的变了）→ 清账 + 重新定位 → 又能点 ✓ */
   PROV.instance.clear(X, Y);
+  PROV.instance.offer(X, Y, 'click_checked', '入驻');
   const c5 = await SD.clickSafe(X, Y, OPTS);
-  info('clear 之后: ok=' + c5.ok + ' clicks=' + clicks.length);
-  ok(c5.ok === true && clicks.length === 3, '★clear（判据满足）之后 → 同一目标可以重新开始★', 'clicks=' + clicks.length);
+  info('clear + 重新定位之后: ok=' + c5.ok + ' clicks=' + clicks.length);
+  ok(c5.ok === true && clicks.length === 3, '★clear（判据满足）+ 重新定位 → 同一目标可以重新开始★', 'clicks=' + clicks.length);
 
   /* 被拦时的"抛错"形态（上层那条链才会写 ❌ ✓） */
-  PROV.instance.clear(X, Y);
-  await SD.clickSafe(X, Y, Object.assign({}, OPTS, { softBlock: false }));   // 第一次：放行
   let threw = null;
   try { await SD.clickSafe(X, Y, Object.assign({}, OPTS, { softBlock: false })); } catch (e) { threw = e; }
   ok(!!threw && String(threw.message).charAt(0) === '❌' && threw.reason === 'repeat-needs-fresh-evidence',
