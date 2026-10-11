@@ -86,6 +86,76 @@ function median(a) {
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 }
 
+/* ★★★ 容错词组匹配 ✗→✓（2026-10-11：lead 指出"精确匹配诚实但不可用"）★★★
+ * 【为什么】真机实测：OCR 把「编辑队列」读成「编 辑 队 歹 刂」（"列"被拆成两半 ✗）→ 精确匹配只能
+ *   如实报 not-found ✗（42 个 text 用例全挂 ✓）→ ★诚实但不可用✗★。
+ * 【度量：LCS 覆盖率】（★不用编辑距离✗★：拆字会被罚两次 ✓ 把好匹配也压下去 ✓）
+ *   coverage = LCS(目标, 候选窗口) / len(目标) ✓。
+ * 【阈值：用**真机数据**标定 ✓ 不是拍脑袋✗】
+ *   正样本（live 帧真读到的那条）：目标「编辑队列」 vs 读到「编辑队歹刂」 → **0.75** ✓
+ *   负样本（同帧别的按钮/形近词）：vs「编辑」0.50 ✓｜vs「编辑信息」0.50 ✓｜vs「确认」0.00 ✓｜vs「取消」0.00 ✓
+ *   → 阈值 **0.75**：正样本刚好过 ✓、负样本隔 0.25 ✓（两侧都有余量 ✓）。
+ * 【护栏】① 唯一性：最佳 ≥阈值 且 与次佳差 < 0.02 → ★ambiguous✗ 不挑一个 ✓★；
+ *         ② 回执自证：★目标文字 / 页面实际读到的文字 / 分数 / 用了哪条归一化 ✓★（一眼看出真匹配还是硬凑 ✓）。
+ */
+function normTxt(s) {
+  return String(s == null ? '' : s)
+    .replace(/\s+/g, '')
+    .replace(/[\uFF01-\uFF5E]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+    .replace(/[·・．.。,，、；;：:！!？?（）()【】\[\]《》<>「」“”"']/g, '')
+    .toLowerCase();
+}
+function lcsLen(a, b) {
+  const n = a.length, m = b.length;
+  if (!n || !m) return 0;
+  let prev = new Int32Array(m + 1), cur = new Int32Array(m + 1);
+  for (let i = 1; i <= n; i++) {
+    for (let j = 1; j <= m; j++) cur[j] = a[i - 1] === b[j - 1] ? prev[j - 1] + 1 : Math.max(prev[j], cur[j - 1]);
+    const t = prev; prev = cur; cur = t; cur.fill(0);
+  }
+  return prev[m];
+}
+function coverage(needle, cand) { return needle ? lcsLen(needle, cand) / needle.length : 0; }
+
+function fuzzyFromOcr(ocr, needle, opt) {
+  const o = opt || {};
+  const nd = normTxt(needle);
+  const out = [];
+  if (!ocr || nd.length < 2) return { min: 0.75, best: null, all: [], ambiguous: false, notes: 0 };
+  (ocr.lines || []).forEach((L, li) => {
+    const words = (L.words || []).map((w) => ({ t: normTxt(w.t), x: w.x, y: w.y, w: w.w, h: w.h })).filter((w) => w.t);
+    if (!words.length) return;
+    let joined = '';
+    const map = [];
+    words.forEach((w, wi) => { for (const _c of w.t) { map.push(wi); joined += _c; } });
+    let best = { score: 0, from: 0, to: 0, cand: '' };
+    for (const win of [nd.length - 1, nd.length, nd.length + 1, nd.length + 2]) {
+      if (win < 2) continue;
+      for (let s = 0; s + win <= joined.length; s++) {
+        const cand = joined.slice(s, s + win);
+        const sc = coverage(nd, cand);
+        if (sc > best.score) best = { score: sc, from: s, to: s + win, cand };
+      }
+    }
+    if (!best.cand) return;
+    const ids = [];
+    for (let k = best.from; k < best.to; k++) if (map[k] != null && ids.indexOf(map[k]) < 0) ids.push(map[k]);
+    const ws = ids.map((i) => words[i]).filter(Boolean);
+    if (!ws.length) return;
+    const x0 = Math.min.apply(null, ws.map((w) => w.x)), y0 = Math.min.apply(null, ws.map((w) => w.y));
+    const x1 = Math.max.apply(null, ws.map((w) => w.x + w.w)), y1 = Math.max.apply(null, ws.map((w) => w.y + w.h));
+    out.push({
+      text: needle, lineText: normTxt(L.text), read: best.cand, score: Number(best.score.toFixed(4)),
+      norm: 'LCS覆盖 + 去空白/全角半角/去标点', line: li,
+      x: x0, y: y0, w: x1 - x0, h: y1 - y0, cx: Math.round((x0 + x1) / 2), cy: Math.round((y0 + y1) / 2),
+    });
+  });
+  const min = o.minScore == null ? 0.75 : Number(o.minScore);
+  const pass = out.filter((r) => r.score >= min).sort((a, b) => b.score - a.score);
+  const amb = pass.length > 1 && (pass[0].score - pass[1].score) < (o.tie == null ? 0.02 : Number(o.tie));
+  return { min, best: pass[0] || null, all: pass, ambiguous: amb, notes: out.length };
+}
+
 /* ★核心：把候选归属到标题（规则 A / B ✓）★
  * buttons: [{x,y,w,h,cx,cy,text}]　titles: [{...,text}]　opts: {xTol, maxDistK, cards:[{x,y,w,h,text}]}
  * 返回 {verdict:'ok'|'uncertain'|'none', pairs:[{button,title,dist,dx}], excluded:[{button,why}], notes:[], method} ✓ */
@@ -298,7 +368,12 @@ async function frame(kv, fallbackCapture) {
 function toSpace(cx, cy, imgW, imgH) {
   const s = deps.space ? deps.space() : { w: imgW, h: imgH };
   const kx = imgW ? s.w / imgW : 1, ky = imgH ? s.h / imgH : 1;
-  return { x: Math.round(cx * kx), y: Math.round(cy * ky), space: s, applied: { kx, ky } };
+  /* ★这张图是不是"整屏"★（2026-10-11 坐标系排查）：只有**整屏图**，按比例缩放才等于"屏幕坐标" ✓。
+     窗口裁图（img= 传进来的那种）按整屏比例缩放**得不到屏幕坐标** ✗ ——
+     原来无条件写「坐标已换算成她的坐标空间 ✓」是**假保证** ✗：图不对时那句话是错的。
+     现在如实标 fullscreen，回执里也照实说 ✓（正常路径 = 主进程抓帧，一定是整屏 ✓）。 */
+  const fullscreen = !!(imgW && imgH && imgW === s.w && imgH === s.h);
+  return { x: Math.round(cx * kx), y: Math.round(cy * ky), space: s, applied: { kx, ky }, fullscreen };
 }
 
 /* ① 点前确认归属（只报告 ✓ 不动鼠标 ✓） */
@@ -337,7 +412,10 @@ async function findOwned(arg) {
   if (owned.length === 1) {
     const t = toSpace(owned[0].button.cx, owned[0].button.cy, ocr.imgW, ocr.imgH);
     lines.push('  ✅ ★归属确定★：「' + buttonText + '」属于「' + owned[0].title.text + '」（★唯一 ✓★）→ 点击坐标 ' + t.x + ',' + t.y
-      + '（物理像素 ' + owned[0].button.cx + ',' + owned[0].button.cy + ' ✓）');
+      + '（物理像素 ' + owned[0].button.cx + ',' + owned[0].button.cy + ' ✓）'
+      + (t.fullscreen ? '　★坐标空间=你的坐标空间（图就是整屏 ' + t.space.w + 'x' + t.space.h + '）✓★'
+        : '　⚠️★这张图不是整屏（' + ocr.imgW + 'x' + ocr.imgH + ' ≠ ' + t.space.w + 'x' + t.space.h
+          + '）→ 上面的"点击坐标"只在图正好是整屏时才等于屏幕坐标 ✗：请先用现场抓帧（不带 img=）重跑一次 ✗★'));
   } else if (owned.length === 0) {
     lines.push('  ⚠️ ★归属不确定✗★：没有任何候选被配对到「' + containerText + '」→ ★不点✗：请把区域收窄、或换个更明确的容器关键词 ✓★');
   } else {
@@ -463,7 +541,7 @@ async function run(tool, arg) {
 
 module.exports = Object.assign(module.exports, {
   /* 纯函数（可单测 ✓ 不依赖屏幕 ✓） */
-  norm, phrasesFromOcr, pairOwners, ownedBy, verifyCriteria, validateCriteria, diffStats, median,
+  norm, phrasesFromOcr, fuzzyFromOcr, normTxt, lcsLen, coverage, pairOwners, ownedBy, verifyCriteria, validateCriteria, diffStats, median,
   /* 工具层 */
   install, run, findOwned, clickChecked, panelState, parseArg, toSpace, lumaOfImage,
 });

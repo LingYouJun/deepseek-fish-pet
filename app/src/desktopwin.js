@@ -153,6 +153,24 @@ function coordsFrom(shot, px, py) {
   return { px: { x: px, y: py }, local, dip, space, bbox };
 }
 
+/* ★★坐标空间声明★★（2026-10-11 主人问："她的坐标到底物理还是 DIP、有没有混用"）
+   本工具的坐标有**两种**来路，绝不能让人猜 ✗→✓：
+     · 第一个参数是**进程名** → 先按窗口截图拿到 windowBounds（DIP）→ 每格**换算成她的坐标空间**（space()）✓
+     · 第一个参数是**图片路径** → 只有"图内像素"这一个空间：
+         · 图 = 整屏抓帧（默认 1920x1080 = space()）→ 图内像素 == 她的坐标空间 ✓ 可以直接 click ✓
+         · 图 = 窗口裁图（win_shot 出来的那种）→ 图内像素 ≠ 屏幕坐标 ✗ 直接 click 会整体偏 ✗
+   （转换只在一处：本文件的 coordsFrom()，用「DIP 尺寸 + scaleFactor + space()」三件套算 ✓） */
+function spaceNoteFor(imgW, imgH) {
+  const sp = deps.space();
+  if (!sp || !sp.w || !sp.h) return '　★坐标空间：图内像素（拿不到屏幕尺寸，没法换算）★';
+  if (imgW === sp.w && imgH === sp.h) {
+    return '　★坐标空间 = 你的坐标空间（这张图就是整屏 ' + sp.w + 'x' + sp.h + '）✓ 可以直接拿去 click ✓★';
+  }
+  return '　⚠️★坐标空间 = **这张图的像素**（' + imgW + 'x' + imgH + '，≠ 整屏 ' + sp.w + 'x' + sp.h + '）✗'
+    + ' 下面的坐标**不能直接**拿去 click ✗ —— 要屏幕坐标就把第一个参数换成**进程名**'
+    + '（它会按 windowBounds 换算到你的坐标空间 ✓）★';
+}
+
 /* ───────────────────────── 工具 ①：win_shot ───────────────────────── */
 async function winShot(arg) {
   const a = seg(arg);
@@ -224,6 +242,8 @@ async function gridCount(arg) {
   const lines = [];
   lines.push((r.quality.verdict === 'ok' ? '📐 ' : '⚠️ ') + '数格子：' + dir + ' 方向，图 ' + img.width + '×' + img.height
     + '，实际量的是 ' + JSON.stringify(r.region));
+  /* ★坐标空间必须写在回执里★（传进程名时下面每格已换算成她的坐标空间 ✓；传图片路径时只有图内像素 ✗） */
+  if (!shot) lines.push(spaceNoteFor(img.width, img.height));
   lines.push('  ★测到 ' + r.cells.length + ' 格★（其中 ★' + r.anchors + ' 格是**直接测到的**'
     + (r.estimated ? '，' + r.estimated + ' 格是**按格距推算补的**（标(估) ✓）' : '')
     + (r.offLattice && r.offLattice.length ? '，' + r.offLattice.length + ' 格**不在主格距上**（标"外" ✓，没有丢掉 ✓）' : '')
@@ -323,6 +343,7 @@ async function iconLib(arg) {
     const r = await IL.buildLibrary(Object.assign({ names }, o));
     const lines = [];
     lines.push('📚 已建图标库「' + libName + '」：★切出 ' + r.index.cells + ' 个模板★（' + r.dir + ' 方向）');
+    if (!shot) lines.push(spaceNoteFor(r.index.imageW, r.index.imageH));
     lines.push('  目录：' + r.dir + '　索引：' + r.indexFile);
     lines.push('  几何：格距 ' + (r.analysis.spacing || 0).toFixed(1) + 'px，残差 ' + (r.analysis.cv * 100).toFixed(1)
       + '%，' + (r.analysis.consistent ? '等距 ✓' : '不等距 ✗'));
@@ -341,6 +362,8 @@ async function iconLib(arg) {
   const r = await IL.matchLibrary(Object.assign({ min: undefined }, o));
   const lines = [];
   lines.push('🔍 认图标（库「' + libName + '」，' + r.dir + ' 方向，★' + r.rows.length + ' 格★）');
+  /* 传进程名 → 下面每格的"坐标"已换算成她的坐标空间 ✓；传图片路径 → 只有图内像素 ✗，必须明说 */
+  if (!shot) lines.push(spaceNoteFor(r.index.imageW, r.index.imageH));
   lines.push('  ★判据（真机实测调的）★：最优分 ≥ ' + r.matchMin + ' **且** 领先次优 ≥ ' + r.marginMin
     + ' 才算"就是它" ✓；分数 ≥ ' + r.candMin + ' 但不够以上两条 → 报"⚠️ 不确定" ✗ 不硬选 ✓；低于 ' + r.candMin + ' → "❌ 没找到" ✓');
   if (shot) lines.push('  图：' + shot.path);
