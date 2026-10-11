@@ -28,22 +28,29 @@ const KINDS = String(getArg('kinds', 'text,dup,small,edge,icon')).split(',');
 function sh(cmd, args) { return spawnSync(cmd, args, { stdio: 'ignore', windowsHide: true }); }
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
-/* ① 抓帧（Electron 子进程 ✓ ★按物理 1920x1080 抓★ ✓ 结果写文件 ✓ 不走管道 ✓）
-   ★诊断结论（实测 ✓）★：DIP 抓帧(1536x864) OCR 读得出 52 行/129 词 ✓，物理抓帧读得出 64 行/144 词 ✓
-   → ★"125% 缩放把字糊掉"的假设被推翻✗★：字读得出来 ✓；
-   第一版 text 类 0/42 的真因是**我自己的坐标换算**（DIP 抓帧 × 物理布局 = 差 1.25 倍 ✗）。
-   → 现在按物理抓 ⇒ 布局真值 = 截图坐标 ⇒ ★不需要任何换算✓★（少一整类错 ✓）。 */
-function shoot() {
-  const out = path.join(OUT, 'live-phys-' + Date.now() + '.png');
-  sh(BAK, [path.join(APP, 'scripts/gametest/shoot2.js'), '1920', '1080', out]);
-  if (!fs.existsSync(out)) throw new Error('抓帧失败（没有文件 ✓）');
-  return out;
+/* ①+② 一帧 = 抓帧 + OCR（★全部在 PowerShell 里一步做完✗→✓★ —— Node 在这台机器上既不能抓子进程
+   stdout（EPERM ✗）也不能可靠 spawn Electron（实测"没有文件" ✗）；PowerShell 的 Start-Process + 等待 + OCR
+   是通的 ✓。离线自证 ✓：1920x1080 帧读出 64 行 / 144 词 = 预期 ✓） */
+function roundFrame(tag) {
+  const png = path.join(OUT, 'live-phys-' + tag + '.png');
+  const json = path.join(OUT, 'ocr-' + tag + '.json');
+  sh('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+    path.join(APP, 'scripts/gametest/shoot-ocr.ps1'), '-Png', png, '-Out', json,
+    '-Capture', '1', '-Electron', BAK]);
+  if (!fs.existsSync(png)) throw new Error('抓帧失败（PowerShell 里也没拿到文件 ✗）');
+  if (!fs.existsSync(json)) throw new Error('OCR 没写出文件（管道不通 ✗）');
+  return { png, ocr: JSON.parse(fs.readFileSync(json, 'utf8').replace(/^\uFEFF/, '')) };
 }
-/* ② OCR（PowerShell 子进程 ✓ 自己写 JSON ✓ 不走管道 ✓） */
+function shoot() { return roundFrame(String(Date.now())).png; }
+/* ② OCR（★lead 给的可用写法：整个 OCR 在 PowerShell 里一步做完，Node 只读文件✗→✓★）
+   踩过的坑（我全踩过 ✗）：`| Out-File -Encoding utf8` 会带 BOM/可能变 UTF-16 ✗；`>` 重定向写出过 0 字节 ✗；
+   从 Node 里 spawn 抓子进程 stdout 被沙箱挡（EPERM ✗）。→ 改调 scripts/gametest/shoot-ocr.ps1 ✓
+   （内部 `& ocr.ps1 … | Out-String` + `[IO.File]::WriteAllText(…, UTF8Encoding($false))` ✓），Node 只 parse ✓。
+   ★离线自证✓★：同一张物理帧（1920x1080）读出 64 行 / **144 词 = 预期 144 ✓**。 */
 function ocrOf(png, outJson) {
-  const cmd = '$ErrorActionPreference="Continue"; [Console]::OutputEncoding=New-Object System.Text.UTF8Encoding($false); '
-    + '& "' + path.join(APP, 'scripts/ocr.ps1') + '" -Path "' + png + '" -Json | Out-File -Encoding utf8 "' + outJson + '"';
-  sh('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', cmd]);
+  sh('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+    path.join(APP, 'scripts/gametest/shoot-ocr.ps1'), '-Png', png, '-Out', outJson]);
+  if (!fs.existsSync(outJson)) throw new Error('OCR 没写出文件（管道不通 ✗）');
   return JSON.parse(fs.readFileSync(outJson, 'utf8').replace(/^\uFEFF/, ''));
 }
 /* ③ 前台自查（★点之前必查✗★） */

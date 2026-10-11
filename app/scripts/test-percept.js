@@ -28,7 +28,7 @@ const ocrOf = (p) => {
 
 let acted = [];
 PE.install({
-  capture: async () => ({ path: 'look-screen.png' }),
+  capture: async () => ({ path: IMG }),   // ★必须真实存在✗→✓★（act 的"新鲜帧复核"要读它 ✓）
   ocrJson: async (p) => ocrOf(p),
   act: async (kind, x, y) => { acted.push({ kind, x, y }); },
   vision: async (p, q) => '（stub 模型回答：这一小块里有 3 个图标 ✓）',
