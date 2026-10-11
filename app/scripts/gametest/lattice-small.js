@@ -58,8 +58,13 @@ function latticeCenters(luma, w, h, region, dir) {
           if (d < bestD) { bestD = d; best = { cx, cy }; }
         }
       } else {
-        const rg = await IC.scan(png, { mode: 'b', region: zone.region });
-        for (const it of (rg.items || [])) { const d = Math.hypot(it.cx - tx, it.cy - ty); if (d < bestD) { bestD = d; best = { cx: it.cx, cy: it.cy }; } }
+        /* ★不许**静默**退化✗→✓（lead 指出这是真 bug ✓）：量不出格距就**明确报出来** ✓ ——
+           第一版这里悄悄退回 blob ✗ → 数字从 50% 掉到 11.1% 却看不出原因 ✗。
+           现在：明确判 "no-lattice" 并写出为什么 ✓（四角按钮是分散目标 ✓ 本来就没有格距 ✓ 属"不适用" ✓）。 */
+        const why = (!cols ? '横向量不出格距' : (!rws ? '纵向量不出格距' : '两侧格子都少于 2'));
+        rows.push({ frame: f, id: t.id, kind: t.kind, truth: { x: tx, y: ty }, got: null, dist: Infinity, tol: 0,
+          verdict: 'no-lattice', method: '★' + why + '✗ → 不用格距（该目标几何上不适用）★' });
+        continue;
       }
       const tol = Math.max(TOL, Math.round(Math.min(t.w, t.h) / 2) + 4);
       const verdict = !best ? 'notfound' : (bestD <= tol ? 'ok' : 'wrong');
