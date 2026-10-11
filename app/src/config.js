@@ -20,19 +20,19 @@ const MEMORY_DEFAULTS = {
   skillAutoArchive: true,// 启动时自动把攒够权重的经验归档进技能
   projRunTimeout: 60000,  // 执行脚本的超时（毫秒），到点强制结束
   screenWarm: true,      // 启动时预热屏幕流（首帧更快；不想让系统一直显示"正在捕获"就设 false）
-  historyTokens: 3000,   // 历史按 token 预算保留（省 token：老回合本来就会压缩成 EN: 一行，砍短体感无损）
-  fullTurns: 3,          // 最近几轮助手回复保留完整格式（格式锚）
-  toolResultChars: 250,  // AI 助手执行结果入库时的截断长度（太长会把真实对话挤出历史）
+  historyTokens: 12000,   // 历史按 token 预算保留（省 token：老回合本来就会压缩成 EN: 一行，砍短体感无损）
+  fullTurns: 8,          // 最近几轮助手回复保留完整格式（格式锚）
+  toolResultChars: 600,  // AI 助手执行结果入库时的截断长度（太长会把真实对话挤出历史）
   inject: {              // 每轮注入上下文的数量/长度
     /* ⚠️ totalChars 是 context.build() 读的**总字符预算**（三块加起来的上限）。
        它以前没写在这里 —— 代码里 `Number(inj.totalChars) || 2400` 会一直落到 2400，
        等于这个旋钮是死的、agent.json 里配了也不生效。测试时发现的。 */
-    totalChars: 2400,
-    permanentFacts: 20,
-    longDays: 3,
-    mediumCount: 4,
-    longChars: 200,
-    mediumChars: 200,
+    totalChars: 7000,
+    permanentFacts: 40,
+    longDays: 7,
+    mediumCount: 8,
+    longChars: 320,
+    mediumChars: 320,
   },
 };
 
