@@ -210,6 +210,56 @@ function modeBlob(luma, w, h, opt) {
   return { mode: 'blob', trustworthy: items.length > 0, reasons: [], blobs: blobs.length, dropped, thr, items };
 }
 
+/* ───────── 模式 C：★先按 grid 分格 → 每格内取局部质心★（绕开"挑一个完整块"✓）─────────
+ * 【为什么它同时治两类病 ✗→✓】
+ *   · icon 碎片化：72x72 被切成 11 块 ✗ → "挑最近块"必然挑到碎片 ✗；★分格后每格只在自己的窗口内取质心 ✓
+ *     碎片多少都不影响 ✓（碎片仍落在同一格内 ✓）。
+ *   · small+edge 的 wrong：整帧 blob 把小按钮与邻近元素配错 ✗ → 分格后位置由**格距+相位**决定 ✓。
+ * 【纪律】格距/相位**必须从图像量出来**✗（不许拿 layout.js 真值当输入 ✓，那是抄答案 ✗）；
+ *         量不出就★明确报"量不出"✗★并让调用方决定退 blob ✓ —— 不许静默退化 ✗（那个 bug 已被 lead 抓到过 ✓）。
+ */
+function modeGrid(luma, w, h, opt) {
+  const o = opt || {};
+  const x0 = o.region ? o.region.x0 : 0, y0 = o.region ? o.region.y0 : 0;
+  const x1 = o.region ? o.region.x1 : w - 1, y1 = o.region ? o.region.y1 : h - 1;
+  if (x1 - x0 < 8 || y1 - y0 < 8) return { mode: 'grid', ok: false, reason: '区域太小', items: [] };
+  const E = GC.multiScaleEnergy(luma, w, h, 5, 15);
+  const colProf = [], rowProf = [];
+  for (let x = x0; x <= x1; x++) { let s = 0; for (let y = y0; y <= y1; y++) s += E[y * w + x]; colProf.push(s); }
+  for (let y = y0; y <= y1; y++) { let s = 0; for (let x = x0; x <= x1; x++) s += E[y * w + x]; rowProf.push(s); }
+  const runsOf = (prof) => {
+    const mx = Math.max.apply(null, prof), mn = Math.min.apply(null, prof);
+    const thr = mn + (mx - mn) * (o.pct == null ? 0.35 : Number(o.pct));
+    const runs = GC.findRuns(prof, thr, o.minRun == null ? 4 : Number(o.minRun), 3) || [];
+    return runs.map((r) => ({ c: r.start + Math.round((r.end - r.start) / 2), len: r.end - r.start + 1 }));
+  };
+  const cols = runsOf(colProf), rows = runsOf(rowProf);
+  const medGap = (rs) => { const g = []; for (let i = 1; i < rs.length; i++) g.push(rs[i].c - rs[i - 1].c); g.sort((a, b) => a - b); return g.length ? g[Math.floor(g.length / 2)] : 0; };
+  const sCol = medGap(cols), sRow = medGap(rows);
+  if (cols.length < 2 || rows.length < 2) {
+    return { mode: 'grid', ok: false, items: [], cols: cols.length, rows: rows.length,
+      reason: '★量不出格距✗★（列峰 ' + cols.length + ' / 行峰 ' + rows.length + '，都需 ≥2）' };
+  }
+  const phase = { x: cols[0].c, y: rows[0].c };
+  const halfX = Math.max(6, Math.round((sCol || 40) * 0.32)), halfY = Math.max(6, Math.round((sRow || 40) * 0.32));
+  const items = [];
+  for (let j = 0; j < rows.length; j++) {
+    for (let i = 0; i < cols.length; i++) {
+      const cx0 = phase.x + i * (sCol || 0), cy0 = phase.y + j * (sRow || 0);
+      let sx = 0, sy = 0, sw = 0;
+      for (let y = Math.max(y0, cy0 - halfY); y <= Math.min(y1, cy0 + halfY); y++) {
+        for (let x = Math.max(x0, cx0 - halfX); x <= Math.min(x1, cx0 + halfX); x++) {
+          const e = E[y * w + x]; sx += x * e; sy += y * e; sw += e;
+        }
+      }
+      const cx = sw > 0 ? Math.round(sx / sw) : cx0, cy = sw > 0 ? Math.round(sy / sw) : cy0;
+      items.push({ id: 'I' + (items.length + 1), cx, cy, w: halfX * 2, h: halfY * 2, source: 'grid',
+        box: { x: cx - halfX, y: cy - halfY, w: halfX * 2, h: halfY * 2 }, raw: { cx: cx0, cy: cy0 } });
+    }
+  }
+  return { mode: 'grid', ok: true, items, spacing: { x: sCol, y: sRow }, phase, cols: cols.length, rows: rows.length, region: { x0, y0, x1, y1 } };
+}
+
 /* ───────── 统一入口：自动选模式 + 稳定排序 + 声明坐标系 ───────── */
 async function scan(imgPath, opt) {
   const o = opt || {};
@@ -268,4 +318,4 @@ function spaceContract(imgW, imgH, o) {
   };
 }
 
-module.exports = { scan, modeLattice, modeBlob, lumaFromJimp, spaceContract, install, median };
+module.exports = { scan, modeLattice, modeBlob, modeGrid, lumaFromJimp, spaceContract, install, median };

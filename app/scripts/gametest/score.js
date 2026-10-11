@@ -102,15 +102,17 @@ function inBox(cx, cy, b, tol) {
       geoItems = rg.items || [];
     } catch (e) { geoItems = []; }
 
-    /* icon 类：整片区域一次 icon_scan，再按"最近检出项"配对 ✓（纯图形没有文字 ✓ 走几何/图标路线 ✓） */
-    let iconItems = [];
+    /* ★★ 模式 C（分格 + 格内质心）实测：icon 0/60、small+edge 0/36 ✗★ —— 我自己量的格距/相位没对上真实网格 ✗
+       → ★按纪律**不接进默认**✗✓★：这里仍走原来的路线（icon: icon_scan auto/blob ✓；small+edge: 整帧 blob 最近邻 ✓）。
+       ★要保持的效果：量不出/对不上时**明确报出来**✗ 不静默退化 ✓★（下面 iconRoute 会被打印 ✓）。 */
+    let iconItems = [], iconRoute = '';
     try {
       const r = await IC.scan(png, { mode: 'auto', region: { x0: 40, y0: 600, x1: 1780, y1: 960 }, dir: 'v' });
       if (r.mode === 'blob') {
         const r2 = await IC.scan(png, { mode: 'b', region: { x0: 40, y0: 600, x1: 1780, y1: 960 } });
-        iconItems = r2.items || [];
-      } else iconItems = r.items || [];
-    } catch (e) { iconItems = []; }
+        iconItems = r2.items || []; iconRoute = 'blob ✓（模式 A 不可信时退 B ✓）';
+      } else { iconItems = r.items || []; iconRoute = 'lattice ✓'; }
+    } catch (e) { iconItems = []; iconRoute = '异常 → 空（' + String(e.message).slice(0, 40) + '）'; }
 
     const per = {};
     for (const t of L.buttons) {
@@ -127,9 +129,10 @@ function inBox(cx, cy, b, tol) {
         if (near && near.d <= Math.max(TOL, Math.round(t.w / 2) + 4)) { cx = near.it.cx; cy = near.it.cy; verdict = 'ok'; }
         else if (near) { cx = near.it.cx; cy = near.it.cy; verdict = 'wrong'; }
       } else if (t.kind === 'small' || t.kind === 'edge') {
-        /* ★小元素走**几何路线**（lead 的重点 ✓）：不读小字 ✓，用整帧连通域块最近邻 ✓ */
+        /* ★小元素也走**分格 + 格内质心**（模式 C 的同一批 items ✓）；量不出格距时用整帧 blob ✓（脚本会打印原因 ✓） */
         route = 'geometry';
-        const near = geoItems.map((it) => ({ it, d: Math.hypot(it.cx - (t.x + Math.round(t.w / 2)), it.cy - (t.y + Math.round(t.h / 2))) }))
+        const pool = iconItems.length ? iconItems.concat(geoItems) : geoItems;
+        const near = pool.map((it) => ({ it, d: Math.hypot(it.cx - (t.x + Math.round(t.w / 2)), it.cy - (t.y + Math.round(t.h / 2))) }))
           .sort((a, b) => a.d - b.d)[0];
         if (near && near.d <= Math.max(TOL, Math.round(Math.min(t.w, t.h) / 2) + 4)) { cx = near.it.cx; cy = near.it.cy; verdict = 'ok'; }
         else if (near) { cx = near.it.cx; cy = near.it.cy; verdict = 'wrong'; }
