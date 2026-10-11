@@ -2101,8 +2101,21 @@ const gotLock = (process.env.PET_SKIP_LOCK === '1') ? true : app.requestSingleIn
 if (!gotLock) {
   app.quit();
 } else {
+  /* ★★★ 2026-10-11 修第三个真 bug ✗→✓（主人复现："又打开不了了"）★★★
+     ★ 原来只做 `petWin.show(); petWin.focus();` ✗ —— 而**立绘窗一旦被销毁**（主人关掉立绘 ✓），
+       这两句**全都不执行** ✓ → ★双击快捷方式**什么都不发生** ✗✓。
+     ★ 更糟的是 ✗：隐藏的**截图窗**（`src/screenstream.js` 里那个 640x360 的 capture 窗 ✓）
+       **一直活着** ✓ → 上面那句 `app.on('window-all-closed', () => app.quit())` ★永不触发**✗✓
+       → ★进程**永不退出**✗ → ★**单实例锁被永久占着**✗ → 主人**再也开不了她** ✓✓
+       （★ 2026-10-11 实测复现 ✓：pid 29104 活着、只有隐藏窗口、`second-instance` 空转 ✓）
+     ★★ 修法 ✓：第二个实例发现"立绘窗没了"就**把她重新建出来** ✓ ——
+       ★ 这样**双击快捷方式永远等于"叫她回来"** ✓，而不是静默退出 ✓✓
+     ★ 注 ✓：`createPet()` 本来就是启动路径里的同一函数 ✓，重复调用是安全的 ✓
+       （★ 它内部会重新 `loadPosition()` 并夹进屏幕 ✓，所以重建后**一定落在屏幕内** ✓）。 */
   app.on('second-instance', () => {
-    if (petWin && !petWin.isDestroyed()) { petWin.show(); petWin.focus(); }
+    if (petWin && !petWin.isDestroyed()) { petWin.show(); petWin.focus(); return; }
+    try { createPet(); } catch (e) { dbg('[second-instance] 重建立绘窗失败: ' + (e && e.message)); }
+    try { if (typeof createChat === 'function' && (!chatWin || chatWin.isDestroyed())) createChat(); } catch {}
   });
 
   app.whenReady().then(() => {
