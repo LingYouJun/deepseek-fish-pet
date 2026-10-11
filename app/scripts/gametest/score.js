@@ -59,6 +59,32 @@ function inBox(cx, cy, b, tol) {
     const ocr = ocrOf(png, path.join(OUT, 'ocr-' + f.replace(/\.png$/i, '') + '.json'));
     if (!ocr) { rows.push({ frame: f, err: 'OCR 失败' }); continue; }
     const words = (ocr.lines || []).reduce((n, L2) => n + ((L2.words || []).length), 0);
+    /* ★★★ 帧合格性自检（不合格的帧**不许进跑分**✗→✓ 并说明原因）★★★
+       ① 尺寸必须 1920x1080 ✓；② 锚点词命中 ≥3 ✓；
+       ③ ★缩放自检★：锚点「编辑队列」真值中心 (140,56) ✓ —— 若 OCR 给的 ≈ **175,70**（= 真值×1.25 ✓）
+          则判定"窗口按 CSS 1920 渲染、在 125% 屏上被放大 1.25 倍"✗ → 右侧/下侧被裁 ✗ → 不合格 ✓
+          （★这正是 lead 那批帧的实测特征✓：偏移随坐标线性增大 ✓ 不是随机散布 ✓ 中心误差 71.7px 由此而来 ✓） */
+    const ANCHOR_WORDS = ['编辑队列', '进驻信息', '设施信息', '控制中枢', '会客室', '制造站', '贸易站', '发电站', '训练室', '宿舍'];
+    const hay = (ocr.lines || []).map((l) => String(l.text || '').replace(/\s+/g, '')).join('|');
+    const anchorHits = ANCHOR_WORDS.filter((w) => hay.indexOf(w) >= 0);
+    let scaleSuspect = false, scaleNote = '';
+    try {
+      const box = OC.phrasesFromOcr(ocr, '编辑队列')[0];
+      if (box) {
+        const r125 = Math.hypot(box.cx - 140 * 1.25, box.cy - 56 * 1.25);
+        const r100 = Math.hypot(box.cx - 140, box.cy - 56);
+        if (r125 < 12 && r100 > 25) { scaleSuspect = true; scaleNote = '锚点「编辑队列」中心 (' + box.cx + ',' + box.cy + ') ≈ 真值×1.25 ✓ 而不等于真值 ✗ → 画面被放大 1.25 倍'; }
+      }
+    } catch (e) {}
+    const badReasons = [];
+    if (!(ocr.imgW === 1920 && ocr.imgH === 1080)) badReasons.push('尺寸 ' + ocr.imgW + 'x' + ocr.imgH + ' ≠ 1920x1080 ✗');
+    if (anchorHits.length < 3) badReasons.push('锚点词只命中 ' + anchorHits.length + '/10 ✗');
+    if (scaleSuspect) badReasons.push(scaleNote + ' ✗（★修法：启动加 --force-device-scale-factor=1 ✓ 或把窗口 CSS 尺寸设成 1536x864 以对齐 125% 屏 ✓★）');
+    if (badReasons.length) {
+      console.log('  ❌ 帧 ' + f + ' 不合格 → ★拒绝进跑分✗★ 原因：' + badReasons.join('；'));
+      rows.push({ frame: f, rejected: true, reasons: badReasons, words, imgW: ocr.imgW, imgH: ocr.imgH, anchorHits: anchorHits.length });
+      continue;
+    }
     PE.install({
       capture: async () => ({ path: png }), ocrJson: async () => ocr,
       act: async () => { throw new Error('离线模式不点击 ✓'); },
