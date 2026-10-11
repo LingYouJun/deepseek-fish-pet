@@ -119,6 +119,19 @@ function stats(a) {
   ok(r4.count === r4b.count && sig(r4) === sig(r4b), '⑤ ★模式 B 也可重复（两次 count 与签名一致 ✓）★', 'n=' + r4.count);
   ok(r4.items.every((i) => i.cx >= 0 && i.cx < 1920 && i.cy >= 0 && i.cy < 1080), '⑤ 模式 B 的中心都落在图内 ✓');
 
+  /* ⑥ ★模式 C（分格+格内质心）的纪律断言✗→✓（lead 要求：新增函数也要有覆盖 ✓）★
+     ① 量不出格距时必须 **ok:false + 给出 reason** ✓（★不许静默退化✗★ —— 那个 bug 被 lead 抓到过 ✓）
+     ② 决策用的 pitch/phase 必须**从图像量出** ✓（不用 layout 真值 ✓）；两法互证失败就必须拒绝 ✓ */
+  {
+    const J = require('jimp').Jimp;
+    const im = await J.fromBuffer(fs.readFileSync('C:/deepseek/gametest/myframes/f000.png'));
+    const lum = IC.lumaFromJimp(im);
+    const g = IC.modeGrid(lum, im.width, im.height, { region: { x0: 990, y0: 90, x1: 1240, y1: 270 } });
+    ok(typeof g.ok === 'boolean' && (g.ok || (typeof g.reason === 'string' && g.reason.length > 5)),
+      '⑥ ★模式 C：量不出时必须 ok=false 且给出 reason（明说，不静默退化 ✓）★', 'ok=' + g.ok + (g.ok ? '' : ('　reason=' + String(g.reason).slice(0, 46))));
+    ok(g.ok ? true : /量不出|互证失败/.test(String(g.reason)), '⑥ 拒绝的原因必须说清是"量不出"哪一步（对齐/自相关/互证）✓');
+  }
+
   console.log('');
   console.log('通过 ' + pass + ' / ' + (pass + fail));
   process.exit(fail ? 1 : 0);

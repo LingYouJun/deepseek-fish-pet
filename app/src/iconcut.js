@@ -210,6 +210,74 @@ function modeBlob(luma, w, h, opt) {
   return { mode: 'blob', trustworthy: items.length > 0, reasons: [], blobs: blobs.length, dropped, thr, items };
 }
 
+/* ★★ 格距/相位的**正确量法**（第二轮；上一版"找 run 峰的中位间距"实测 0% ✗）★★
+ * 旧量法为什么必错 ✗：能量投影的峰被图标内部能量分布**打散**✗ → 峰间距的中位值不是真格距 ✗
+ *   （实测接进默认：icon 0/60、small+edge 0/36 ✗）。
+ * 新量法（**两种独立方法互证** ✓）：
+ *   ① ★暴力搜索 (pitch, phase)★：候选 pitch 20~120px（步 0.5px ✓）→ 每个 pitch 扫相位（步 1px ✓）→
+ *      算"预测格心处的能量均值"✓ → 取最大 ✓ —— 看的是**整体对齐强度** ✓ 对峰被打散免疫 ✓；
+ *      再在最优附近 ±0.5px 细扫（子像素 ✓）。
+ *   ② ★投影自相关★：取第一个显著局部峰（含 2×/3× 倍频一致性 ✓）当格距 ✓。
+ *   ③ ★互证★：两法相差 >15% → ★判"量不出"✗ 退回 blob ✓（不硬用 ✗）★。
+ * 纪律：pitch/phase **全部从图像量出**✓（不用 layout.js 真值 ✗）；量不出**明说**✓ 不静默退化 ✓。
+ */
+function measureByAlign(prof, minP, maxP) {
+  const n = prof.length;
+  if (n < 12) return null;
+  let sum = 0; for (const v of prof) sum += v;
+  const mean = sum / n;
+  const A = prof.map((v) => v - mean);
+  const strength = (pitch, phase) => {
+    let s = 0, c = 0;
+    for (let k = 0; ; k++) {
+      const idx = Math.round(phase + k * pitch);
+      if (idx >= n) break;
+      if (idx >= 0) { s += A[idx]; c++; }
+    }
+    return c >= 2 ? s / c : -Infinity;
+  };
+  let best = { pitch: 0, phase: 0, score: -Infinity };
+  for (let p = minP; p <= maxP; p += 0.5) {
+    for (let ph = 0; ph < p; ph += 1) {
+      const sc = strength(p, ph);
+      if (sc > best.score) best = { pitch: p, phase: ph, score: sc };
+    }
+  }
+  for (let p = best.pitch - 0.5; p <= best.pitch + 0.5; p += 0.1) {
+    for (let ph = Math.max(0, best.phase - 1); ph <= best.phase + 1; ph += 0.25) {
+      const sc = strength(p, ph);
+      if (sc > best.score) best = { pitch: Math.round(p * 10) / 10, phase: Math.round(ph * 10) / 10, score: sc };
+    }
+  }
+  return { pitch: best.pitch, phase: best.phase, gain: best.score / (Math.abs(mean) + 1e-6), n };
+}
+function measureByAutocorr(prof, minP, maxP) {
+  const n = prof.length;
+  if (n < 24) return null;
+  let sum = 0; for (const v of prof) sum += v;
+  const mean = sum / n;
+  const A = prof.map((v) => v - mean);
+  let energy = 0; for (const v of A) energy += v * v;
+  if (energy <= 0) return null;
+  const ac = [];
+  for (let lag = 1; lag <= Math.min(Math.floor(n / 2), maxP + 2); lag++) {
+    let s = 0;
+    for (let i = 0; i + lag < n; i++) s += A[i] * A[i + lag];
+    ac.push({ lag, v: s / energy });
+  }
+  const lo = Math.max(2, Math.round(minP)), hi = Math.min(ac.length, Math.round(maxP));
+  let bestLag = 0, bestV = -Infinity;
+  for (let i = lo - 1; i < hi && i < ac.length; i++) {
+    const v = ac[i].v;
+    const isLocalMax = (i === 0 || v >= ac[i - 1].v) && (i === ac.length - 1 || v >= ac[i + 1].v);
+    if (isLocalMax && v > bestV) { bestV = v; bestLag = ac[i].lag; }
+  }
+  if (!bestLag || bestV <= 0) return null;
+  const at = (lag) => (lag > 0 && lag < ac.length ? ac[lag - 1].v : null);
+  const harm = [at(bestLag * 2), at(bestLag * 3)].filter((v) => v != null);
+  return { pitch: bestLag, peak: bestV, harmonic: harm.length ? harm.reduce((a, b) => a + b, 0) / harm.length : null };
+}
+
 /* ───────── 模式 C：★先按 grid 分格 → 每格内取局部质心★（绕开"挑一个完整块"✓）─────────
  * 【为什么它同时治两类病 ✗→✓】
  *   · icon 碎片化：72x72 被切成 11 块 ✗ → "挑最近块"必然挑到碎片 ✗；★分格后每格只在自己的窗口内取质心 ✓
@@ -235,7 +303,32 @@ function modeGrid(luma, w, h, opt) {
   };
   const cols = runsOf(colProf), rows = runsOf(rowProf);
   const medGap = (rs) => { const g = []; for (let i = 1; i < rs.length; i++) g.push(rs[i].c - rs[i - 1].c); g.sort((a, b) => a - b); return g.length ? g[Math.floor(g.length / 2)] : 0; };
-  const sCol = medGap(cols), sRow = medGap(rows);
+  const oldPitch = { x: medGap(cols), y: medGap(rows) };
+  /* ★新量法：暴力对齐 + 自相关 互证 ✓（旧量法只保留下来做对照 ✓ 不参与决策 ✗）★ */
+  const MINP = o.minPitch == null ? 20 : Number(o.minPitch);
+  const MAXP = o.maxPitch == null ? 160 : Number(o.maxPitch);
+  const aX = measureByAlign(colProf, MINP, MAXP), aY = measureByAlign(rowProf, MINP, MAXP);
+  const cX = measureByAutocorr(colProf, MINP, MAXP), cY = measureByAutocorr(rowProf, MINP, MAXP);
+  if (!aX || !cX || !aY || !cY) {
+    return { mode: 'grid', ok: false, items: [], oldPitch,
+      reason: '★量不出格距✗★（暴力搜索或自相关给不出结果 ✓）' };
+  }
+  const diffX = Math.abs(aX.pitch - cX.pitch) / Math.max(aX.pitch, cX.pitch);
+  const diffY = Math.abs(aY.pitch - cY.pitch) / Math.max(aY.pitch, cY.pitch);
+  if (diffX > 0.15 || diffY > 0.15) {
+    return { mode: 'grid', ok: false, items: [], oldPitch,
+      reason: '★两法互证失败✗ → 量不出格距 ✓（x：对齐 ' + aX.pitch + ' vs 自相关 ' + cX.pitch + '（差 ' + (diffX * 100).toFixed(0) + '%）'
+        + '；y：' + aY.pitch + ' vs ' + cY.pitch + '（差 ' + (diffY * 100).toFixed(0) + '%）＞15% ✓）',
+      align: { x: aX, y: aY }, autocorr: { x: cX, y: cY } };
+  }
+  const sCol = Math.round(((aX.pitch + cX.pitch) / 2) * 10) / 10, sRow = Math.round(((aY.pitch + cY.pitch) / 2) * 10) / 10;
+  const phases = { x: aX.phase, y: aY.phase };
+  const measure = { spacing: { x: sCol, y: sRow }, phases, oldPitch, align: { x: aX, y: aY }, autocorr: { x: cX, y: cY },
+    residuals: { x: aX.gain, y: aY.gain } };
+  if (o.measureOnly) return { mode: 'grid', ok: true, items: [], measure };
+  cols.length = 0; rows.length = 0;
+  for (let c = phases.x; c <= x1 - x0; c += sCol) cols.push({ c: Math.round(c) });
+  for (let r = phases.y; r <= y1 - y0; r += sRow) rows.push({ c: Math.round(r) });
   if (cols.length < 2 || rows.length < 2) {
     return { mode: 'grid', ok: false, items: [], cols: cols.length, rows: rows.length,
       reason: '★量不出格距✗★（列峰 ' + cols.length + ' / 行峰 ' + rows.length + '，都需 ≥2）' };
