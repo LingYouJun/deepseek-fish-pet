@@ -29,23 +29,34 @@ const TOLS = [6, 2];
   const luma = IC.lumaFromJimp(img);
   const E = GC.multiScaleEnergy(luma, img.width, img.height, 5, 15);
 
-  /* ── 真值：首格钉在"模板峰值 + 能量重心"上 ✓ ── */
-  const lattice = await IC.scan(F, { mode: 'a', region: BAND, dir: 'v', expect: 9 });   // ★模式 A = 格距+相位（规则列 ✓）★
+  /* ── ★真值构造（lead 定的修法 ✓）：首格 = 紧贴第一个真实图标（约 y≈123）的格 ✓；
+        格距用 lattice 量到的 与 独立值 115.9 互证 ✓，|Δ| ≤ 2px 才写 certain ✓（★不放宽✗✓★）── */
+  const lattice = await IC.scan(F, { mode: 'a', region: BAND, dir: 'v', expect: 9 });   // 模式 A = 格距+相位（规则列 ✓）
   const lat = (lattice.items || []).slice().sort((a, b) => a.cy - b.cy);
-  const first = lat[0];
-  const centroid = (cy, half) => {
-    let sy = 0, s = 0;
-    for (let y = Math.max(BAND.y0, cy - half); y <= Math.min(BAND.y1, cy + half); y++)
-      for (let x = BAND.x0; x <= Math.min(img.width - 1, BAND.x1); x++) { const e = E[y * img.width + x]; sy += y * e; s += e; }
-    return s > 0 ? Math.round(sy / s) : null;
-  };
-  const c1 = centroid(first ? first.cy : 0, 36);
-  const agree = first && c1 != null && Math.abs(first.cy - c1) <= 1;   // ★±1px 复核（lead 定的 ✓）★
-  console.log('真值首格：lattice(模板峰) ' + (first ? first.cy : '?') + ' / 能量重心 ' + c1 + ' → ' + (agree ? '一致 ✓（差 ≤1px ✓）' : '★不一致✗ → 该格 uncertain 排除 ✓★'));
-  console.log('量到的格距：' + (lattice.spacing != null ? Number(lattice.spacing).toFixed(1) + 'px ✓' : '（lattice 没给 ✓ 用独立值 ' + SPACING + ' ✓）'));
+  const KNOWN_FIRST = 123;
+  const latSpacing = lattice.spacing != null ? Number(lattice.spacing) : NaN;
+  const dSpacing = Math.abs(latSpacing - SPACING);
+  const near123 = lat.map((i) => ({ i, d: Math.abs(i.cy - KNOWN_FIRST) })).sort((a, b) => a.d - b.d)[0];
+  const anchor = near123 ? near123.i : null;
+  const agree = !!anchor && isFinite(latSpacing) && dSpacing <= 2;
+  console.log('真值构造：靠近已知首图标 y≈123 的格 = cy ' + (anchor ? anchor.cy : '?') + '（距 ' + (near123 ? near123.d : '?') + 'px ✓）'
+    + '　lattice 格距 ' + (isFinite(latSpacing) ? latSpacing.toFixed(1) : '?') + 'px vs 独立 115.9px → 差 ' + (isFinite(dSpacing) ? dSpacing.toFixed(1) : '?') + 'px'
+    + '　→ ' + (agree ? '互证一致 ✓ 写 certain ✓' : '★互证不一致✗（阈值 2px ✓ 未放宽 ✓）→ 全标 uncertain 排除 ✓★'));
   const truth = [];
-  if (agree) for (let k = 0; k < 9; k++) truth.push({ id: 'C' + (k + 1), kind: 'icon', cy: Math.round(first.cy + k * SPACING), x: 1810, y: Math.round(first.cy + k * SPACING) - 36, w: 72, h: 72, certain: true });
-  else for (let k = 0; k < 9; k++) truth.push({ id: 'C' + (k + 1), kind: 'icon', cy: Math.round((first ? first.cy : 0) + k * SPACING), x: 1810, y: Math.round((first ? first.cy : 0) + k * SPACING) - 36, w: 72, h: 72, certain: false });
+  for (let k = 0; k < 9; k++) {
+    const cy = anchor ? Math.round(anchor.cy + k * SPACING) : null;
+    truth.push({ id: 'C' + (k + 1), kind: 'icon', cy, x: 1810, y: (cy == null ? 0 : cy - 36), w: 72, h: 72, certain: !!agree });
+  }
+  /* ★遮挡自检（lead 发现上一张叠框图是"实时截屏 + DSH 盖在上面"✗）★ */
+  {
+    let dark = 0, n = 0, sum = 0;
+    for (let y = BAND.y0; y <= BAND.y1; y++) for (let x = BAND.x0; x <= Math.min(img.width - 1, BAND.x1); x += 2) {
+      const p = (y * img.width + x) * 4; const l = 0.299 * img.bitmap.data[p] + 0.587 * img.bitmap.data[p + 1] + 0.114 * img.bitmap.data[p + 2];
+      sum += l; n++; if (l < 40) dark++;
+    }
+    console.log('列带遮挡自检：平均亮度 ' + (sum / n).toFixed(1) + '　近黑像素占比 ' + (dark / n * 100).toFixed(1) + '%'
+      + (dark / n > 0.6 ? '　★疑似被遮挡✗（这张不能用于验收 ✓）★' : '　✓ 未见大面积遮挡 ✓'));
+  }
   console.log('真值 9 格 y：' + truth.map((t) => t.cy + (t.certain ? '✓' : '✗')).join(' '));
 
   /* ── 两条路 ── */
