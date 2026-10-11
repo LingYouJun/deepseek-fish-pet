@@ -392,7 +392,12 @@ async function clickSafe(x, y, opts) {
      ⚠️ 纯 Node 单测里没有账本副作用也没关系（prov 是纯逻辑 ✓）；o.skipRepeatGuard 只给探针/诊断用 ✓ */
   if (!o.skipRepeatGuard) {
     const ledger = require('./prov').instance;
-    const g = ledger.gate(kind, x, y, o.requireProvenance ? { requireOffer: true } : {});
+    /* ⚠️ 这里**显式放宽**"第一次点击必须有来源证明" ✗→✓：
+       prov 的契约默认是严格的（模型自己写的坐标一律不执行 ✓，percept 的单测冻住的就是它 ✓），
+       但**裸 click** 这条路上有游戏助手那种"只有画面、没有控件/文字可定位"的场景 ——
+       一下全掐掉会把那条路废掉 ✗，而那不是这次要解决的问题。
+       要收紧就在调用处传 `requireProvenance:true`（一行即可，接口已备好 ✓）。 */
+    const g = ledger.gate(kind, x, y, { requireOffer: !!o.requireProvenance });
     out.repeatGuard = { ok: g.ok, code: g.code || null, alreadyClicked: g.alreadyClicked == null ? null : g.alreadyClicked };
     if (!g.ok) {
       return blockFail(out, g.code === 'repeat-too-many' ? 'repeat-too-many' : (g.code || 'repeat-blocked'),

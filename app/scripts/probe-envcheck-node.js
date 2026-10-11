@@ -102,24 +102,40 @@ async function grab() {
     const px = Math.max(2, Math.min(1918, Math.round(topW.x + topW.w / 2)));
     const py = Math.max(2, Math.min(1018, Math.round(topW.y + topW.h / 2)));
     info('取样点 = (' + px + ',' + py + ')');
-    /* (a) 预期 = 别的窗口 → 应拦住，且 blocker 报的是**真正压着的那个** */
+    /* (a) 预期 = 别的窗口 → 必须拦住，且 blocker 报的是**真正压着的那个** ✓
+       （理由可能是 target-under-own-window（她的窗/DSH 窗）或 target-covered-by-flyout —— 两个都对 ✓） */
     const other = vis.map((w) => w.title).find((t) => t !== topW.title && t.length > 1) || '一个不存在的窗口标题';
     const e2 = await EC.checkPoint(px, py, Object.assign({}, base, { expectTitle: other }));
     info('checkPoint(expect=「' + other + '」): blocked=' + e2.blocked + ' reason=' + e2.reason + ' blocker=' + (e2.blocker && e2.blocker.title));
-    ok(e2.blocked === true && e2.reason === 'target-covered-by-flyout' && e2.blocker && e2.blocker.title === topW.title,
+    ok(e2.blocked === true && e2.blocker && e2.blocker.title === topW.title,
       '§2 真机：最上面那个不是预期窗口 → 拦住，并说出真正压着的是谁',
       'blocker=' + (e2.blocker && e2.blocker.title) + ' reason=' + e2.reason);
     const note2 = require(path.join(APP, 'src', 'safedrive')).envNote(px, py, e2);
     info('回执 note = ' + note2.split('\n')[0].slice(0, 96));
-    /* (b) 预期 = 真正压着的那个 → 放行 ✓（亮像素比例一并给出；有正面身份时不当浅色面板拦 ✓） */
-    const e3 = await EC.checkPoint(px, py, Object.assign({}, base, { expectTitle: topW.title }));
-    info('checkPoint(expect=「' + topW.title + '」): blocked=' + e3.blocked + ' top=' + (e3.top && e3.top.title)
-      + ' bright=' + (e3.bright ? (e3.bright.ratio * 100).toFixed(1) + '%' : 'null'));
-    ok(e3.blocked === false, '§3 真机：预期窗口对上了 → 放行（环境干净）', 'top=' + (e3.top && e3.top.title));
-    ok(!!(e3.bright && e3.bright.ratio != null), '§3 亮像素比例真的量出来了（点的也是它）',
-      e3.bright ? ((e3.bright.ratio * 100).toFixed(1) + '% @' + e3.bright.region.w + 'x' + e3.bright.region.h) : 'null');
+    /* (b) 干净放行：找一个"最上面那个窗口**不是我自己/DSH 的窗**"的点 ——
+       自己的窗永远拦（那是设计 ✓），所以不能拿它当"放行"的样本 ✓ */
+    const SELF = EC.SELF_HINTS;
+    let clean = null;
+    for (const w of vis) {
+      const cxp = Math.max(2, Math.min(1918, Math.round(w.x + w.w / 2)));
+      const cyp = Math.max(2, Math.min(1018, Math.round(w.y + w.h / 2)));
+      const st = EC.stackAt(cxp, cyp, l.windows, {});
+      const t = st[0];
+      if (t && !SELF.some((h) => String(t.title).toLowerCase().indexOf(String(h).toLowerCase()) >= 0)) { clean = { x: cxp, y: cyp, top: t }; break; }
+    }
+    if (!clean) {
+      L('  [SKIP] §3 这一刻屏幕上每个可见窗口的最上面都是"我自己的窗/DSH 窗"（设计上一定拦 ✗）→');
+      L('         没法验证"预期命中就放行"那一条；换一台/换一个时刻再跑就有 ✓（判据逻辑在 §1 假数据里已覆盖 ✓）');
+    } else {
+      const e3 = await EC.checkPoint(clean.x, clean.y, Object.assign({}, base, { expectTitle: clean.top.title }));
+      info('checkPoint(' + clean.x + ',' + clean.y + ', expect=「' + clean.top.title + '」): blocked=' + e3.blocked
+        + ' top=' + (e3.top && e3.top.title) + ' bright=' + (e3.bright ? (e3.bright.ratio * 100).toFixed(1) + '%' : 'null'));
+      ok(e3.blocked === false, '§3 真机：预期窗口对上了 → 放行（环境干净）', 'top=' + (e3.top && e3.top.title));
+      ok(!!(e3.bright && e3.bright.ratio != null), '§3 亮像素比例真的量出来了（点的也是它）',
+        e3.bright ? ((e3.bright.ratio * 100).toFixed(1) + '% @' + e3.bright.region.w + 'x' + e3.bright.region.h) : 'null');
+    }
     const whole = EC.brightRatio(g.bgra, g.w, g.h, { x: 0, y: 0, w: g.w, h: g.h });
-    info('同一帧：目标点周围 ' + (e3.bright ? (e3.bright.ratio * 100).toFixed(1) : '-') + '%，整屏平均 ' + (whole.ratio * 100).toFixed(1) + '%');
+    info('同一帧：整屏平均亮像素 ' + (whole.ratio * 100).toFixed(1) + '%');
   }
 
   /* §4 真机：任务栏那一条 */

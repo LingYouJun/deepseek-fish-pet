@@ -39,6 +39,9 @@ const PROV = require('./prov');
 const deps = {
   capture: null, ocrJson: null, click: null, vision: null, space: () => ({ w: 1920, h: 1080 }),
   display: () => ({ w: 1920, h: 1080, scaleFactor: 1 }), shotDir: () => null, dbg: () => {},
+  /* ★显式"新鲜帧"注入口✗→✓（lead 要求 ✓）：测试注入固定的假帧提供者 ✓
+     —— ★而不是为了让测试过就放宽闸门✗★（精度优先于好看的数字 ✓）。生产为 null → 真实重抓 ✓。 */
+  freshFrame: null,
 };
 function install(d) { Object.assign(deps, d || {}); return module.exports; }
 
@@ -278,7 +281,7 @@ async function act(arg) {
        ③ 若目标带容器，容器也仍能匹配 ✓ —— 任何一条不满足 → ★拒绝点击✗ 报 stale ✓★。 */
   if (!dry) {
     try {
-      const fresh = kv.img ? { path: kv.img } : await deps.capture();
+      const fresh = deps.freshFrame ? await deps.freshFrame() : (kv.img ? { path: kv.img } : await deps.capture());
       const ocrF = await deps.ocrJson(fresh.path);
       let nb = OC.phrasesFromOcr(ocrF, L.desc);
       if (!nb.length) { const f2 = OC.fuzzyFromOcr(ocrF, L.desc, {}); if (f2.best) nb = [f2.best]; }
@@ -321,8 +324,23 @@ async function act(arg) {
     + (criteria.length
       ? ('（判据 ' + JSON.stringify(criteria) + (vr.ok ? ' 全部出现 ✓' : ' 缺 ' + JSON.stringify(vr.missing) + ' ✗）'))
       : '（★没给判据 → 一律不算成功✗★；"画面变了"不是成功证据 ✓）'));
-  if (verified) { ledger.note(kind, x, y, 'verified-ok'); ledger.clear(x, y); out.push('  ✅ ★成功且已核对★：同一目标的重试计数已清零 ✓'); }
-  else { ledger.note(kind, x, y, 'unverified'); out.push('  ❌ ★失败✗★：' + (criteria.length ? '判据没满足 ✓' : '没判据无法核对 ✓') + ' —— ★不要对同一目标反复点（同一个目标点超过 ' + PROV.MAX_SAME + ' 次我会直接拒绝✗）✓★'); }
+  /* ★账本只在**真的发过点击**时才记★（2026-10-11 修）：
+     dry=1 是"只算不点"（探针/离线复算）✓ —— 它一次都没点，却往账本里记"点过"，
+     后果是**下一次真的点击**会被当成复点拦掉 ✗（真机症状：她第一下就被拒 ✗）。
+     单测里 a2/a3/a4 三次 dry 也会把同一目标记成 3 次 → a4 直接被闸门拦下 ✗，
+     这正是"账本被 dry 污染"的表现 ✓。 */
+  const reallyClicked = !dry;
+  if (verified) {
+    if (reallyClicked) ledger.note(kind, x, y, 'verified-ok');
+    ledger.clear(x, y);
+    out.push('  ✅ ★成功且已核对★：同一目标的重试计数已清零 ✓');
+  } else if (reallyClicked) {
+    ledger.note(kind, x, y, 'unverified');
+    out.push('  ❌ ★失败✗★：' + (criteria.length ? '判据没满足 ✓' : '没判据无法核对 ✓') + ' —— ★不要对同一目标反复点（同一个目标点超过 ' + PROV.MAX_SAME + ' 次我会直接拒绝✗）✓★');
+  } else {
+    out.push('  ❌ ★失败✗★：' + (criteria.length ? '判据没满足 ✓' : '没判据无法核对 ✓')
+      + '　（dry=1：一次都没点，账本不记 ✓）');
+  }
   return out.join('\n');
 }
 

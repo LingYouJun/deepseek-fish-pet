@@ -87,14 +87,17 @@ function create(opt) {
    *   "点对一次又点掉一次" = **两次独立的单击打在同一个 toggle 上**（第一下开/选中，第二下关/取消）。
    *   所以：★复点必须有**新证据**★ —— 这个坐标要在**上一次点它之后**被某个确定性工具
    *   **重新报过一次**（= 新鲜帧重新定位、重新自证 ✓）；证不过就拒绝 ✗。
-   *   · n===0（第一次）：默认放行（游戏助手那种"只有画面没有控件"的场景还得能点 ✓）；
-   *     要"坐标必须有来源证明"时传 {requireOffer:true} ✓（DSH 视觉线那边的 act 就是这么用的）
+   *   · n===0（第一次）：★默认仍然要求来源证明★（`requireOffer` 默认开 —— 这条线的契约是
+   *     "模型自己写的坐标一律不执行" ✓，percept 的单测就是按这个冻住的 ✓）；
+   *     裸 click 那条路要放宽时**显式**传 `{requireOffer:false}` ✓（safedrive 就是这么做的，
+   *     理由写在那边：游戏助手那种"只有画面没有控件"的场景还得能点 ✓）。
    *   · n>=1：必须有**比上一次点击更新的** offer，否则 code='repeat-needs-fresh-evidence'
    *   · n>=maxSame(2)：一律拒绝，code='repeat-too-many'（第 3 次）
    *   · {allowStaleOffer:true} 只给单测/诊断用，生产别传 ✓ */
   function gate(action, x, y, opt) {
     prune();
     const o = opt || {};
+    const wantOffer = o.requireOffer !== false;
     const hit = findOffer(x, y);
     const n = sameTargetCount(x, y);
     if (n >= 1) {
@@ -125,8 +128,9 @@ function create(opt) {
         }
       }
     }
-    /* 第一次点：默认不要求来源证明（严格模式见下） */
-    if (n === 0 && o.requireOffer && !hit) {
+    /* 第一次点：★默认要求来源证明★（契约：模型自己写的坐标一律不执行 ✓）；
+       裸 click 那条路显式传 {requireOffer:false} 才放宽 ✓ */
+    if (n === 0 && wantOffer && !hit) {
       return {
         ok: false, code: 'no-provenance',
         reason: '★这个坐标 (' + Math.round(Number(x)) + ',' + Math.round(Number(y))

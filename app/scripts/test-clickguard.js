@@ -20,14 +20,17 @@ function ok(c, label, extra) {
 
 console.log('=== clickguard（不许复点）单元测试 ===');
 
-/* 可注入时钟 → 确定性覆盖"新证据"的时间语义 */
+/* 可注入时钟 → 确定性覆盖"新证据"的时间语义。
+   ⚠️ prov.gate 的**默认**是严格来源证明（模型自己写的坐标一律不执行 ✓，percept 单测冻住的就是它 ✓）；
+   裸 click 那条路显式传 {requireOffer:false} ✓ —— 这里两种都测 ✓ */
 let T = 1000000;
 const led = P.create({ now: () => T });
 const X = 900, Y = 500;
+const RELAX = { requireOffer: false };       // = safedrive 在裸 click 路上的用法 ✓
 
-/* §1 第一次点：放行（默认不要求来源证明 —— 游戏助手那种只有画面没有控件的场景还得能点 ✓） */
+/* §1 第一次点：放行（裸 click 那条路显式放宽来源证明 —— 游戏助手那种只有画面的场景还得能点 ✓） */
 {
-  const g1 = led.gate('click', X, Y);
+  const g1 = led.gate('click', X, Y, RELAX);
   ok(g1.ok === true && g1.alreadyClicked === 0, '§1 第一次点同一个目标 → 放行', JSON.stringify({ ok: g1.ok, n: g1.alreadyClicked }));
   led.note('click', X, Y, 'clickSafe');
 }
@@ -35,7 +38,7 @@ const X = 900, Y = 500;
 /* §2 ★复点没有新证据 → 拒绝★（时间过去了也不行 —— 关键点：判据是**证据**不是**时间**） */
 {
   T += 60000;                                     // 整整一分钟后
-  const g2 = led.gate('click', X, Y);
+  const g2 = led.gate('click', X, Y, RELAX);
   ok(g2.ok === false && g2.code === 'repeat-needs-fresh-evidence',
     '§2 ★只过了时间、没有新定位 → 还是拒绝（复点要证据，不要时间）★', String(g2.code));
   ok(/重新定位/.test(g2.hint || ''), '§2 拒绝时明确告诉她"要重新定位"', (g2.hint || '').slice(0, 40));
@@ -45,7 +48,7 @@ const X = 900, Y = 500;
 {
   T += 1000;
   led.offer(X, Y, 'find_text', '编辑队列');        // ← 重新定位（新鲜帧）
-  const g3 = led.gate('click', X, Y);
+  const g3 = led.gate('click', X, Y, RELAX);
   ok(g3.ok === true && g3.alreadyClicked === 1 && g3.freshEvidence === true,
     '§3 ★点完之后重新定位过 → 允许再点一次★', JSON.stringify({ n: g3.alreadyClicked, fresh: g3.freshEvidence }));
   led.note('click', X, Y, 'clickSafe');
@@ -55,7 +58,7 @@ const X = 900, Y = 500;
 {
   T += 1000;
   led.offer(X, Y, 'uia_find', '确认');
-  const g4 = led.gate('click', X, Y);
+  const g4 = led.gate('click', X, Y, RELAX);
   ok(g4.ok === false && g4.code === 'repeat-too-many', '§4 ★同一个目标第 3 次 → 一律拒绝（上限 2）★', String(g4.code));
   ok(/别再点了/.test(g4.hint || ''), '§4 拒绝文案里有"别再点了"', (g4.hint || '').slice(0, 30));
 }
@@ -63,13 +66,13 @@ const X = 900, Y = 500;
 /* §5 判据满足（确认状态真的变了）→ 清账 → 同一目标可以重新开始 ✓ */
 {
   led.clear(X, Y);
-  const g5 = led.gate('click', X, Y);
+  const g5 = led.gate('click', X, Y, RELAX);
   ok(g5.ok === true && g5.alreadyClicked === 0, '§5 ★clear（判据满足）之后 → 又能点了★', JSON.stringify({ n: g5.alreadyClicked }));
 }
 
 /* §6 别的目标互不影响（邻近半径 24px 之外） */
 {
-  const g6 = led.gate('click', X + 60, Y);
+  const g6 = led.gate('click', X + 60, Y, RELAX);
   ok(g6.ok === true, '§6 隔 60px 的另一个目标 → 不受影响', 'ok=' + g6.ok);
 }
 
