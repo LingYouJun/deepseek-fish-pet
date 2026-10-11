@@ -42,7 +42,11 @@ const deps = {
 };
 function install(d) { Object.assign(deps, d || {}); return module.exports; }
 
-const ledger = PROV.create({});          // ★locate 给过的目标；act 只认这里的编号★
+/* ★★ 2026-10-11：改成**共用同一个账本**★（prov.js 的 instance）——
+   裸 click（safedrive.js）和这里的 locate/act 必须看同一本账 ✗→✓：
+   否则"locate 刚量过的坐标"在 click 那边不算数、两边各拦各的 = 两套互相打架的闸门 ✗。
+   ⚠️ 单测要独立实例的话用 PROV.create() ✓（instance 是给生产共用的 ✓）。 */
+const ledger = PROV.instance;
 const idMap = new Map();                 // ★编号登记表（最近 20 个 ✓）—— locate 两次后仍能 act 第一个 ✓
 function remember(id, rec) {
   idMap.set(String(id).toUpperCase(), rec);
@@ -128,7 +132,28 @@ async function locate(arg) {
 
   /* 候选来源（确定性 ✓）：OCR 词组框（主）+ 图标库（缺陷 5 的补法 ✓） */
   let buttons = OC.phrasesFromOcr(ocr, desc);
+  let fz = null;
+  /* ★★ 容错匹配回退 ✗→✓（精确匹配在真机上"诚实但不可用" ✓）★★
+     真机实测：OCR 把「编辑队列」读成「编 辑 队 歹 刂」✗ → 精确 0 命中 ✓（text 类 42 个全挂 ✗）。
+     → 精确一条都没命中时，用 LCS 覆盖率容错再找一次 ✓（阈值 0.75 = 真机标定 ✓：
+       正样本「编辑队歹刂」0.75 ✓；负样本「编辑信息」「取消」「加号设置」全 0 ✓）。
+     ★回执写出「目标 / 页面实际读到的 / 分数 / 归一化规则」✓ —— 一眼看出是真匹配还是硬凑 ✓★ */
+  if (!buttons.length) {
+    fz = OC.fuzzyFromOcr(ocr, desc, {});
+    if (fz.best) {
+      buttons = [fz.best];
+      out.push('  ★容错匹配（精确 0 命中 → LCS 覆盖率回退）★：目标「' + desc + '」→ 页面实际读到「' + fz.best.read
+        + '」，分数 ' + fz.best.score + ' ≥ 阈值 ' + fz.min + '，归一化=' + fz.best.norm + ' ✓');
+      if (fz.all.length > 1) out.push('     （本帧另有 ' + (fz.all.length - 1) + ' 处 ≥阈值；' + (fz.ambiguous ? '★分数接近 → ambiguous ✗★' : '分数区分明显 ✓') + '）');
+    } else {
+      out.push('  ★容错匹配也没找到✗★（阈值 ' + fz.min + '；' + (fz.notes ? ('本帧读数共 ' + fz.notes + ' 处，都没到阈值') : '本帧一行都没读到') + '）');
+    }
+  }
   let titles = container ? OC.phrasesFromOcr(ocr, container) : [];
+  if (container && !titles.length) {
+    const ft = OC.fuzzyFromOcr(ocr, container, {});
+    if (ft.best) { titles = [ft.best]; out.push('  ★容器也用容错匹配★：「' + container + '」→ 读到「' + ft.best.read + '」分数 ' + ft.best.score + ' ✓'); }
+  }
   if (kv.xband) {
     const p = kv.xband.split(',').map(Number);
     if (p.length === 2) buttons = buttons.filter((b) => b.cx >= p[0] && b.cx <= p[1]);
@@ -207,6 +232,7 @@ async function act(arg) {
   const kind = String(pos[1] || kv.kind || 'click').toLowerCase();
   const criteria = String(pos[2] || kv.expect || '').split(/[,，]/).map((s) => s.trim()).filter(Boolean);
   const out = [];
+  const dry = kv.dry === '1';   // ★dry=1：只算不点（闸门/判据/新鲜帧照跑 ✓）★
   /* ★闸门 0：不接受裸坐标✗★（契约 B 的核心 ✓） */
   if (/^\s*-?\d+\s*,\s*-?\d+\s*$/.test(ref)) {
     return '❌ ★act 不接受裸坐标✗★（收到「' + ref + '」）—— ★坐标只能来自 locate/find_text 这类确定性工具✓★。\n'
@@ -244,7 +270,32 @@ async function act(arg) {
   const panB = P.detect(ocrB, {});
   out.push('  ⓪ stateBefore：' + (panB.verdict === 'ok' ? panB.label : panB.verdict) + '（' + (panB.best ? JSON.stringify(panB.best.hits) : '-') + '）');
 
-  if (kv.dry === '1') out.push('  ① ★dry=1：跳过真实动作✗★（只做闸门与判据流程 ✓）');
+  /* ★★★ 点前"新鲜帧复核"✗→✓（lead 第三条：falseSuccess=0 的构造保证）★★★
+     为什么：第一版是"同一帧上定位 → 直接点" ✓ —— 中间画面动过（动画/滚动/别人操作 ✓）就会点偏 ✗，
+     实测出现过 2 次"报了成功却没命中" ✗。
+     → 现在：真动鼠标前**重新抓一帧** ✓，在新帧上**重新定位**同一个描述 ✓，要求
+       ① 新帧上仍能找到（唯一 ✓）② 新位置与旧位置距离 ≤ freshPx（默认 40px ✓）
+       ③ 若目标带容器，容器也仍能匹配 ✓ —— 任何一条不满足 → ★拒绝点击✗ 报 stale ✓★。 */
+  if (!dry) {
+    try {
+      const fresh = kv.img ? { path: kv.img } : await deps.capture();
+      const ocrF = await deps.ocrJson(fresh.path);
+      let nb = OC.phrasesFromOcr(ocrF, L.desc);
+      if (!nb.length) { const f2 = OC.fuzzyFromOcr(ocrF, L.desc, {}); if (f2.best) nb = [f2.best]; }
+      const near = nb.map((b) => ({ b, d: Math.hypot(b.cx - x, b.cy - y) })).sort((p, q) => p.d - q.d)[0];
+      if (!near || near.d > freshPx) {
+        out.push('  ❌ ★新鲜帧复核没过✗★：新抓的帧上「' + L.desc + '」' + (near ? ('最近也在 ' + Math.round(near.d) + 'px 外（上限 ' + freshPx + 'px）') : '一处都没找到')
+          + ' → ★不点了✗★（画面已经变了 ✓ 请重新 locate ✓）');
+        return out.join('\n');
+      }
+      out.push('  ✓ 新鲜帧复核通过：新帧上「' + L.desc + '」在 (' + near.b.cx + ',' + near.b.cy + ')，距旧位置 ' + Math.round(near.d) + 'px（≤' + freshPx + '）✓');
+    } catch (e) {
+      out.push('  ❌ ★新鲜帧复核做不了（' + (e && e.message || e) + '）→ ★不点了✗★（没有"新鲜证据"就不动手 ✓）');
+      return out.join('\n');
+    }
+  } else out.push('  ①′ dry=1：跳过新鲜帧复核与真实点击 ✓');
+
+  if (dry) out.push('  ① ★dry=1：跳过真实动作✗★（只做闸门与判据流程 ✓）');
   else {
     try { await deps.act(KIND[kind], x, y); out.push('  ① 已发出 ' + KIND[kind] + ' ✓'); }
     catch (e) { out.push('  ❌ 动作本身失败：' + (e && e.message || e) + ' ★如实报失败✗ 不重试✓★'); return out.join('\n'); }
