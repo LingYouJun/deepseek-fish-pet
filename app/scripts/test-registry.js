@@ -173,6 +173,13 @@ console.log('=== registry.js 单元测试（纯 Node）===');
        三个工具却没登记，测试报"来历不明"✗ —— 说明它按设计工作 ✓。
        登记时**必须连同权限档一起声明**，别只写名字 ✓ */
   const NEW_OK = [
+    /* 视觉增强三件套（2026-10-10）：抗抖 / 逐格 / 量位置 */
+    'icon_pick', 'grid_scan', 'find_grid', 'tile_read', 'strip_read',
+    /* Set-of-Marks（2026-10-10）：★让模型选编号、不估坐标★ —— som.js 早就是完整实现，这里补的是"接线" */
+    'som_look',
+    'mcp_list', 'mcp_call',
+    /* ★ 2026-10-10：按 DSH 的架构约定补的两件（按进程截窗口 + 确定性数格子）★ */
+    'win_shot', 'grid_count',
     'flow_run', 'flow_save', 'flow_list', 'flow_del',
     /* A3/A4（2026-10-03）：剪贴板 + 轮询等条件 */
     'clipboard_read', 'clipboard_write', 'wait_for',

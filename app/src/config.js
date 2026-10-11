@@ -100,6 +100,11 @@ const DEFAULTS = {
   screenCaptureWidth: 1920,
   screenCaptureHeight: 1080,
   screenJpegQuality: 0.92,
+  /* ★ 整屏看图也走无损 PNG ✗→✓（2026-10-10）★
+     代价是每次抓帧 ~650ms（流抓帧只要 ~50ms）✓。
+     ★ 为什么值得★：整屏看到的字最需要清晰 ✓，而 JPEG 的噪点正好吃掉小字边缘 ✗。
+     设成 false 就换回快的 JPEG 流 ✓。 */
+  screenLosslessScreen: true,
   visionDetail: 'high',           // low | high —— high 才能看清小字和图标细节
   /* 多步任务的步数预算（由 IQ 在 base~max 之间插值，见 stats.stepBudget）。
      原来是写死的 3/4/6/8/10 档位，实测太低 —— IQ 54 只有 6 步，

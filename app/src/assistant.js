@@ -344,6 +344,36 @@ async function runInner(tool, arg) {
 
   if (tool.startsWith('web_')) return web.run(tool, arg);
 
+  /* ★★★ 2026-10-10：按窗口截图 + 数格子（按 DSH 的架构约定补的两件）★★★
+     ★为什么单独一个模块（src/desktopwin.js）✗★：它要 MCP 客户端 + jimp 解码 + 纯像素算法 ✓，
+     塞进 runInner 这个已经 2000 行的 if 链里只会更难维护 ✓。
+     这里只注入**依赖**（她的坐标空间 / 显示器信息 / 落图目录 ✓）——
+     ★同一份 desktopwin.js 因此能在**纯 Node 探针**里跑真机验证 ✓★
+     （app/scripts/probe-desktopwin.js ✓，不用开 Electron 窗口 ✓）。 */
+  if (tool === 'win_shot' || tool === 'grid_count') {
+    const dw = require('./desktopwin');
+    dw.install({
+      space: () => require('./input').space(),
+      display: () => {
+        try {
+          const { screen } = require('electron');
+          const d = screen.getPrimaryDisplay();
+          return { w: d.size.width, h: d.size.height, scaleFactor: d.scaleFactor || 1 };
+        } catch (e) {
+          const s = require('./input').space();
+          return { w: s.w, h: s.h, scaleFactor: 1 };
+        }
+      },
+      shotDir: () => {
+        try {
+          const { app } = require('electron');
+          return require('path').join(app.getPath('userData'), 'shots');
+        } catch (e) { return null; }
+      },
+    });
+    return await dw.run(tool, arg);
+  }
+
   if (tool === 'screen_shot') {
     /* ⚠️ OCR 用图**不要画坐标网格**：那些刻度数字会被 OCR 当成屏幕上的文字读进去。
        网格只给视觉模型定位用（见下面的 screen_look）。 */
@@ -352,6 +382,122 @@ async function runInner(tool, arg) {
     const result = '🖥 已截取屏幕（' + cap.width + '×' + cap.height + '）\n'
       + (text ? '屏幕上识别到的文字：\n' + text : '（未识别到文字；截图已展示在对话里，你可以自己看）');
     return { text: result, image: cap.dataUrl, path: cap.path, ocr: text };
+  }
+
+/* ★ 视觉增强三件套（2026-10-10 职业列事故催生的）★
+   ① icon_pick  同一格问 N 次、取多数 —— 治「单次视觉判断会抖」（实测她四次拿到四种顺序 ✓）
+   ② grid_scan  程序切格、逐格问 —— 治「一次问一整列会自相矛盾」✓
+   ③ find_grid  从像素里测出真实位置和间距 —— 治「拿估的间距去裁会逐格漂移」✓
+   ★ 边界：它们只解决「问准、量准」 ✗ —— 「那个图案是哪个职业」是**外部知识** ✓
+     必须写在技能里（`use_skill|明日方舟-界面基础` ✓） */
+if (tool === 'icon_pick' || tool === 'grid_scan' || tool === 'find_grid' || tool === 'tile_read' || tool === 'strip_read') {
+  const v2 = require('./vision2');
+  v2.install({
+    capture: async () => await captureScreen(false),
+    vision, config,
+    space: require('./input').space,
+  });
+  return await v2.run(tool, arg);
+}
+/* ★ som_look（Set-of-Marks）：★让模型"选编号"，而不是"估坐标"★
+   为什么单独一个分支，不和上面那四个挤在一起✗：它要的依赖更多 ✓ ——
+   除了 capture/vision/config/space，还要 **OCR 行**（候选要有局部语义 ✓）
+   和 **前台窗口的 UIA 树**（候选要有元素身份 ✓）。上面那四个只需要前四个依赖 ✓。
+   ★为什么抓帧用 captureScreenFallback（无损 PNG，尺寸=space()）而不是流✓★：
+     som_look 必须让「送模型的那张图」和「候选框的坐标空间」**完全同一** ✓ ——
+       · OCR 的包围盒是在这张 PNG 的像素空间里量出来的 ✓
+       · UIA 自报的矩形是物理像素（=space()=1920x1080 ✓，实测计算器/UIA 与截图逐字一致 ✓）
+     流抓帧（JPEG）尺寸与 space() 不保证一致 ✗ → 框会画到图上的别处 ✗，
+     而且 JPEG 噪点会吃掉小字（这是 2026-10-10 已经踩过的坑 ✓）。
+   代价：PNG 抓帧约 650ms ✗→✓ 换来"候选和图像必定对齐"✓，这个交换是值的 ✓。 */
+if (tool === 'som_look') {
+  const v2 = require('./vision2');
+  v2.install({
+    capture: async () => await captureScreenFallback(),
+    vision, config,
+    space: require('./input').space,
+    /* OCR 的 JSON 模式（带每个词的包围盒 ✓）—— 复用 find_text 那条路 ✓，不另起一套 ✓ */
+    ocrJson: (p) => ocrJson(p),
+    lastOcrError: () => lastOcrError,
+    /* ★UIA 必须按【前台 hwnd】取树✗→✓★：实测 listElements('') 挑中的是桌宠自己那个
+       475x232 的小窗（只有 2 个 Pane）✗ —— 它的策略是"第一个扫出元素的顶层窗口" ✓，
+       那不是主人正在看的窗口 ✗。按 hwnd 取才准 ✓（实测前台浏览器：1133 个后代、66 个有名带矩形 ✓）。
+       ★★★ 但前台可能**就是桌宠自己** ✗ —— 这是真机跑出来才发现的 ★★★
+       实测（2026-10-10 第一次真机 som_look）：前台 = 「dayu-pet」→ UIA 只给 2 个 Pane ✓，
+       于是候选里混进一条「Chrome Legacy Window [Pane 531488]」✗ ——
+       而视觉模型问「屏幕上有什么」时**恰好选中了它** ✗（答 #31）。
+       根因不是模型 ✗：桌宠窗是**她自己**的置顶窗 ✓，本来就**不该是候选**（点它 = 点自己人 ✗），
+       而且它压住的那块屏幕下的真实内容根本没被看见 ✓。
+       修法：前台标题是桌宠自己的两个窗口之一时，改用 listWindows 里 **z 序最上面**的那个
+       非桌宠窗口 ✓（z 是 EnumWindows 的序号，0 = 最上面 ✓，见 focuswin.js ✓）。
+       标题用**锚定**匹配（^…$）而不是包含 ✗→✓：免得把主人某个标题里带「大肥鱼」的页面也误排除 ✓。 */
+    uiaList: async () => {
+      const fw = require('./focuswin');
+      const PET_TITLE = /^(dayu-pet|大肥鱼 · 对话)$/;
+      const fg = await fw.foreground();
+      let target = fg, swapped = '';
+      if (fg && fg.hwnd && PET_TITLE.test(String(fg.title || ''))) {
+        const lw = await fw.listWindows();
+        const cand = ((lw && lw.windows) || [])
+          .filter((w) => w && w.hwnd && w.visible !== false && !w.cloaked && !w.iconic
+            && !PET_TITLE.test(String(w.title || '')))
+          .sort((a, b) => a.z - b.z)[0];
+        if (cand) {
+          target = { title: cand.title, hwnd: cand.hwnd };
+          swapped = '★前台是桌宠自己（' + String(fg.title) + '）→ 已改用 z 序最上面的非桌宠窗口「'
+            + String(cand.title).slice(0, 40) + '」✓（点自己人没意义 ✗）★';
+        } else {
+          return { ok: false, elements: [], window: null, note: '★前台是桌宠自己，且没找到别的可见窗口 ✓' };
+        }
+      }
+      if (!target || !target.hwnd) return { ok: false, elements: [], window: null };
+      const r = await require('./uia').listElements('', target.hwnd);
+      const els = (r && r.elements) || [];
+      return { ok: els.length > 0, window: (r && r.window) || target, elements: els, note: swapped };
+    },
+  });
+  return await v2.run(tool, arg);
+}
+
+  /* ★★ MCP 工具（2026-10-10）★★
+     ★ 为什么要它：挂新 server **不用再改她的代码** ✓ —— 这一步是铺路 ✓。
+     ★ 环境现实（如实说 ✗）：本机 python 是商店占位符 ✓、没有 uvx/go ✓ ——
+       ★ 能用 MCP server 只剩 **Node 写的** ✗★；
+       ★★ 所以 MCP 对本机真正有用的场景是【网页】✓（@playwright/mcp ✓）+
+          【桌面窗口截图】✓（@cool-mcp/desktop-automation ✓，就是 win_shot 走的那条）★★；
+       桌面和游戏仍要用 uia_* / 模板 / OCR ✓。
+     实测：@playwright/mcp v1.64.0-alpha → ★25 个工具 ✓★，含 browser_find ✓
+       （★在可访问性快照里搜文字，点元素不需要坐标✓★）。
+     ⚠️ 默认**不启动** ✓ —— server 会拉起浏览器，不该每次开机都拉 ✓。
+     用法：mcp_list|<服务器名> ／ mcp_call|<服务器名>|<工具名>|<JSON参数> */
+  if (tool === 'mcp_list' || tool === 'mcp_call') {
+    const mcp = require('./mcp');
+    try { mcp.configure((config.load() || {}).mcpServers); } catch (e) {}
+    const seg = String(arg || '').split('|').map((x) => x.trim());
+    if (tool === 'mcp_list') {
+      const st = mcp.status();
+      const names = Object.keys(st);
+      if (!seg[0]) {
+        return '📡 配好的 MCP 服务器：' + names.map((k) => k + (st[k].enabled ? '（已开 ✓）' : '（默认关 ✗）')).join(' / ')
+          + '\n  ★ 查看某个服务器的工具：mcp_list|<名字> ★（会顺手把它启动起来 ✓）'
+          + '\n  ⚠️ 首次启动要下载包，可能要 1~3 分钟 ✓ —— 超时就再试一次 ✓'
+          + '\n  ★ 环境限制：本机只能跑 Node 写的 server ✗（python 是商店占位符 ✓，没有 uvx/go ✓）★';
+      }
+      const name = seg[0];
+      if (!st[name]) return '❌ 没有配置「' + name + '」这个服务器 ✓（可用：' + names.join(', ') + '）';
+      const tools = await mcp.listTools(name);
+      return '📡 ' + name + '：★' + tools.length + ' 个工具★'
+        + '\n' + tools.map((t2, i2) => '  ' + String(i2 + 1).padStart(2) + '. ' + t2.name + ' —— '
+          + String(t2.description || '').replace(/\s+/g, ' ').slice(0, 90)).join('\n')
+        + '\n  ★ 调用：mcp_call|' + name + '|<工具名>|{"参数":"值"} ★';
+    }
+    if (seg.length < 3 || !seg[0] || !seg[1]) return '用法：mcp_call|<服务器名>|<工具名>|<JSON参数，可空>';
+    let args2 = {};
+    if (seg[2]) { try { args2 = JSON.parse(seg.slice(2).join('|')); } catch (e) { return '❌ 参数不是合法 JSON ✓：' + seg.slice(2).join('|').slice(0, 120); } }
+    const res = await mcp.callTool(seg[0], seg[1], args2);
+    const parts = ((res && res.content) || []).map((c) => (c && c.type === 'text' ? c.text : JSON.stringify(c))).join('\n');
+    const txt2 = String(parts || JSON.stringify(res || {})).slice(0, 4000);
+    return '✅ ' + seg[0] + '.' + seg[1] + ' 返回：\n' + txt2;
   }
 
   if (tool === 'screen_look') {
@@ -372,15 +518,24 @@ async function runInner(tool, arg) {
     /* 放大看时**走无损的 PNG 路径**：帧流是 JPEG，把它的压缩噪点放大 3 倍只会更糊 ——
        实测她的原话："这几张放大图太糊，我定不准卡片坐标"。PNG 那条路径
        （desktopCapturer 原生图 → resize → PNG）是无损的，放大出来的字是锐利的。 */
-    /* ★ 不再画坐标网格（改成 false）★
-       为什么原来画：那时候是要模型给**像素坐标**，实测它"估位置"在贴边处能差近 300px
+    /* ★ 不画坐标网格（false）★ —— 2026-10-10 起这条的理由变了 ✗→✓
+       原来画：那时候是要模型给**像素坐标**，实测它"估位置"在贴边处能差近 300px
        （鹰角启动器右下角按钮真实 (1837,1025)，它给 (1500,807)），有刻度它就能"读"而不是"估"。
-       为什么现在不画：**协议已经改成归一化坐标 (0~1)**（见下面提示词的【怎么告诉我位置】）。
-       刻度上写的是**像素数字**，留着只会诱导它报像素值；而它也没法从一个像素网格里
-       量出 0~1 的归一化位置。实测换协议后同一个模型一次命中，光标精准落在目标名字上。
-       ⚠️ 要退回旧协议（要像素坐标）就得把这个改回 true —— 两件事必须一起改，别只改一边。
+       ★现在不画，是因为**连"要坐标"这件事都废除了**★：
+         `screen_look` 只让模型**描述**（见下面提示词的【你的职责：说出你看到了什么 —— 不要给位置】），
+         "在哪"只许来自确定性来源（uia_* / find_text / find_template / find_grid / grid_count / som_look ✓）。
+       刻度上写的是**像素数字**，留着只会诱导它报坐标 ✗（而它报的坐标实测不可靠：
+       同一处问两次能偏上千像素 ✗）。
        （放大看时本来就不画网格，见下面的注释。） */
-    const cap = zoomPre ? await captureScreenFallback() : await captureScreen(false);
+    /* ★★★ 整屏也用无损 PNG（2026-10-10，用户："她看得太模糊了"）★★★
+       原来的这一行是「放大走无损 PNG ✓，整屏走 JPEG 帧流 ✗」——
+       ★ 可"读屏幕上的小字"绝大多数是**整屏**在看 ✗ → 整屏全被 JPEG 压过一遍 ✓；
+       JPEG 的噪点在整屏里约占 1px ✗ —— 正好吃掉 12px 小字的边缘 ✓。
+       ★ 代价：PNG 抓帧 ~650ms vs 流抓帧 ~50ms ✓ —— 要"看得清"就值 ✓。
+         想换回快路径：config 里 screenLosslessScreen=false ✓ */
+    const _cfgCap = config.load();
+    const _lossless = _cfgCap.screenLosslessScreen !== false;
+    const cap = (zoomPre || _lossless) ? await captureScreenFallback() : await captureScreen(false);
     if (!zoomPre) ZoomState = null;   // 普通看屏幕：清掉上一次的放大参数
     timing.captureMs = tick() - tCap;
     /* 【局部放大】用户点出的真问题："这不是游戏问题，而是你给她分辨率太低了"。
@@ -420,7 +575,8 @@ async function runInner(tool, arg) {
             + '放大等于主动把视野缩小：如果锚点猜错，目标就永远进不了你的图，而且**你看不出来** ✓\n'
             + '（实测：你 44 次看屏幕全是放大，视野右边界卡在 1103，而要找的东西在 1272+ —— 永远找不到 ✓）\n'
             + '★现在请先看一次整屏★：`screen_look|<问题>`（不要带 || 区域），\n'
-            + '问题这样问：「目标大概在屏幕的哪个位置？给我归一化坐标」。拿到位置后再放大那一块 ✓';
+            + '问题这样问：「屏幕上现在是什么界面？有哪些文字或按钮？」—— ★让它只描述 ✓，\n'
+            + '不要问它坐标/位置 ✗（实测同一处问两次能给两个答案 ✓）。要位置就用 find_text / find_template ✓';
         }
         if (_prev && Math.abs(rw - _prev.w) <= 8 && rh > _prev.h + 20) {
           ZOOM_GUARD.last = { x: rx, y: ry, w: rw, h: rh };
@@ -471,22 +627,31 @@ async function runInner(tool, arg) {
            + '**不要自己换算成整屏坐标，也不要用 1920x1080 这个数字** —— 换算由程序做。'
            + '（你要点击时请用 find_text|<文字> 或 find_template|<名字> 让程序去精确定位，别直接给像素坐标。）')
         : '';
-      const q = (arg || '看看屏幕') + _zoomNote + `\n\n【怎么告诉我位置】用**归一化坐标**：左上角是 (0,0)，右下角是 (1,1)，正中央是 (0.5,0.5)。
-不要给像素值，也不要自己换算 —— 换算由程序做。
-（以前这里是让模型"顺着刻度网格读像素坐标"，实测那套又绕又偏：同一个卡片它会报高整整一行 ✗。
-  改成归一化坐标之后，实测同一个模型一次命中，光标精准落在目标名字上 ✓。）
+      /* ★★★ 2026-10-10 语义重做：视觉模型**只描述，不定位** ★★★
+         主人原话：「把现在所有视觉模型删去，重新做一份」——查清的事实是：
+           ★它"看得见"但"说不准"★（同一列职业图标，四次问得到四种顺序；
+             问"最右边那一列是什么"，它答的却是**干员名字** —— 认错目标 ✗；
+             让它报坐标 → 同一处问两次给两个答案，能偏几十到上千像素 ✗）。
+         → 所以这一层被彻底降级：★它再也不能给出"在哪/点哪"★。
+         ★"在哪"的出口只剩确定性来源★：uia_snapshot/uia_find（控件树，零识别）、
+           find_text（OCR+包围盒）、find_template（像素模板）、find_grid（像素量距）、
+           grid_count（数格子）、som_look（程序框候选 + 模型只选编号）。
+         ★依据★：OmniParser v2 / Set-of-Marks / Playwright MCP 的 ref / UIA 控件树 ——
+           共同思想都是「让模型**选元素**，不让它**估坐标**」；
+           GUI grounding 精度是 GUI agent 的主要瓶颈（ScreenSpot 直接要坐标只有 16.2% ✓）。 */
+      const q = (arg || '看看屏幕') + _zoomNote + `\n\n【你的职责：说出你看到了什么 —— 不要给位置】用一句中文说清屏幕上的情况
+（是什么界面 / 有哪些文字 / 大致在干什么 / 有什么不寻常的地方）。
+★不要输出任何坐标、不要估位置、不要写 move_norm★ —— 你这方面的读数实测不可靠
+（同一处问两次会给两个答案，能偏上千像素 ✗），所以"在哪"不归你管。
 
-【输出要求】先用一句中文说明你的判断（**说清你看到了什么、那个东西叫什么名字**）。
-然后，按需要单独输出一行：
-· 需要把**光标移到**某个东西上（只是悬停/指出位置，不点击）：
-    ACTION: move_norm|<nx>,<ny>        例如 ACTION: move_norm|0.334,0.424
-· 需要程序去**点击**某个能说出名字的东西时（更稳，因为程序会自己精确定位并复核）：
-    ACTION: find_text|<目标上的文字>     或     ACTION: find_template|<已存的模板名>
-⚠️ **绝对不要输出带像素坐标的点击**（如 click|960,540、clickz|400,200、move|x,y、drag|x,y|x,y）——
-实测这么干会点错地方（在选人面板上点屏幕正中央 = 点到某张干员卡 = 把它选上/取消），
+【只有一件事你可以做】如果屏幕上有一个**你能说出名字**的东西、而且需要让程序去操作它，
+就单独输出一行（程序会自己精确定位并复核，不用你给坐标）：
+    ACTION: find_text|<它上面的文字>     或     ACTION: find_template|<已存的模板名>
+也可以：ACTION: focus_window|<窗口标题片段> / ACTION: windows_list / ACTION: key|<键名>
+⚠️ **绝对不要输出带坐标的东西**（click|x,y、clickz|x,y、move|x,y、drag|x,y|x,y、move_norm|nx,ny）
+—— 实测这么干会点错地方（在选人面板上点屏幕正中央 = 点到某张干员卡 = 把它选上/取消），
 把已经做好的选择毁掉。
-（move_norm 只**移动光标**、不按下任何键，所以安全；click 这类必须走 find_text/find_template。）
-说不出名字就**只描述、不要给 ACTION**，让主人/自己下一步再看一次。`;
+说不出名字、或只是想知道"那是什么"，就**只描述、不要给 ACTION**。`;
       /* tV 必须声明在 try **外面**：catch 里也要用它算耗时，
          写在 try 内的话失败路径会 ReferenceError（实测被 §6 那条测试抓住）。 */
       let tV = tick();
