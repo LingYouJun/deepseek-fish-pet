@@ -28,14 +28,16 @@ const KINDS = String(getArg('kinds', 'text,dup,small,edge,icon')).split(',');
 function sh(cmd, args) { return spawnSync(cmd, args, { stdio: 'ignore', windowsHide: true }); }
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
-/* ① 抓帧（Electron 子进程 ✓ 结果写文件 ✓ 不走管道 ✓） */
+/* ① 抓帧（Electron 子进程 ✓ ★按物理 1920x1080 抓★ ✓ 结果写文件 ✓ 不走管道 ✓）
+   ★诊断结论（实测 ✓）★：DIP 抓帧(1536x864) OCR 读得出 52 行/129 词 ✓，物理抓帧读得出 64 行/144 词 ✓
+   → ★"125% 缩放把字糊掉"的假设被推翻✗★：字读得出来 ✓；
+   第一版 text 类 0/42 的真因是**我自己的坐标换算**（DIP 抓帧 × 物理布局 = 差 1.25 倍 ✗）。
+   → 现在按物理抓 ⇒ 布局真值 = 截图坐标 ⇒ ★不需要任何换算✓★（少一整类错 ✓）。 */
 function shoot() {
-  const before = fs.readdirSync(OUT).filter((f) => /^live-\d+\.png$/.test(f));
-  sh(BAK, [path.join(APP, 'scripts/gametest/shoot.js')]);
-  const after = fs.readdirSync(OUT).filter((f) => /^live-\d+\.png$/.test(f));
-  const fresh = after.filter((f) => before.indexOf(f) < 0).sort();
-  if (!fresh.length) throw new Error('抓帧失败（没有新文件 ✓）');
-  return path.join(OUT, fresh[fresh.length - 1]);
+  const out = path.join(OUT, 'live-phys-' + Date.now() + '.png');
+  sh(BAK, [path.join(APP, 'scripts/gametest/shoot2.js'), '1920', '1080', out]);
+  if (!fs.existsSync(out)) throw new Error('抓帧失败（没有文件 ✓）');
+  return out;
 }
 /* ② OCR（PowerShell 子进程 ✓ 自己写 JSON ✓ 不走管道 ✓） */
 function ocrOf(png, outJson) {
@@ -80,10 +82,8 @@ function lastClick() { try { const l = fs.readFileSync(CLICKS, 'utf8').split('\n
       const before = clickCount();
       let hit = false, note = '', cx = null, cy = null;
       try {
-        /* ★坐标系换算（harness 侧 ✗→✓）★：布局真值是**物理**坐标 ✓，而 screenshot 是 DIP（1920/1.25=1536 ✓）
-           → locate 的 region 要用截图空间 ✓；定位结果（截图空间）再 ×1.25 换回物理才能点 ✓。
-           第一版漏了这一步 → 42 个用例 32 个"没找到" ✗（region 与 OCR 坐标不在同一空间 ✓）。 */
-        const rq = [t.x, t.y, t.w, t.h].map((v, i) => Math.round(v / SCALE));
+        /* ★不再换算：抓帧已是物理 1920x1080 ✓ = 布局空间 ✓★（第一版这里除以 1.25 → 0/42 ✗） */
+        const rq = [t.x, t.y, t.w, t.h].map((v) => Math.round(v));
         const loc = await PE.run('locate', label + '||img=' + png + '|region=' + rq.join(','));
         const m = /★编号 (L\d+)★/.exec(loc);
         if (!m) { note = /ambiguous/.test(loc) ? 'ambiguous' : 'not-found'; }
@@ -93,7 +93,7 @@ function lastClick() { try { const l = fs.readFileSync(CLICKS, 'utf8').split('\n
           else {
             const a = await PE.run('act', m[1] + '|click|img=' + png);
             const mm = /目标「[^」]*」中心 \((-?\d+),(-?\d+)\)/.exec(a);
-            if (mm) { cx = Math.round(Number(mm[1]) * SCALE); cy = Math.round(Number(mm[2]) * SCALE); }
+            if (mm) { cx = Number(mm[1]); cy = Number(mm[2]); }
             note = /★闸门拒绝✗★|不接受裸坐标/.test(a) ? 'gated' : (/verified = ★true/.test(a) ? 'verified' : 'clicked-unverified');
           }
         }
