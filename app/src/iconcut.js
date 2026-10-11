@@ -78,10 +78,13 @@ function modeLattice(luma, w, h, opt) {
     }
     return sw > 0 ? { x: sx / sw, y: sy / sw } : { x: cx0, y: cy0 };
   }
-  /* ★★ 只发出**真正落在自己格上**的格，丢掉 estimated/伪格 ✗→✓（lead 要求 ✓）★★
-     实测依据（真机列冻结帧）：原输出 10 格、格心 50/123/200/300/427/… → 间距 73~127px **不规则** ✗，
-     其中 50/200/300 **不在** 123−k×115.9 的格上（合法格 7.1 / 123 / 238.9 / …）→ 属伪格 ✓。
-     做法：只保留 `inLattice=true` 且**非 estimated** 的格 ✓，并把丢掉的格连同原因报出来 ✓（`dropped` ✓）。 */
+  /* ★★★ 按**等距格反推格心**（鲁棒 pitch/phase ✓）—— 不再拿"逐个峰位"当格心 ✗→✓ ★★★
+     依据（真机列实测 ✓）：逐个峰位得到的间距 73/77/100/127/127/93/126/116/122 **不规则**✗
+     （能量峰被图标内部纹理劈开 + 带端弱峰 ✓ 都会让"峰位"偏离真实格心 ✓），
+     而**同一带**用鲁棒 (pitch, phase) 量出来的是 **115.9px = 独立值 0.0px 差** ✓ —— ★那次估法本来是对的，
+     只是没被用在定位上✗✓★。所以这里（见下面 items 之后的那段 ✓）：用格心估 pitch + 圆中位 phase ✓，
+     再把格心一律**贴到 phase + k×pitch** 上 ✓（等距是硬约束 ✓）→ 间距天然规则 ✓。
+     ★注意：这不改变"保留全部格/不过滤"的决定 ✓（过滤会打坏另一条路 ✓ 见下 ✓）。 */
   const rawCells = r.cells || [];
   /* ★实测（2026-10-11）：**过滤 + 让断言参与 trustworthy 会让更差的路线生效**✗✓ ——
      过滤后只剩 8 格（少一格 ✓），`auto` 因 spacingOk=false 退到 blob ✓ → 真机列召回从 **9/9 直接归零**✗
@@ -103,6 +106,30 @@ function modeLattice(luma, w, h, opt) {
       inLattice: !!c.inLattice, estimated: !!c.estimated, empty: !!c.empty,
     };
   });
+  /* ★★★ 按**等距格反推格心**（鲁棒 pitch/phase ✓ 放在 items 之后 ✓ 上一版插错位置把注释劈开过 ✗）★★★ */
+  const isV = r.dir === 'v';
+  const cAll = items.map((it) => (isV ? it.cy : it.cx)).sort((a, b) => a - b);
+  /* ★pitch 就地算（★不能引用后面的 spacingOut✗：它在 items 之后才算 ✓ 上一版就是这样运行时炸的 ✓）★ */
+  const gapSet = []; for (let i = 1; i < cAll.length; i++) gapSet.push(cAll[i] - cAll[i - 1]);
+  const pitch0 = gapSet.length ? gapSet.slice().sort((a, b) => a - b)[Math.floor(gapSet.length / 2)] : (spacing || 0);
+  let bestPhase = cAll.length ? ((cAll[0] % pitch0) + pitch0) % pitch0 : 0, bestCost = Infinity;
+  if (pitch0 > 1 && cAll.length) {
+    for (const ph of cAll.map((c) => ((c % pitch0) + pitch0) % pitch0)) {
+      let cost = 0;
+      for (const c of cAll) { const d = Math.abs((((c - ph) % pitch0) + pitch0 * 1.5) % pitch0 - pitch0 / 2); cost += d * d; }
+      if (cost < bestCost) { bestCost = cost; bestPhase = ph; }
+    }
+  }
+  let snapMoved = 0;
+  items.forEach((it) => {
+    const v = isV ? it.cy : it.cx;
+    const k = pitch0 > 1 ? Math.round((v - bestPhase) / pitch0) : 0;
+    const nv = Math.round(bestPhase + k * pitch0);
+    snapMoved += Math.abs(nv - v);
+    if (isV) { it.cy = nv; it.box.y = nv - half; } else { it.cx = nv; it.box.x = nv - half; }
+    it.snapped = Math.abs(nv - v);
+  });
+  snapMoved = items.length ? snapMoved / items.length : 0;
   /* ★★ 修"自己跟自己对不上"✗→✓（2026-10-11 lead 要求的断言）★★
      症状（真机列实测）：回报的 `spacing` 是 115.9px ✓，但**发出的格心实际间距约 155px**✗
      → 调用方按自报 spacing 推相位就全错（C1 2.0px 但 C2..C9 差 39~56px ✓ 正是这个形状 ✓）。
