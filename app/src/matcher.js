@@ -127,6 +127,15 @@ function findTemplate(app, nativeImage, name, frameDataUrl, roi, minScore) {
       const m = out.match(/^(OK|LOW|ERR)\s+(\S+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)(?:\s+ms=(\d+))?/);
       if (!m) return resolve({ ok: false, error: 'match.exe 输出无法解析：' + (out || (e && e.message) || '') });
       if (m[1] === 'ERR') return resolve({ ok: false, error: 'match.exe: ' + out });
+      /* ★把这次定位记进账本★（2026-10-11）：safedrive 的"不许复点"闸门要求
+         复点必须有一次**上一次点击之后**重新定位出来的坐标 —— find_template 就是来源之一 ✓
+         （账本 = prov.js 的共用实例 ✓ 纯逻辑、无副作用风险 ✓） */
+      if (m[1] === 'OK') {
+        try {
+          require('./prov').instance.offer(Number(m[3]) + Math.round(Number(m[5]) / 2),
+            Number(m[4]) + Math.round(Number(m[6]) / 2), 'find_template', nm);
+        } catch (e) {}
+      }
       return resolve({
         ok: m[1] === 'OK', low: m[1] === 'LOW', score: Number(m[2]),
         x: Number(m[3]), y: Number(m[4]), w: Number(m[5]), h: Number(m[6]),

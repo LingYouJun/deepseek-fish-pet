@@ -274,6 +274,10 @@ async function gridCount(arg) {
       extra = '  窗口内 ' + JSON.stringify({ x: Math.round(K.local.x), y: Math.round(K.local.y) })
         + '  她的坐标空间 ' + K.space.x + ',' + K.space.y
         + '  给 bot_click 的 bbox ' + (K.bbox ? K.bbox.join(' ') : '-');
+      /* ★只有"换算成她的坐标空间"的格子才记进账本★（2026-10-11）：
+         传进程名时坐标是屏幕坐标 ✓ 可以当"复点的新证据" ✓；
+         传图片路径时那只是图内像素 ✗ —— 记进去等于授权一次错点 ✗ 所以不记 ✓ */
+      try { require('./prov').instance.offer(K.space.x, K.space.y, 'grid_count', dir + ' 第 ' + (i + 1) + ' 格'); } catch (e) {}
     }
     lines.push('  ' + String(i + 1).padStart(2) + '. ' + (c.estimated ? '(估)' : (c.inLattice ? '   ' : '外 ')) + ' '
       + (dir === 'v' ? 'y=' : 'x=') + c.center + (c.run && c.run.len ? '（段 ' + c.run.len + 'px）' : '') + extra);
@@ -371,7 +375,12 @@ async function iconLib(arg) {
   r.rows.forEach((row) => {
     tally[row.verdict] = (tally[row.verdict] || 0) + 1;
     let extra = '';
-    if (shot) { const K = coordsFrom(shot, row.box.x + Math.round(row.box.w / 2), row.box.y + Math.round(row.box.h / 2)); extra = '　坐标 ' + K.space.x + ',' + K.space.y; }
+    if (shot) {
+      const K = coordsFrom(shot, row.box.x + Math.round(row.box.w / 2), row.box.y + Math.round(row.box.h / 2));
+      extra = '　坐标 ' + K.space.x + ',' + K.space.y;
+      /* 同 grid_count：只有换算成她的坐标空间的坐标才记进账本 ✓（图片路径那种不记 ✗） */
+      if (row.verdict === 'match') { try { require('./prov').instance.offer(K.space.x, K.space.y, 'icon_lib', String(row.name)); } catch (e) {} }
+    }
     const second = row.second ? ('，次名「' + row.second.name + '」' + row.second.score.toFixed(3)) : '';
     const margin = (row.margin == null) ? '-' : row.margin.toFixed(3);
     if (row.verdict === 'match') {

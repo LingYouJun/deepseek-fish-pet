@@ -221,6 +221,10 @@ const REASON_TEXT = {
   'target-covered-by-light-panel': '目标被浅色面板（飞框/对话框）压住了',
   'target-covered-by-unknown-window': '目标点被别的窗口压住了',
   'point-on-taskbar': '那一点在任务栏上（点它会弹出日历飞框）',
+  'repeat-needs-fresh-evidence': '这个目标点过了，而且没有新的证据（复点要先重新定位）',
+  'repeat-too-many': '这个目标已经点过 2 次了，不许再点（别再打了）',
+  'repeat-blocked': '被"不许复点"的账本拦住了',
+  'no-provenance': '这个坐标不是任何确定性工具刚给出的',
   'point-outside-target-window': '坐标不在目标窗口里',
   'cursor-did-not-reach-target': '光标没到目标（命令发了，但一次都没采到）',
   'target-is-minimized': '目标窗口是最小化的',
@@ -379,10 +383,30 @@ async function clickSafe(x, y, opts) {
     out.inWindow = p;
     if (!p.ok) return blockFail(out, 'point-outside-target-window', null, o);
   }
+  /* ②b ★★不许复点★（2026-10-11 主人症状③的正解）★★
+     实测：click 一次只发一组 down+up（间隔 45ms），Windows 认双击的窗口 500ms/4px，
+     而她两次点击实测隔 3~6 秒 → **不可能被并成双击**；
+     "点对一次又点掉一次" = 两次**独立单击**打在同一个 toggle 上（第一下开/选中，第二下关/取消）。
+     所以：★同一个目标默认只点一次；想再点必须有**新证据**（点完之后重新定位过一次）；最多 2 次，第 3 次拒绝★。
+     账本用 prov.js 的**共用实例**（locate/act 那条线也用它 —— 只有一本账 ✓）。
+     ⚠️ 纯 Node 单测里没有账本副作用也没关系（prov 是纯逻辑 ✓）；o.skipRepeatGuard 只给探针/诊断用 ✓ */
+  if (!o.skipRepeatGuard) {
+    const ledger = require('./prov').instance;
+    const g = ledger.gate(kind, x, y, o.requireProvenance ? { requireOffer: true } : {});
+    out.repeatGuard = { ok: g.ok, code: g.code || null, alreadyClicked: g.alreadyClicked == null ? null : g.alreadyClicked };
+    if (!g.ok) {
+      return blockFail(out, g.code === 'repeat-too-many' ? 'repeat-too-many' : (g.code || 'repeat-blocked'),
+        '★不许复点★：' + g.reason + '\n' + (g.hint || ''), o);
+    }
+  }
   /* ③ 动作 */
   const IN = getInput();
   const fn = (typeof IN[kind] === 'function' ? IN[kind] : IN.click).bind(IN);
   out.result = await fn(x, y);
+  /* ★点完记一笔账★（不管有没有确认到位都记：重点是"这一点刚刚已经点过了" ✓） */
+  if (!o.skipRepeatGuard) {
+    try { require('./prov').instance.note(kind, x, y, 'clickSafe'); } catch (e) {}
+  }
   /* ④ ★效果断言：轮询采到过"光标在目标上"才算到位★
       ⚠️ 旧写法是「发完命令 → 单次回读」并且【无条件 ok=true】——
          实测它自己都回读到"差 960/91 像素"、回执照样写"✅ 已点击" ✗，

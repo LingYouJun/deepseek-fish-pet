@@ -70,29 +70,77 @@ function create(opt) {
     return clicks.filter((c) => Math.hypot(c.x - X, c.y - Y) <= nearPx).length;
   }
 
-  /* ★动鼠标之前的闸门★ → {ok:true, offer} / {ok:false, reason, hint} */
-  function gate(action, x, y) {
+  /* 这个目标上一次是什么时候点的（用来判"复点有没有**新证据**"） */
+  function lastClickAt(x, y) {
     prune();
+    const X = Number(x), Y = Number(y);
+    let t = null;
+    for (const c of clicks) if (Math.hypot(c.x - X, c.y - Y) <= nearPx && (t == null || c.at > t)) t = c.at;
+    return t;
+  }
+
+  /* ★动鼠标之前的闸门★ → {ok:true, offer} / {ok:false, code, reason, hint}
+   *
+   * ★★ 2026-10-11 加的一条（主人症状③的正解）★★
+   *   实测：click 一次只发一组 down+up（间隔 45ms），Windows 认双击的窗口是 **500ms / 4px**，
+   *   而她两次点击之间实测隔 **3~6 秒** → ★不可能被并成双击★。
+   *   "点对一次又点掉一次" = **两次独立的单击打在同一个 toggle 上**（第一下开/选中，第二下关/取消）。
+   *   所以：★复点必须有**新证据**★ —— 这个坐标要在**上一次点它之后**被某个确定性工具
+   *   **重新报过一次**（= 新鲜帧重新定位、重新自证 ✓）；证不过就拒绝 ✗。
+   *   · n===0（第一次）：默认放行（游戏助手那种"只有画面没有控件"的场景还得能点 ✓）；
+   *     要"坐标必须有来源证明"时传 {requireOffer:true} ✓（DSH 视觉线那边的 act 就是这么用的）
+   *   · n>=1：必须有**比上一次点击更新的** offer，否则 code='repeat-needs-fresh-evidence'
+   *   · n>=maxSame(2)：一律拒绝，code='repeat-too-many'（第 3 次）
+   *   · {allowStaleOffer:true} 只给单测/诊断用，生产别传 ✓ */
+  function gate(action, x, y, opt) {
+    prune();
+    const o = opt || {};
     const hit = findOffer(x, y);
-    if (!hit) {
-      return {
-        ok: false,
-        reason: '★这个坐标 (' + Math.round(Number(x)) + ',' + Math.round(Number(y)) + ') 不是任何**确定性工具**刚给出的✗★'
-          + '（最近 ' + Math.round(ttl / 1000) + ' 秒内没有任何 find_text/find_template/grid_count/icon_lib/find_owned/click_checked 报过它附近 ' + nearPx + 'px 的点 ✓）',
-        hint: '★模型自己写的坐标一律不执行✗★ —— 要点击请先用 find_text|<文字> 或 find_owned|<按钮>|<房间> 拿到坐标 ✓，'
-          + '或者直接用 click_checked（它自己找坐标 + 点后核对判据 ✓）。',
-      };
-    }
     const n = sameTargetCount(x, y);
-    if (n >= maxSame) {
+    if (n >= 1) {
+      if (n >= maxSame) {
+        return {
+          ok: false, code: 'repeat-too-many',
+          reason: '★这个目标已经点过 ' + n + ' 次了（上限 ' + maxSame + '）✗★ —— 坐标来自「'
+            + (hit ? hit.offer.from : '（已经不在账本里了）') + '」✓',
+          hint: '★别再点了✗★（主人的原话：点对一次又点一次取消了 ✓）。请先 panel_state / screen_diff 看当前状态，'
+            + '把情况如实报给主人 ✓；★不要换个坐标再打一发✗★（换坐标打在同一个 toggle 上，后果一样 ✓）。',
+        };
+      }
+      if (!o.allowStaleOffer) {
+        const last = lastClickAt(x, y);
+        const fresh = !!(hit && last != null && hit.offer.at > last);
+        if (!hit || !fresh) {
+          return {
+            ok: false, code: 'repeat-needs-fresh-evidence',
+            reason: '★这个目标（' + Math.round(Number(x)) + ',' + Math.round(Number(y))
+              + ' 附近 ' + nearPx + 'px）已经点过 ' + n + ' 次了，而**没有新的证据**✗★：'
+              + (hit
+                ? '账本里只有**点击之前**就报过的那次定位（来自「' + hit.offer.from + '」），点完之后没有再量过 ✓'
+                : '最近 ' + Math.round(ttl / 1000) + ' 秒内没有任何确定性工具报过这个点 ✓'),
+            hint: '★复点必须先**重新定位**★：用 locate / find_text / uia_find / find_owned 拿一次**新的**坐标'
+              + '（== 新鲜帧重新量过、重新自证 ✓），证得过才允许再点一次 ✓。'
+              + '★证不过就停手★：先看清现在是什么状态（panel_state / screen_diff），或者直接问主人 ✓。',
+          };
+        }
+      }
+    }
+    /* 第一次点：默认不要求来源证明（严格模式见下） */
+    if (n === 0 && o.requireOffer && !hit) {
       return {
-        ok: false,
-        reason: '★这个目标已经点过 ' + n + ' 次了（上限 ' + maxSame + '）✗★ —— 坐标来自「' + hit.offer.from + '」✓',
-        hint: '★别再点了✗★（主人的原话：点对一次又点一次取消了 ✓）。请先 panel_state 看当前面板、'
-          + '或换一个"只在成功后出现"的判据，把情况如实报给主人 ✓。',
+        ok: false, code: 'no-provenance',
+        reason: '★这个坐标 (' + Math.round(Number(x)) + ',' + Math.round(Number(y))
+          + ') 不是任何**确定性工具**刚给出的✗★（最近 ' + Math.round(ttl / 1000) + ' 秒内没有任何 '
+          + 'find_text/find_template/grid_count/icon_lib/find_owned/click_checked/locate 报过它附近 ' + nearPx + 'px 的点 ✓）',
+        hint: '★模型自己写的坐标一律不执行✗★ —— 要点击请先用 find_text|<文字> 或 find_owned|<按钮>|<房间> 拿到坐标 ✓，'
+          + '或者直接用 click_checked / locate → act（它们自己找坐标 + 点后核对判据 ✓）。',
       };
     }
-    return { ok: true, offer: hit.offer, dist: hit.dist, alreadyClicked: n, action: String(action || '') };
+    return {
+      ok: true, offer: hit ? hit.offer : null, dist: hit ? hit.dist : null,
+      alreadyClicked: n, action: String(action || ''),
+      freshEvidence: n >= 1 ? true : null,
+    };
   }
 
   /* 真的点完（或确认已经发出）之后记账 ✓ */
@@ -117,7 +165,14 @@ function create(opt) {
     return { offers: offers.length, clicks: clicks.length, ttlMs: ttl, nearPx, maxSame };
   }
 
-  return { offer, gate, note, clear, stats, offers: () => offers.slice(), clicks: () => clicks.slice() };
+  return { offer, gate, note, clear, stats, lastClickAt, sameTargetCount,
+    offers: () => offers.slice(), clicks: () => clicks.slice() };
 }
 
-module.exports = { create, TTL_MS, NEAR_PX, MAX_SAME };
+/* ★★ 一个进程里只应该有一个账本 ★★（2026-10-11 加）
+   为什么：`locate`/`act`（percept.js）与**裸 click**（safedrive.js）必须看同一本账 ✗→✓ ——
+   否则"locate 刚量过的坐标"在 click 那边不算数、两边各拦各的，就是**两套互相打架的闸门** ✗。
+   （原本 percept.js 自己 `PROV.create({})`，现在改成共用这一个 ✓） */
+const instance = create({});
+
+module.exports = { create, instance, TTL_MS, NEAR_PX, MAX_SAME };

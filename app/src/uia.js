@@ -146,6 +146,9 @@ async function locateByHwnd(hwnd, needle) {
   const exact = r.elements.find((e) => e.name === needle || e.automationId === needle);
   const hit = exact || r.elements[0];
   if (!hit) return { ok: false, reason: 'element-not-found', window: r.window, count: r.count };
+  /* ★把这次定位记进账本★（2026-10-11）：safedrive 的"不许复点"闸门要求
+     复点必须有一次**上一次点击之后**重新定位出来的坐标 —— uia_find 就是最可靠的来源之一 ✓ */
+  try { require('./prov').instance.offer(hit.cx, hit.cy, 'uia_find', String(hit.name || needle || '')); } catch (e) {}
   return {
     ok: true, x: hit.cx, y: hit.cy, confidence: exact ? 0.98 : 0.85,
     how: 'uia-hwnd' + (exact ? '-exact' : '-loose'),
@@ -162,6 +165,8 @@ async function locate(windowTitle, needle, hwnd) {
   const exact = r.elements.find((e) => e.name === needle || e.automationId === needle);
   const hit = exact || r.elements[0];
   if (!hit) return { ok: false, reason: 'element-not-found', window: r.window, count: r.count };
+  /* ★同上：记进账本（复点的"新证据"来源之一 ✓）★ */
+  try { require('./prov').instance.offer(hit.cx, hit.cy, 'uia_find', String(hit.name || needle || '')); } catch (e) {}
   return {
     ok: true, x: hit.cx, y: hit.cy, confidence: exact ? 0.98 : 0.85,
     how: 'uia' + (exact ? '-exact' : '-loose'),

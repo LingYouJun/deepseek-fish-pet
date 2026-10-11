@@ -411,6 +411,10 @@ async function findOwned(arg) {
   }
   if (owned.length === 1) {
     const t = toSpace(owned[0].button.cx, owned[0].button.cy, ocr.imgW, ocr.imgH);
+    /* ★把这次定位记进账本★（2026-10-11）：find_owned 本来就是"点之前确认归属"那一步 ✓ ——
+       裸 click 的"不许复点"闸门认它当**新证据**（复点前必须重新定位过一次 ✓）。
+       ⚠️ 只在**整屏图**时记（t.fullscreen）：窗口裁图的坐标不是屏幕坐标 ✗ 记进去会授权一次错点 ✗ */
+    if (t.fullscreen) { try { require('./prov').instance.offer(t.x, t.y, 'find_owned', buttonText + '@' + containerText); } catch (e) {} }
     lines.push('  ✅ ★归属确定★：「' + buttonText + '」属于「' + owned[0].title.text + '」（★唯一 ✓★）→ 点击坐标 ' + t.x + ',' + t.y
       + '（物理像素 ' + owned[0].button.cx + ',' + owned[0].button.cy + ' ✓）'
       + (t.fullscreen ? '　★坐标空间=你的坐标空间（图就是整屏 ' + t.space.w + 'x' + t.space.h + '）✓★'
@@ -481,6 +485,10 @@ async function clickChecked(arg) {
   const t = toSpace(bx, by, ocrB.imgW, ocrB.imgH);
   out.push('  ② 归属确定 ✓：「' + owned[0].title.text + '」（距离 ' + Math.round(owned[0].dist) + 'px）→ 点 (' + t.x + ',' + t.y + ')'
     + '（物理 ' + bx + ',' + by + '，她的坐标空间 ' + t.space.w + 'x' + t.space.h + ' ✓）');
+  /* ★把这次"重新定位出来的坐标"记进账本★（2026-10-11）——
+     裸 click 的"不许复点"闸门要求：复点必须有一次**上一次点击之后**重新定位出来的坐标 ✓，
+     这里就是那个来源之一 ✓（账本共用 prov.js 的 instance ✓）。 */
+  try { require('./prov').instance.offer(t.x, t.y, 'click_checked', buttonText + '@' + containerText); } catch (e) {}
   if (!dry) {
     try { await deps.click(t.x, t.y); out.push('  ③ 已发出点击 ✓'); }
     catch (e) { out.push('  ❌ 点击本身失败：' + (e && e.message || e) + ' ★如实报失败 ✗ 不重试 ✓★'); return out.join('\n'); }
@@ -499,6 +507,9 @@ async function clickChecked(arg) {
   if (diff) out.push('     before/after 像素差：平均 ' + diff.mean.toFixed(2) + '/255，变化像素 ' + (diff.changedRatio * 100).toFixed(1) + '%'
     + '（★这只是参考信息 ✗——"屏幕有变化"永远不能单独当成功证据 ✓★）');
   const changedALot = diff && diff.changedRatio >= 0.1;
+  /* ★判据满足 → **清账**★（"已经确认状态真的变了" → 同一目标可以重新开始 ✓）
+     判据没满足 → 什么都不做：账本里"这个点已经点过"那一笔留着 ✓（第二次点就要求新证据了 ✓） */
+  if (vr.ok) { try { require('./prov').instance.clear(t.x, t.y); } catch (e) {} }
   out.push(vr.ok
     ? '  ✅ ★判定成功★：判据 [' + criteria.join(' 且 ') + '] 满足了 ✓（而且 before/after 的差是"变化"的旁证 ✓，判据才是结论 ✓）'
     : '  ❌ ★判定失败✗★：点完之后画面里**没有**出现 [' + vr.missing.join('、') + '] ✓ —— ★如实报失败✗，不要在这附近反复试✓★'
