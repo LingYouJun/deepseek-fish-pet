@@ -49,15 +49,32 @@ const TOLS = [6, 2];
     const cy = anchor ? Math.round(anchor.cy + k * SPACING) : null;
     truth.push({ id: 'C' + (k + 1), kind: 'icon', cy, x: 1810, y: (cy == null ? 0 : cy - 36), w: 72, h: 72, certain: !!agree });
   }
-  /* ★遮挡自检（lead 发现上一张叠框图是"实时截屏 + DSH 盖在上面"✗）★ */
+  /* ★遮挡自检（**联合判据**✗→✓ 2026-10-11 修）★
+     教训：只按"近黑占比高"判 → 把**深色界面**误判成遮挡 ✗（干净真机列帧 40.7/74.6% 被判"疑似被遮挡" ✗ 假阳性 ✓）。
+     现在三条同时满足才判遮挡 ✓：① 近黑占比 > 60% ✓ ② 该带 OCR 词数异常低（<3 ✓ 真机列只有 ALL=1 个词 ✓ 但它是纯图形列 ✓）
+     ③ **该带检出格数 / 已知格数不符**（遮挡会把图标吃掉 → 检出明显少于已知 ✓）。
+     ★任一不满足 → 倾向"深色界面"✓，不单独据此否帧 ✗（判据只是提示 ✓ 最终由人看图复核 ✓）★ */
   {
     let dark = 0, n = 0, sum = 0;
     for (let y = BAND.y0; y <= BAND.y1; y++) for (let x = BAND.x0; x <= Math.min(img.width - 1, BAND.x1); x += 2) {
       const p = (y * img.width + x) * 4; const l = 0.299 * img.bitmap.data[p] + 0.587 * img.bitmap.data[p + 1] + 0.114 * img.bitmap.data[p + 2];
       sum += l; n++; if (l < 40) dark++;
     }
-    console.log('列带遮挡自检：平均亮度 ' + (sum / n).toFixed(1) + '　近黑像素占比 ' + (dark / n * 100).toFixed(1) + '%'
-      + (dark / n > 0.6 ? '　★疑似被遮挡✗（这张不能用于验收 ✓）★' : '　✓ 未见大面积遮挡 ✓'));
+    const darkRatio = dark / n;
+    let bandWords = null;
+    try {
+      const oj = path.join(OUT, 'realclass-ocr.json');
+      if (fs.existsSync(oj)) {
+        const o = JSON.parse(fs.readFileSync(oj, 'utf8').replace(/^\uFEFF/, ''));
+        bandWords = (o.lines || []).reduce((a, L) => a + (L.words || []).length, 0);
+      }
+    } catch (e) {}
+    const detected = (lattice.items || []).length;
+    const c1 = darkRatio > 0.6, c2 = bandWords != null && bandWords < 3, c3 = detected < 9;
+    const verdict = c1 && c2 && c3 ? '★三条同时满足 → 判遮挡✗★' : '✓ 倾向"深色界面"（联合判据未同时满足 ✓ 不单独否帧 ✗）';
+    console.log('列带遮挡自检（联合判据 ✓）：平均亮度 ' + (sum / n).toFixed(1) + '　近黑 ' + (darkRatio * 100).toFixed(1) + '%'
+      + '　该带 OCR 词数 ' + (bandWords == null ? '（未提供）' : bandWords) + '　检出格数 ' + detected + '/9'
+      + '　①近黑>60%=' + c1 + ' ②词数<3=' + c2 + ' ③检出<9=' + c3 + '　→ ' + verdict);
   }
   console.log('真值 9 格 y：' + truth.map((t) => t.cy + (t.certain ? '✓' : '✗')).join(' '));
   /* ★右边界裁切验证（lead 要求先验 ✓）：中心 + 半宽 ≤ 图宽 才算完整落在画面内 ✓ */

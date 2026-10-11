@@ -90,7 +90,24 @@ function modeLattice(luma, w, h, opt) {
       inLattice: !!c.inLattice, estimated: !!c.estimated, empty: !!c.empty,
     };
   });
-  return { mode: 'lattice', trustworthy, reasons, spacing, residual, region: r.region, items, analysis: r };
+  /* ★★ 修"自己跟自己对不上"✗→✓（2026-10-11 lead 要求的断言）★★
+     症状（真机列实测）：回报的 `spacing` 是 115.9px ✓，但**发出的格心实际间距约 155px**✗
+     → 调用方按自报 spacing 推相位就全错（C1 2.0px 但 C2..C9 差 39~56px ✓ 正是这个形状 ✓）。
+     修法（★同一个数只能有一个来源✗✓★）：**spacing 直接由实际发出的格心间距算**（中位数 ✓），
+     并逐格断言 |实际间距 − spacing| ≤ 0.5px ✓；超过就**报错**（`spacingOk:false` + reasons ✓）
+     并让 `trustworthy` 变 false ✓ → 上层就会明确说明原因（不静默退化 ✓）。 */
+  const centers = items.map((it) => (r.dir === 'v' ? it.cy : it.cx)).slice().sort((a, b) => a - b);
+  const gaps = [];
+  for (let i = 1; i < centers.length; i++) gaps.push(centers[i] - centers[i - 1]);
+  const gapMed = gaps.length ? gaps.slice().sort((a, b) => a - b)[Math.floor(gaps.length / 2)] : 0;
+  const gapDev = gaps.length ? Math.max.apply(null, gaps.map((g) => Math.abs(g - gapMed))) : 0;
+  const declared = spacing;
+  const spacingOut = gapMed || declared;
+  const spacingOk = gaps.length > 0 && gapDev <= 0.5 && Math.abs(spacingOut - declared) <= 0.5;
+  if (!spacingOk) reasons.push('★间距不一致✗★：自报 spacing ' + Number(declared).toFixed(1) + 'px vs 实际格心间距 ' + gapMed + 'px（最大偏差 ' + gapDev.toFixed(1) + 'px > 0.5px ✓）');
+  return { mode: 'lattice', trustworthy: trustworthy && spacingOk, reasons,
+    spacing: spacingOut, spacingDeclared: declared, spacingOk, spacingDev: gapDev,
+    residual, region: r.region, items, analysis: r };
 }
 
 /* ───────── 模式 B：不规则摆放（连通域 ✓）───────── */
@@ -388,6 +405,13 @@ async function scan(imgPath, opt) {
     mode: used.mode, modeWhy: why,
     space: spaceInfo.space, spaceBasis: spaceInfo.basis,
     spacing: used.spacing || null, residual: used.residual == null ? null : used.residual,
+    /* ★把"间距一致性"断言的结果**透出来**✗→✓（第一版被这个包装层丢掉了 ✗ → 自查看不到 ✓）：
+       spacingDeclared = 原自报值；spacingOk/spacingDev = 与实际格心间距的一致性 ✓；reasons = 不可信原因 ✓ */
+    spacingDeclared: used.spacingDeclared == null ? null : used.spacingDeclared,
+    spacingOk: used.spacingOk == null ? null : used.spacingOk,
+    spacingDev: used.spacingDev == null ? null : used.spacingDev,
+    trustworthy: used.trustworthy == null ? null : used.trustworthy,
+    reasons: used.reasons || [],
     region: used.region || o.region || null,
     count: items.length, items,
     dropped: used.dropped || null, analysis: used.analysis || null,
