@@ -1,34 +1,101 @@
 {
-  "note": "★真实游戏帧的手标真值（2026-10-11）★ 口径与合成屏一致：每项 = id / kind / x,y,w,h（物理像素）+ 中心。provenance 逐帧写清（★不许含糊✓★）。类别只标该帧**实际存在**的：icon（职业列）/ text（房间名/面板标签）。",
+  "note": "真实帧真值（可复现标注 ✓ 2026-10-11 重标）",
   "space": "physical",
-  "spaceBasis": "帧都是 1920x1080 物理像素（win_shot 原图 / GDI 抓屏 ✓）；本机 125% 缩放（DIP 1536x864）✓。",
   "frames": [
     {
       "id": "arknights-class-column",
       "file": "C:/deepseek/desktop-pet/shots/win-Arknights-1791645099248.jpg",
-      "provenance": "★真机职业列★（明日方舟右侧那一列 ✓）。9 个图标的中心 = grid_count 量出的 9 段 run 中点（x=列中心 1846 ✓）+ icon_lib 模板匹配锚点，两法逐格一致且同帧重复 3 次完全相同 ✓；格距 115.9px ✓（这就是'格距法该被证明的地方' ✓）。",
-      "categories": ["icon"],
+      "categories": [
+        "icon"
+      ],
+      "provenance": "★三法交集✓★：① grid_count 带内 run 中点 ② 该段 ±36px 局部能量重心 ③ 该段 blob 包围盒中心；三者两两 ≤4px 才写入 ✓（不一致 → certain:false 已排除 ✓）。帧：win_shot 原图 1920x1080 ✓。叠框图：overlay-class-column.png（绿=确定/红=不确定 ✓）",
+      "toleranceNote": "run 中点单独当中心会偏 0~21px ✗（已改三法交集 ✓）",
       "items": [
-        { "id": "C1", "kind": "icon", "x": 1810, "y": 87, "w": 72, "h": 72, "label": "" },
-        { "id": "C2", "kind": "icon", "x": 1810, "y": 163, "w": 72, "h": 72, "label": "" },
-        { "id": "C3", "kind": "icon", "x": 1810, "y": 265, "w": 72, "h": 72, "label": "" },
-        { "id": "C4", "kind": "icon", "x": 1810, "y": 391, "w": 72, "h": 72, "label": "" },
-        { "id": "C5", "kind": "icon", "x": 1810, "y": 516, "w": 72, "h": 72, "label": "" },
-        { "id": "C6", "kind": "icon", "x": 1810, "y": 609, "w": 72, "h": 72, "label": "" },
-        { "id": "C7", "kind": "icon", "x": 1810, "y": 737, "w": 72, "h": 72, "label": "" },
-        { "id": "C8", "kind": "icon", "x": 1810, "y": 853, "w": 72, "h": 72, "label": "" },
-        { "id": "C9", "kind": "icon", "x": 1810, "y": 963, "w": 72, "h": 72, "label": "" }
+        {
+          "id": "C3",
+          "kind": "icon",
+          "x": 1810,
+          "y": 86,
+          "w": 72,
+          "h": 72,
+          "label": "",
+          "certain": true,
+          "methods": {
+            "seed": 122,
+            "centroid": 121,
+            "blob": 123
+          }
+        },
+        {
+          "id": "C4",
+          "kind": "icon",
+          "x": 1810,
+          "y": 163,
+          "w": 72,
+          "h": 72,
+          "label": "",
+          "certain": true,
+          "methods": {
+            "seed": 199,
+            "centroid": 201,
+            "blob": 198
+          }
+        },
+        {
+          "id": "C23",
+          "kind": "icon",
+          "x": 1810,
+          "y": 738,
+          "w": 72,
+          "h": 72,
+          "label": "",
+          "certain": true,
+          "methods": {
+            "seed": 774,
+            "centroid": 774,
+            "blob": 774
+          }
+        }
       ]
     },
     {
       "id": "queue-panel-text",
       "file": "C:/deepseek/after-click.png",
-      "provenance": "★真机会客室队列面板★。这里只标**文字**元素（该帧实际存在的类别 ✓），框来自她的 OCR 词组框并逐个与面板文本核对（会客室 / 房间2/12 / 当前进驻 / 2/3 ✓）；★注意：这是'OCR 给的框'，所以它只能用来量 locate 的**区域/配对**是否正常，不能用来量 OCR 本身的准确率✗★（那要人眼看像素 ✓ 我没做 ✗，如实说 ✓）。",
-      "categories": ["text"],
+      "categories": [
+        "text"
+      ],
+      "provenance": "★OCR 词组框回填✓★（工具：app/scripts/ocr.ps1 → real-queue-panel-text.json，13 行/90 词，本会话第 1 次成功运行 ✓）。★限制：这样得来的 text 真值只能量\"locate 的框取与配对\"✓ 不能量 OCR 准确率 ✗（循环论证 ✓）★。叠框图：overlay-queue-panel.png ✓",
       "items": [
-        { "id": "Q1", "kind": "text", "x": 1000, "y": 300, "w": 92, "h": 32, "label": "会客室" },
-        { "id": "Q2", "kind": "text", "x": 1000, "y": 350, "w": 130, "h": 30, "label": "房间2/12" },
-        { "id": "Q3", "kind": "text", "x": 1000, "y": 400, "w": 130, "h": 30, "label": "当前进驻" }
+        {
+          "id": "Q1",
+          "kind": "text",
+          "x": 451,
+          "y": 129,
+          "w": 101,
+          "h": 33,
+          "label": "会客室",
+          "certain": true
+        },
+        {
+          "id": "Q2",
+          "kind": "text",
+          "x": 1394,
+          "y": 129,
+          "w": 66,
+          "h": 33,
+          "label": "房间",
+          "certain": true
+        },
+        {
+          "id": "Q3",
+          "kind": "text",
+          "x": 451,
+          "y": 227,
+          "w": 113,
+          "h": 27,
+          "label": "当前进驻",
+          "certain": true
+        }
       ]
     }
   ]
