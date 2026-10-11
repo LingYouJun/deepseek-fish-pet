@@ -103,6 +103,28 @@ function create(opt) {
    *   · n>=1：必须有**比上一次点击更新的** offer，否则 code='repeat-needs-fresh-evidence'
    *   · n>=maxSame(2)：一律拒绝，code='repeat-too-many'（第 3 次）
    *   · {allowStaleOffer:true} 只给单测/诊断用，生产别传 ✓ */
+  /* ★判据结果辅助（2026-10-11 ✓）：账本每步记 verified=true|false|null ✓ */
+  function lastVerifiedAt(x, y) {
+    for (let i = clicks.length - 1; i >= 0; i--) {
+      const c = clicks[i];
+      if (Math.hypot(Number(c.x) - Number(x), Number(c.y) - Number(y)) <= nearPx) return c.verified == null ? null : !!c.verified;
+    }
+    return null;
+  }
+  function consecFailures(x, y) {
+    let k = 0;
+    for (let i = clicks.length - 1; i >= 0; i--) {
+      const c = clicks[i];
+      if (Math.hypot(Number(c.x) - Number(x), Number(c.y) - Number(y)) > nearPx) continue;
+      if (c.verified === true) break;          // 成功过 → 连续失败链断开 ✓
+      k++;
+    }
+    return k;
+  }
+  function triedList(x, y) {
+    return clicks.filter((c) => Math.hypot(Number(c.x) - Number(x), Number(c.y) - Number(y)) <= nearPx)
+      .slice(-6).map((c) => ({ t: c.t, x: c.x, y: c.y, verified: c.verified == null ? null : !!c.verified, reason: c.reason || '' }));
+  }
   function gate(action, x, y, opt) {
     prune();
     const o = opt || {};
@@ -118,14 +140,41 @@ function create(opt) {
     }
     const hit = findOffer(x, y);
     const n = sameTargetCount(x, y);
-    if (n >= 1) {
+    /* ★★ 2026-10-11 真机事故修复（lead 最高优先）：闸门要分清两种"重复"✗→✓ ★★
+       现场：点「查看」(1868,203) **判据没通过**（没生效 ✓），重试却被当成"重复动作"拦死 ✗ → 她被锁死，
+       从外面看像"操控不了键鼠" ✓。根因：账本没记判据结果 ✓。
+       新分界（判据结果在账本里 ✓ `verified: true|false|null`）：
+         · 同目标**上一步 verified=true**（真成功了 ✓）→ **拦**（保留原语义：防"点完又取消"✓）
+         · 同目标上一步 verified=false/null（没生效/没判据 ✓）→ **放行重试** ✓，但同目标**连续失败上限 3 次** ✓；
+           第 2 次失败起回执带 suggestion（换定位来源/微调坐标/换面板路径 ✓），第 3 次 → stop + 上报 ✓。
+       ★注意：闸门拒绝目前**是静默的**✗（不弹气泡）—— 要可见必须经 deps 层接气泡通道 ✓ **未做** ✗，
+       别让它消失 ✓（本注释即为占位 ✓）。 */
+    const fails = consecFailures(x, y);
+    const lastVerified = lastVerifiedAt(x, y);
+    /* ★连续失败上限 3 次（没生效的重试是正当的 ✓ 但不能无限 ✓）→ 第 3 次 stop + 上报 ✓ */
+    if (n >= 1 && lastVerified !== true && fails >= 3) {
+      return {
+        ok: false, code: 'retry-exhausted',
+        reason: '★同一目标**连续失败 ' + fails + ' 次**（判据一直没通过 ✓）→ 到达上限 3 ✗★：坐标来自「'
+          + (hit ? hit.offer.from : '（不在账本里）') + '」✓',
+        hint: '★别再重试同一个目标✗★：换**定位来源**（换工具/换更大的锚点 ✓）、换**面板路径**（先返回上一层 ✓），'
+          + '或者如实上报 ✓。',
+        suggestion: '★下一步具体动作★：① 换定位来源：先 panel_state 看在哪一屏 ✓，再用 locate 找**可读大字标签**当锚点 ✓ '
+          + '② 换面板路径：act 按 ESC / 点「返回·关闭」退回上一层 ✓ 再重新 locate ✓（★别再点同一个坐标✗★）'
+          + '③ 仍不行 → ★停下来如实上报：卡在哪一屏 + 已试动作 + 每次的判据结果✗✓★。',
+        stop: true, tried: triedList(x, y), failCount: fails, lastVerified,
+      };
+    }
+    if (n >= 1 && lastVerified === true) {
       if (n >= maxSame) {
         return {
           ok: false, code: 'repeat-too-many',
-          reason: '★这个目标已经点过 ' + n + ' 次了（上限 ' + maxSame + '）✗★ —— 坐标来自「'
+          reason: '★这个目标**上一次真的点成功了**（verified=true ✓），现在又点第 ' + n + ' 次（上限 ' + maxSame + '）✗★ —— 坐标来自「'
             + (hit ? hit.offer.from : '（已经不在账本里了）') + '」✓',
           hint: '★别再点了✗★（主人的原话：点对一次又点一次取消了 ✓）。请先 panel_state / screen_diff 看当前状态，'
             + '把情况如实报给主人 ✓；★不要换个坐标再打一发✗★（换坐标打在同一个 toggle 上，后果一样 ✓）。',
+          suggestion: '★下一步具体动作★：① 先 panel_state 确认现在在哪一屏 ✓ ② 若这是 toggle（勾选/开关 ✓）→ 你上一次已经成功 ✓，**不要再来一次** ✗ ③ 若要达成别的目的：换个**不同的**目标（别的按钮/别的面板 ✓）或如实上报 ✓。',
+          stop: true, tried: triedList(x, y), failCount: fails, lastVerified,
         };
       }
       if (!o.allowStaleOffer) {
@@ -186,10 +235,19 @@ function create(opt) {
     return rec;
   }
 
-  /* 真的点完（或确认已经发出）之后记账 ✓ */
-  function note(action, x, y, from) {
+  /* 真的点完（或确认已经发出）之后记账 ✓
+     ★2026-10-11：账本**必须记判据结果**✗→✓（`verified: true|false|null` ✓）——
+     gate 靠它分"点成功了不该再点"和"没生效可以正当重试" ✓；★被闸门拒掉的动作**不调 note**✗✓
+     （调用方在 gate 拒绝分支直接 return ✓）→ 所以被拒的不会记成 ok ✓。 */
+  function note(action, x, y, from, extra) {
     const t = prune();
-    clicks.push({ x: Number(x), y: Number(y), at: t, action: String(action || ''), from: String(from || '') });
+    const e = extra || {};
+    clicks.push({
+      x: Number(x), y: Number(y), at: t, action: String(action || ''), from: String(from || ''),
+      verified: e.verified == null ? null : !!e.verified,
+      reason: e.reason == null ? '' : String(e.reason).slice(0, 120),
+      blocked: false,
+    });
     if (clicks.length > 200) clicks = clicks.slice(-200);
     return clicks.length;
   }

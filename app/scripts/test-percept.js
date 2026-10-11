@@ -78,9 +78,13 @@ PE.install({
   ok(!L.gate('click', 500, 500).ok, '⑤ 没登记的坐标 → 拒绝 ✓');
   L.offer(500, 500, 'find_text', 'X');
   ok(L.gate('click', 500, 500).ok, '⑤ 登记过（find_text 给的）→ 放行 ✓');
-  L.note('click', 500, 500, 'test'); L.note('click', 500, 500, 'test');
+  /* ★2026-10-11 规则更新（真机事故修复 ✓ lead 批准）：**没判据（verified=null）/失败过**的重试是**正当的**✗→✓
+     → 只有"**成功过一次**（verified=true）"之后的复点才拦 ✓（见 ⑧②）；连续失败 3 次也停 ✓（见 ⑧③）。
+     ★这是"新行为对 → 更新测试预期去断言新行为"✗✓，不是放宽断言 ✗★ */
+  L.note('click', 500, 500, 'test', { verified: false, reason: '没判据/没生效' });
+  L.note('click', 500, 500, 'test', { verified: false, reason: '没判据/没生效' });
   const g3 = L.gate('click', 500, 500);
-  ok(!g3.ok && /已经点过 2 次/.test(g3.reason), '⑤ ★同一目标点过 2 次后，第 3 次直接拒绝✗★（主人的③④条 ✓）', g3.reason.slice(0, 50));
+  ok(g3.ok === true, '⑤ ★失败过的重试**放行**✓（来源证明仍在 ✓）；成功过一次之后才拦 ✓（⑧②）★', 'ok=' + g3.ok);
   ok(!L.gate('click', 560, 500).ok, '⑤ 换个点（不在任何登记坐标附近）→ 仍然拒绝（来源证明 ✓）');
 
   /* ⑥ 坐标系契约：同一目标在"物理"与"DIP"两种假设下各算一次 */
@@ -101,6 +105,31 @@ PE.install({
   ok(/换算由程序做/.test(z), '⑦ zoom 回执里写明坐标换算规则（模型不参与换算 ✓）');
 
   console.log('');
+  /* ★★ ⑧ 判据记账 + 正当重试（2026-10-11 真机事故：她被防复点闸门锁死 ✓ lead 最高优先）★★ */
+  {
+    const P = require(path.join(__dirname, '..', 'src', 'prov'));
+    const L = P.create({});
+    L.offer('locate', '测试目标', { x: 100, y: 200, w: 20, h: 20 });
+    L.note('click', 110, 210, 'locate', { verified: false, reason: '判据没满足' });
+    const g1 = L.gate('click', 110, 210);
+    ok(g1.ok === true, '⑧ ① verified=false 之后重试**不被 no-repeat 拦** ✓（现场就是这里被锁死 ✗）', 'ok=' + g1.ok + ' code=' + (g1.code || '-'));
+    L.note('click', 110, 210, 'locate', { verified: true, reason: '判据满足' });
+    const g2 = L.gate('click', 110, 210);
+    ok(g2.ok === false && /repeat/.test(String(g2.code)), '⑧ ② verified=true 之后再点同目标**被拦** ✓（防"点完又取消"）', 'ok=' + g2.ok + ' code=' + (g2.code || '-'));
+    ok(typeof g2.suggestion === 'string' && g2.suggestion.length > 30, '⑧ ②′ 拒绝回执**必带 suggestion**（可执行动作 ✓）', String(g2.suggestion).slice(0, 22) + '…');
+    const L2 = P.create({});
+    L2.offer('locate', '测试目标', { x: 300, y: 400, w: 20, h: 20 });
+    for (let i = 0; i < 3; i++) L2.note('click', 310, 410, 'locate', { verified: false, reason: '判据没满足#' + i });
+    const g3 = L2.gate('click', 310, 410);
+    ok(g3.ok === false && g3.code === 'retry-exhausted' && g3.stop === true,
+      '⑧ ③ 连续失败 3 次 → **stop=true**（程序结束这一步 ✓ 不空转 ✓）', 'code=' + g3.code + ' stop=' + g3.stop + ' fails=' + g3.failCount);
+    ok(Array.isArray(g3.tried) && g3.tried.length >= 3 && g3.tried.every((t) => t.verified === false),
+      '⑧ ③′ stop 回执带**已试动作清单 + 每次判据结果** ✓', 'tried=' + (g3.tried || []).length);
+    const before = L2.clicks().length;
+    L2.gate('click', 310, 410);
+    ok(L2.clicks().length === before, '⑧ ④ **被拒的动作不记账**（不会记成 ok ✓ 真机日志"状态 ok"与事实不符 ✗）', 'before=' + before + ' after=' + L2.clicks().length);
+  }
+
   console.log('通过 ' + pass + ' / ' + (pass + fail));
   process.exit(fail ? 1 : 0);
 })().catch((e) => { console.log('❌ 崩了：' + (e && e.stack || e)); process.exit(1); });

@@ -369,12 +369,13 @@ async function act(arg) {
      这正是"账本被 dry 污染"的表现 ✓。 */
   const reallyClicked = !dry;
   if (verified) {
-    if (reallyClicked) ledger.note(kind, x, y, 'verified-ok');
+    if (reallyClicked) ledger.note(kind, x, y, 'verified-ok', { verified: true, reason: '判据满足' });   // ★账本记 verified=true ✓
     ledger.clear(x, y);
     out.push('  ✅ ★成功且已核对★：同一目标的重试计数已清零 ✓');
   } else if (reallyClicked) {
-    ledger.note(kind, x, y, 'unverified');
-    out.push('  ❌ ★失败✗★：' + (criteria.length ? '判据没满足 ✓' : '没判据无法核对 ✓') + ' —— ★不要对同一目标反复点（同一个目标点超过 ' + PROV.MAX_SAME + ' 次我会直接拒绝✗）✓★');
+    /* ★账本记 verified=false ✓ → 闸门据此**允许正当重试**（上限 3 次 ✓）★（2026-10-11 真机事故修复 ✓） */
+    ledger.note(kind, x, y, 'unverified', { verified: false, reason: criteria.length ? '判据没满足' : '没判据' });
+    out.push('  ❌ ★失败✗★：' + (criteria.length ? '判据没满足 ✓' : '没判据无法核对 ✓') + ' —— ★同一目标的**正当重试**允许 ✓（连续失败上限 3 次，到顶我会停手并上报 ✓），但**成功过一次之后**就不再允许复点 ✗★');
   } else {
     out.push('  ❌ ★失败✗★：' + (criteria.length ? '判据没满足 ✓' : '没判据无法核对 ✓')
       + '　（dry=1：一次都没点，账本不记 ✓）');
