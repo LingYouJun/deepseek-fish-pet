@@ -240,6 +240,18 @@ const TOOL_DEFS = [
      → 本工具：★切格 → 每格和模板库比 → 得到名字 + 分数 ✓，位置和名字都不经过模型 ✗✓★
        （模型只负责给"名字那一串"这个外部知识 ✓）。 */
   { name: 'icon_lib', tier: 'full', needsArg: true, timeoutMs: 120000, desc: '【图标模板库·认图标】★把纯图形图标变成"可复用的模板库"，以后认图标=切格+比模板★（★位置由几何给 ✓、名字由模板库给 ✓，模型不需要报坐标✗★）。三种用法：① icon_lib|save|<图或进程名>|<库名>|<v|h>|<x,y,w,h 可省>|<期望格数 可省>|<名字按从上到下的顺序、逗号分隔> —— ★截一次、切 N 格、每格存一个模板★（名字可给人给的 ✓，不给就是 #序号 ✓）；② icon_lib|match|<图或进程名>|<库名>|<v|h>|<x,y,w,h 可省>|<期望格数 可省> —— ★逐格报告"匹配到哪个模板 + 分数 + 领先第二名多少"★，★匹配不到就如实说"没匹配上" ✗ 不硬凑 ✓★；③ icon_lib|list|<库名> 看库里有什么。★模板文件名**带位置序号**（t03_狙击.png ✓）★：序号是几何给的 ✓、名字是人给的 ✓，分开存 —— 免得再出现"名字写着狙击、其实是近卫那一格"✗（今天真出过 ✓）。★抗变化★：灰度 z-score 归一化（对整体亮度/对比度免疫 ✓）+ 多尺度（0.85~1.15 ✓）+ NCC 打分 + dHash 粗筛 ✓，纯 Node 零编译 ✓。⚠️ ★名字只有你给的那串里有✗★：它**不猜含义** ✓（"第几格是哪个职业"是外部知识 ✓，顺序见技能 ✓）。⚠️ 库存在 userData/iconlib/<库名>/ ✓。' },
+  /* ★★★ 2026-10-10：点击的两道保险（find_owned / click_checked）★★★
+     主人亲眼看到的两个根因 ✗：① 屏幕上有**四处**「编辑队列」（(893,337) 会客室的 ✓ / (893,605) 制造站1 的 ✗ /
+     (893,820) 制造站2 的 ✗ / (322,791) **聊天窗口里主人的字** ✗）→ 她"取第一个/就近取"✗ →
+     点到了制造站1 的按钮 ✓；② 点完只凭"屏幕变了"就算成功 ✗ → 接着在一个不存在的"确认"按钮上反复找 ✓。
+     → ① find_owned：候选由确定性工具给（find_text / find_template / grid_count / icon_lib ✓），
+       再用**几何**把候选归属到房间标题（同列 + 卡片向下堆叠 = "上方最近标题" ✓；有卡片矩形时用包含关系 ✓）；
+       归属**确定不了就报"不确定"并列出候选清单** ✗ 绝不硬选 ✓；模型不许给坐标 ✗。
+      ② click_checked：★调用方必须先声明"什么叫成功"★（点后必须出现的文字 ✓），
+       它做"点前检查 → 点 → 点后抓帧核对判据 + 记 before/after 像素差"✓；
+       ★判据不满足就如实报失败 ✗ 不许在附近反复试 ✓；"屏幕有变化"永远不能单独当成功证据 ✗★。 */
+  { name: 'find_owned', tier: 'full', needsArg: true, timeoutMs: 90000, desc: '【点前·确认归属】★要点的文字在屏幕上出现了好几处时，先用**几何**算出它属于哪个容器★（例如「编辑队列」属于「会客室」卡片 ✓）—— ★不许模型给坐标✗★。用法 find_owned|<要点的文字，如 编辑队列>|<容器/标题关键词，如 会客室>|img=<图，可省>|region=x,y,w,h（可省）。★判据（实测调出来的）★：候选先按**标题列 x 带**过滤（不在这一列的 → 多半在别的窗口里 ✗，例如主人聊天窗那处 ✓），再配给**它上方最近的标题** ✓（卡片从上往下排 ✓；★不能用"最近"✗——(893,337) 离制造站更近，那样就会配错 ✓）。输出：候选清单（每个的中心/框）+ 归属结论 + ★点击坐标★ + 被排除的及其理由 ✓；★归属不唯一/太远/有歧义时明确报"不确定" ✗ 绝不硬选 ✓★（那时请把 region 收窄、或换更明确的容器关键词 ✓）。⚠️ 它**只报告不动鼠标** ✓。⚠️ 空间：坐标已换算成她的坐标空间 ✓。' },
+  { name: 'click_checked', tier: 'full', needsArg: true, timeoutMs: 120000, desc: '【带判据的点击·推荐用这个】★点前确认归属 + 点击 + 点后核对"调用方声明的成功判据"★ —— ★两道保险齐全✓★。用法 click_checked|<要点的文字>|<容器/标题关键词>|<成功判据，逗号分隔（点后画面里**全部**要出现）>|dry=1（只算不点 ✓）|img=<点前图>|after=<点后图>|region=x,y,w,h。★必须给判据✗★（例如点开队列后面板会出现「会客室」和「预设队列」✓ —— 判据要选**只在成功后才出现**的词 ✓，别选点前就有的词 ✗）。执行：① 归属检查（不唯一→★一个都不点✗★，报不确定并让你决定 ✓）；② 点；③ 抓帧 OCR 核对判据 ✓ 同时记 before/after 像素差 ✓。★判据不满足 → 如实报失败 ✗ 不要在附近反复试 ✓；屏幕"变了"不算成功 ✗（点错房间也会变 ✓）★。' },
   { name: 'watch_screen', tier: 'full', needsArg: true, timeoutMs: 180000, desc: '连续看屏幕并给逐帧时间线' },
   { name: 'screen_diff', tier: 'full', needsArg: true, timeoutMs: 30000, desc: '抓两帧做像素比对：界面到底变没变（确定性，不靠视觉模型）' },
   /* ★ 剪贴板（A3）：5 行 API 就能做，不必接 MCP ✓ ★ */
@@ -261,7 +273,7 @@ const TOOL_DEFS = [
   { name: 'template_list', tier: 'read', needsArg: false, timeoutMs: 10000, desc: '列出已有模板' },
   { name: 'template_del', tier: 'normal', needsArg: true, timeoutMs: 10000, desc: '删掉一个模板' },
   /* 键鼠 */
-  { name: 'click', tier: 'full', needsArg: true, timeoutMs: 15000, desc: '在屏幕坐标点一下左键。参数 <x>,<y>（整屏像素，左上原点）。★要按按钮/控件时优先用 uia_find 拿精确坐标再点，比看图猜准得多★。执行前后有安全断言（目标是否被遮挡、前台对不对）。' },
+  { name: 'click', tier: 'full', needsArg: true, timeoutMs: 15000, desc: '在屏幕坐标点一下左键。参数 <x>,<y>（整屏像素，左上原点）。★要按按钮/控件时优先用 uia_find 拿精确坐标再点，比看图猜准得多★。★点击前请先 find_owned 确认这个坐标**属于谁**（屏幕上有多个同名文字时最容易点错 ✓），或直接用 click_checked（带归属检查+点后判据 ✓）★。执行前后有安全断言（目标是否被遮挡、前台对不对）。' },
   { name: 'rclick', tier: 'full', needsArg: true, timeoutMs: 15000, desc: '在屏幕坐标点一下右键（弹出上下文菜单）。参数 <x>,<y>。' },
   { name: 'dclick', tier: 'full', needsArg: true, timeoutMs: 15000, desc: '在屏幕坐标双击左键（打开文件/进目录常用）。参数 <x>,<y>。' },
   { name: 'clickz', tier: 'full', needsArg: true, timeoutMs: 30000, desc: '放大后精确点击' },
@@ -367,8 +379,8 @@ const TOOL_GROUPS = [
     re: /^(screen_look|screen_shot|screen_diff|watch_screen|windows_list|win_shot|icon_pick|grid_scan|tile_read|strip_read|som_look)$/,
     order: 'screen_look win_shot screen_shot screen_diff watch_screen windows_list som_look strip_read icon_pick grid_scan tile_read' },
   { name: '定位（★只有确定性来源 —— "在哪"的答案只许从这一组来★）',
-    hint: '★非游戏应用优先 uia_snapshot + uia_find：应用自己报的坐标，零识别误差★；其次是模板 / OCR / 像素量距（find_text / find_template / grid_count 数格子 / icon_lib 认图标 / find_grid）',
-    re: /^(uia_snapshot|uia_find|uia_dump|find_template|find_template_scroll|find_text|make_template|template_list|template_del|find_grid|grid_count|icon_lib|search_code)$/, order: 'uia_snapshot uia_find uia_dump find_text find_template find_template_scroll grid_count icon_lib find_grid make_template template_list template_del search_code' },
+    hint: '★非游戏应用优先 uia_snapshot + uia_find：应用自己报的坐标，零识别误差★；其次是模板 / OCR / 像素量距（find_text / find_template / grid_count 数格子 / icon_lib 认图标 / find_grid）；★要点击时先 find_owned 确认归属、或用 click_checked 连判据一起做 ✓★',
+    re: /^(uia_snapshot|uia_find|uia_dump|find_template|find_template_scroll|find_text|make_template|template_list|template_del|find_grid|grid_count|icon_lib|find_owned|click_checked|search_code)$/, order: 'uia_snapshot uia_find uia_dump find_text find_template find_template_scroll grid_count icon_lib find_grid find_owned click_checked make_template template_list template_del search_code' },
   { name: '操作（点 / 打 / 滚 / 拖）',
     hint: '★键盘只发给前台窗口 —— 目标不在前台就先 focus_window；UWP 抢不到前台时改用 click★',
     re: /^(click|clickz|rclick|rclickz|dclick|dclickz|move|movez|drag|scroll|type|key)$/, order: 'click clickz dclick rclick move drag scroll type key movez rclickz dclickz' },

@@ -182,6 +182,8 @@ console.log('=== registry.js 单元测试（纯 Node）===');
     'win_shot', 'grid_count',
     /* ★ 2026-10-10：图标模板库（几何给位置 + 模板库给名字，模型不报坐标）★ */
     'icon_lib',
+    /* ★ 2026-10-10：点击的两道保险（点前确认归属 + 点后核对判据）★ */
+    'find_owned', 'click_checked',
     'flow_run', 'flow_save', 'flow_list', 'flow_del',
     /* A3/A4（2026-10-03）：剪贴板 + 轮询等条件 */
     'clipboard_read', 'clipboard_write', 'wait_for',

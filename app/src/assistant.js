@@ -377,6 +377,25 @@ async function runInner(tool, arg) {
     return await dw.run(tool, arg);
   }
 
+  /* ★★★ 2026-10-10：点击的两道保险（find_owned / click_checked）★★★
+     为什么需要 ✗→✓：主人亲眼看到她点「编辑队列」时点到了**制造站1**的按钮 ✓，
+     然后因为"屏幕变了"就以为成功了 ✓，接着在一个根本不存在的"确认"按钮上反复找 ✓。
+     两道保险：① 点前用**几何**确认候选归属（★模型不许给坐标✗，只在几何无解时回答候选编号 ✓★）；
+              ② 点后必须核对**调用方事先声明的判据**（★"屏幕有变化"永远不算成功✗★）。
+     ★判据由调用方给 ✓（本层不猜"成功长什么样" ✗）。 */
+  if (tool === 'find_owned' || tool === 'click_checked') {
+    const oc = require('./ownclick');
+    oc.install({
+      capture: async () => await captureScreenFallback(),          // 无损 PNG ✓ 尺寸=space() ✓
+      ocrJson: (p) => ocrJson(p),
+      /* 真点的时候仍走**原来那条 click 路** ✓（不另写一套鼠标注入 ✗） */
+      click: async (x, y) => await run('click', x + ',' + y),
+      space: () => require('./input').space(),
+      dbg: (m) => dbg('[' + tool + '] ' + m),
+    });
+    return await oc.run(tool, arg);
+  }
+
   if (tool === 'screen_shot') {
     /* ⚠️ OCR 用图**不要画坐标网格**：那些刻度数字会被 OCR 当成屏幕上的文字读进去。
        网格只给视觉模型定位用（见下面的 screen_look）。 */
