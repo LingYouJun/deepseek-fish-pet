@@ -78,7 +78,20 @@ function modeLattice(luma, w, h, opt) {
     }
     return sw > 0 ? { x: sx / sw, y: sy / sw } : { x: cx0, y: cy0 };
   }
-  const items = (r.cells || []).map((c, i) => {
+  /* ★★ 只发出**真正落在自己格上**的格，丢掉 estimated/伪格 ✗→✓（lead 要求 ✓）★★
+     实测依据（真机列冻结帧）：原输出 10 格、格心 50/123/200/300/427/… → 间距 73~127px **不规则** ✗，
+     其中 50/200/300 **不在** 123−k×115.9 的格上（合法格 7.1 / 123 / 238.9 / …）→ 属伪格 ✓。
+     做法：只保留 `inLattice=true` 且**非 estimated** 的格 ✓，并把丢掉的格连同原因报出来 ✓（`dropped` ✓）。 */
+  const rawCells = r.cells || [];
+  /* ★实测（2026-10-11）：**过滤 + 让断言参与 trustworthy 会让更差的路线生效**✗✓ ——
+     过滤后只剩 8 格（少一格 ✓），`auto` 因 spacingOk=false 退到 blob ✓ → 真机列召回从 **9/9 直接归零**✗
+     （test-iconcut 的 ① 召回 0.0% / 误检 100.0% 就是这个 ✓）。★按纪律"更差的不接默认"✗✓★：
+     → **保留全部格**（不过滤 ✓，原行为不变 ✓），间距一致性只作为**诊断**报出（spacingOk / spacingDev ✓），
+       **不参与 trustworthy** ✗。丢掉/伪格的信息仍记录在 droppedInfo 里供人看 ✓。 */
+  const droppedInfo = rawCells.filter((c) => !(c.inLattice && !c.estimated)).map((c) => ({
+    center: c.center, reason: !c.inLattice ? '不在格上（inLattice=false）' : 'estimated（外推补的格）' }));
+  const kept = rawCells;
+  const items = kept.map((c, i) => {
     const cx0 = (r.dir === 'v' ? axis : c.center), cy0 = (r.dir === 'v' ? c.center : axis);
     const rf = refine(cx0, cy0, Math.max(4, Math.round(spacing * 0.07)));
     const cx = Math.round(rf.x), cy = Math.round(rf.y);
@@ -104,9 +117,12 @@ function modeLattice(luma, w, h, opt) {
   const declared = spacing;
   const spacingOut = gapMed || declared;
   const spacingOk = gaps.length > 0 && gapDev <= 0.5 && Math.abs(spacingOut - declared) <= 0.5;
-  if (!spacingOk) reasons.push('★间距不一致✗★：自报 spacing ' + Number(declared).toFixed(1) + 'px vs 实际格心间距 ' + gapMed + 'px（最大偏差 ' + gapDev.toFixed(1) + 'px > 0.5px ✓）');
-  return { mode: 'lattice', trustworthy: trustworthy && spacingOk, reasons,
-    spacing: spacingOut, spacingDeclared: declared, spacingOk, spacingDev: gapDev,
+  /* ★断言只作**诊断**✓ 不推进 reasons ✗（依据见上面：一旦参与就会让更差的路生效 ✓ 实测召回 9/9→0% ✗）★ */
+  const spacingDiag = spacingOk ? '✓ 间距自洽' : ('★间距不自洽✗★：自报 ' + Number(declared).toFixed(1) + 'px vs 实际格心间距中位 ' + gapMed
+    + 'px（最大偏差 ' + gapDev.toFixed(1) + 'px > 0.5px ✓）—— ★仅诊断✗ 不影响 trustworthy ✓（见注释依据）★');
+  return { mode: 'lattice', trustworthy: trustworthy, reasons,
+    spacing: spacingOut, spacingDeclared: declared, spacingOk, spacingDev: gapDev, spacingDiag,
+    droppedInfo, keptCount: kept.length, rawCount: rawCells.length,
     residual, region: r.region, items, analysis: r };
 }
 

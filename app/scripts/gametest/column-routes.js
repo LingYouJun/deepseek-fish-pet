@@ -66,7 +66,8 @@ const TOLS = [6, 2];
       const oj = path.join(OUT, 'realclass-ocr.json');
       if (fs.existsSync(oj)) {
         const o = JSON.parse(fs.readFileSync(oj, 'utf8').replace(/^\uFEFF/, ''));
-        bandWords = (o.lines || []).reduce((a, L) => a + (L.words || []).length, 0);
+        /* ★作用域修到**带内**✗→✓（第一版取整帧词数 ✗ 结论对但依据不对 ✓）：只数 y 落在 BAND 内的词 ✓ */
+        bandWords = (o.lines || []).reduce((a, L) => a + (L.words || []).filter((w) => w.y >= BAND.y0 && w.y <= BAND.y1).length, 0);
       }
     } catch (e) {}
     const detected = (lattice.items || []).length;
