@@ -70,9 +70,19 @@ function readJson(p) { try { return JSON.parse(fs.readFileSync(p, 'utf8').replac
     const s2 = norm((readJson(path.join(OUT, 'crops', b.id + '.json')) || {}).text || '');
     const s3 = norm((readJson(path.join(S3D, b.id + '.json')) || {}).text || '');
     const a1 = lcsAlign(label, s1), a2 = lcsAlign(label, s2), a3 = lcsAlign(label, s3);
+    const aligned = [a1, a2, a3];
+    const sources = [s1, s2, s3];
+    const nonEmpty = sources.filter((s) => s.length > 0).length;   // ★有几个采样真的读到了✓★
     let voted = '', abstain = 0;
     for (let i = 0; i < label.length; i++) {
-      const votes = [a1[i], a2[i], a3[i]].filter(Boolean);
+      const votes = aligned.map((a) => a[i]).filter(Boolean);
+      if (nonEmpty <= 1) {
+        /* ★修"空样本造成弃权"的逻辑错误（lead 批准 ✓）：只有 1 个采样读到时无从投票 → 直接用它的该位 ✓
+           （第一版在这里按"≥2 票"弃权 ✗ → 把唯一一个正确读数丢掉 ✗：B019/B020/B024/B026/B027 都是这样 ✓）
+           ★这不是放宽标准✗✓：阈值 0.75 一个字没动 ✓，只是不再把"没读到"当成反对票 ✓。 */
+        if (votes.length === 1) voted += votes[0]; else { voted += '?'; abstain++; }
+        continue;
+      }
       const cnt = {};
       votes.forEach((v) => { cnt[v] = (cnt[v] || 0) + 1; });
       const best = Object.keys(cnt).sort((x, y) => cnt[y] - cnt[x])[0];

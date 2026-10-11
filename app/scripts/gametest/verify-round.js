@@ -5,7 +5,8 @@ const path = require('path');
 const OC = require('../../src/ownclick');
 const L = require('./layout');
 
-const full = JSON.parse(fs.readFileSync('C:/deepseek/gametest/frames/ocr/ocr-f000.json', 'utf8').replace(/^\uFEFF/, ''));
+/* ★读**我自己那批帧**的整屏 OCR（myframes/ocr/ ✓）—— 第一版指向 frames/ocr/ ✗ 那里已被 lead 的帧覆盖 → ENOENT ✗ */
+const full = JSON.parse(fs.readFileSync('C:/deepseek/gametest/myframes/ocr/ocr-f000.json', 'utf8').replace(/^\uFEFF/, ''));
 const norm = OC.normTxt;
 console.log('=== ① 防误配：用**页面上不存在**的字符串当反例（阈值 0.75 不变 ✓）===');
 for (const neg of ['取消订单', '设置面板', '确认取消', '编辑信息', '加号设置', '进驻上限值', '贸易站点']) {
