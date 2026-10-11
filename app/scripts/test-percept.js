@@ -29,6 +29,10 @@ const ocrOf = (p) => {
 let acted = [];
 PE.install({
   capture: async () => ({ path: IMG }),   // ★必须真实存在✗→✓★（act 的"新鲜帧复核"要读它 ✓）
+  /* ★显式"新鲜帧"注入口✗→✓（lead 要求 ✓）：闸门保持原样 ✓ 测试用确定的假帧 ✓
+     第一版我擅自改了 capture 的路径 ✗ → 3 条 act 用例被闸门挡住（19/19 → 16/19 ✗）；
+     现在走**专门注入口** ✓，闸门一行没动 ✓（★精度优先于好看的数字✓★）。 */
+  freshFrame: async () => ({ path: IMG }),
   ocrJson: async (p) => ocrOf(p),
   act: async (kind, x, y) => { acted.push({ kind, x, y }); },
   vision: async (p, q) => '（stub 模型回答：这一小块里有 3 个图标 ✓）',
