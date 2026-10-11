@@ -136,6 +136,44 @@ async function locate(arg) {
   /* 候选来源（确定性 ✓）：OCR 词组框（主）+ 图标库（缺陷 5 的补法 ✓） */
   let buttons = OC.phrasesFromOcr(ocr, desc);
   let fz = null;
+  /* ★★ 择优合并 ✗→✓（lead 批准并接线 ✓）：多个 OCR 来源（整屏 / 逐格裁剪放大 / +2px 偏移+对比拉伸 ✓）
+       各自算"对目标标签的 LCS 覆盖率"，**取最高分** ✓；并列（差 ≤0.02）取**先出现的来源**（整屏优先 ✓）；
+       回执写出「胜出来源 + 分数」✓（自证 ✓）。★阈值 0.75 不参与这里的选择✗（选择只看覆盖率高低 ✓）★
+       用法：locate|<描述>||img=<帧>|ocr2=<另一个OCR.json>|ocr3=<再一个>|region=… ✓ */
+  {
+    const extra = kv.merge === '1' ? [kv.ocr2, kv.ocr3].filter(Boolean) : [];
+    /* ★★ 实测（2026-10-11）：接线后 **text 仍 78.6%（无增益 ✗）**、而 **dup 100% → 25.0%（变差 ✗✗）**、
+       总分 80.4% → 71.6% ✗ → ★按纪律降级为**可选**（`merge=1`）✓ 默认关闭 ✓★。
+       为什么 dup 会掉：dup 目标的裁剪 OCR 文件我**没生成**（那次只生成了 text 类 ✓）→ 该来源为空 ✗，
+       选择逻辑在多来源里的比较把 dup 的候选换成了别的来源的框 ✗ → 变差 ✓。★要再试需先为每类都生成三份采样 ✓★ */
+    if (extra.length) {
+      const fsx = require('fs');
+      const cands = [{ src: '整屏', boxes: buttons.slice() }];
+      for (const p of extra) {
+        try {
+          const o2 = JSON.parse(fsx.readFileSync(p, 'utf8').replace(/^\uFEFF/, ''));
+          let bx = OC.phrasesFromOcr(o2, desc);
+          if (!bx.length) { const f2 = OC.fuzzyFromOcr(o2, desc, {}); if (f2.best) bx = [f2.best]; }
+          cands.push({ src: require('path').basename(p), boxes: bx });
+        } catch (e) { cands.push({ src: require('path').basename(p), boxes: [], err: String(e.message).slice(0, 30) }); }
+      }
+      if (!buttons.length) { const f1 = OC.fuzzyFromOcr(ocr, desc, {}); if (f1.best) buttons = [f1.best]; }
+      cands[0].boxes = buttons.slice();
+      const nd = OC.normTxt(desc);
+      let best = null;
+      cands.forEach((c, ci) => {
+        (c.boxes || []).forEach((b) => {
+          const sc = OC.coverage(nd, OC.normTxt(b.read || b.lineText || b.text || ''));
+          if (!best || sc > best.sc + 0.02) best = { sc, src: c.src, box: b, ci };
+        });
+      });
+      if (best) {
+        buttons = [best.box];
+        out.push('  ★择优合并★★：胜出来源 = ' + best.src + '（覆盖率 ' + best.sc.toFixed(2) + ' ✓）'
+          + '；候选来源 ' + cands.length + ' 个（' + cands.map((c) => c.src + '×' + (c.boxes || []).length).join('，') + '）✓');
+      } else out.push('  ★择优合并：所有来源都没给候选✗★');
+    }
+  }
   /* ★★ 容错匹配回退 ✗→✓（精确匹配在真机上"诚实但不可用" ✓）★★
      真机实测：OCR 把「编辑队列」读成「编 辑 队 歹 刂」✗ → 精确 0 命中 ✓（text 类 42 个全挂 ✗）。
      → 精确一条都没命中时，用 LCS 覆盖率容错再找一次 ✓（阈值 0.75 = 真机标定 ✓：

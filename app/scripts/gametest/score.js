@@ -137,7 +137,10 @@ function inBox(cx, cy, b, tol) {
         if (near && near.d <= Math.max(TOL, Math.round(Math.min(t.w, t.h) / 2) + 4)) { cx = near.it.cx; cy = near.it.cy; verdict = 'ok'; }
         else if (near) { cx = near.it.cx; cy = near.it.cy; verdict = 'wrong'; }
       } else {
-        const loc = await PE.run('locate', (t.label || '') + '||img=' + png + '|region=' + [t.x, t.y, t.w, t.h].join(','));
+        /* ★择优合并已接线但**默认关闭**（实测 dup 100%→25% ✗ 无增益 ✗ → 降级为可选 `merge=1` ✓）；
+           默认仍走原来的单一来源 ✓。要复测择优：把下面那行的 `|merge=1` 打开 ✓。 */
+        const extra = '';   // 复测用：'|merge=1|ocr2=' + path.join(OUT,'crops',t.id+'.json') + '|ocr3=' + path.join(OUT,'vote3',t.id+'.json');
+        const loc = await PE.run('locate', (t.label || '') + '||img=' + png + extra + '|region=' + [t.x, t.y, t.w, t.h].join(','));
         /* ★从 locate 的回执里取中心✗→✓★：它的格式是 ★编号 L1★（中心 893,337）✓
            （第一版我按 act 的「目标「…」中心」去解析 ✗ → 全部 notfound ✗ —— 这是**跑分器自己的 bug** ✗，
             不是 locate 的 ✓；icon 类没走这条解析 ✓ 所以它 93.3% ✓ 正好形成对照 ✓） */
