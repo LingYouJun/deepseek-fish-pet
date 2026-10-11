@@ -184,6 +184,8 @@ console.log('=== registry.js 单元测试（纯 Node）===');
     'icon_lib',
     /* ★ 2026-10-10：点击的两道保险（点前确认归属 + 点后核对判据）★ */
     'find_owned', 'click_checked',
+    /* ★ 2026-10-11：面板状态判定（"我现在在哪个面板"，指纹词来自真机实测）★ */
+    'panel_state',
     'flow_run', 'flow_save', 'flow_list', 'flow_del',
     /* A3/A4（2026-10-03）：剪贴板 + 轮询等条件 */
     'clipboard_read', 'clipboard_write', 'wait_for',

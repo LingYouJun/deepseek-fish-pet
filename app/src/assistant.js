@@ -383,7 +383,7 @@ async function runInner(tool, arg) {
      两道保险：① 点前用**几何**确认候选归属（★模型不许给坐标✗，只在几何无解时回答候选编号 ✓★）；
               ② 点后必须核对**调用方事先声明的判据**（★"屏幕有变化"永远不算成功✗★）。
      ★判据由调用方给 ✓（本层不猜"成功长什么样" ✗）。 */
-  if (tool === 'find_owned' || tool === 'click_checked') {
+  if (tool === 'find_owned' || tool === 'click_checked' || tool === 'panel_state') {
     const oc = require('./ownclick');
     oc.install({
       capture: async () => await captureScreenFallback(),          // 无损 PNG ✓ 尺寸=space() ✓

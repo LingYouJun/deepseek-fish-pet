@@ -51,24 +51,32 @@ OC.install({
   ok(/归属确定/.test(r1) && /893,337/.test(r1), '① ★点前归属确定：会客室 → (893,337)★');
   ok(/不属于|不在标题列|322/.test(r1), '① 聊天窗那处被列出来（排除理由 ✓）');
 
-  /* ② 带判据的点击（dry）：判据 = 会客室 + 当前进驻（当前进驻只在面板上出现 ✓ 真机 OCR 实测 before=0/after=1 ✓） */
-  const r2 = await OC.run('click_checked', '编辑队列|会客室|会客室,当前进驻|dry=1|img=' + BEFORE + '|after=' + AFTER);
+  /* ② 带判据的点击（dry）：判据 = **当前进驻**（★只在成功后出现✓★：真机 OCR 实测 before=0 / after=1 ✓）
+         ★注意：不能用「会客室」✗ —— 它点前就有（房间列表里 ✓）→ 新闸门会（正确地）拒绝 ✓★ */
+  const r2 = await OC.run('click_checked', '编辑队列|会客室|当前进驻|dry=1|img=' + BEFORE + '|after=' + AFTER);
   console.log(r2.split('\n').map((l) => '  ' + l).join('\n'));
   ok(/判定成功/.test(r2), '② ★判据满足 → 报成功 ✓★');
   ok(/893,337/.test(r2), '② 点击坐标 = 893,337（会客室的按钮 ✓）');
   ok(/像素差/.test(r2), '② before/after 像素差有记录 ✓（但只当旁证 ✓）');
   ok(clicked === 0, '② ★dry=1 时一次都没真的点★', 'clicked=' + clicked);
 
-  /* ③ 故意让判据不满足：去点制造站1 的「编辑队列」（就是她今晚点错的那一格 (893,605) ✓），
-         点后仍然核对判据 → ★必须报失败✗★（而屏幕**确实变了** ✓ —— 这正是"变了≠点对了" ✓） */
-  const r3 = await OC.run('click_checked', '编辑队列|制造站1|制造站1,当前进驻|dry=1|img=' + BEFORE + '|after=' + AFTER);
+  /* ③ ★新闸门（2026-10-11）：判据里出现"点前就有"的词 → ★直接拒绝点击✗★★
+         用的正是她今晚那次的判据「制造站1」✓（点前就有 ✓ 真实存在 ✓）→ 必须被拒 ✓ */
+  const r3a = await OC.run('click_checked', '编辑队列|制造站1|制造站1,当前进驻|dry=1|img=' + BEFORE + '|after=' + AFTER);
+  console.log(r3a.split('\n').map((l) => '  ' + l).join('\n'));
+  ok(/判据不合格/.test(r3a) && /一个都没点/.test(r3a), '③ ★判据"制造站1"点前就有 → 拒绝点击 ✓（新闸门 ✓）★');
+  ok(JSON.stringify(r3a).indexOf('当前进驻') >= 0, '③ 并且给出建议判据（当前进驻/房间2/12 ✓）');
+
+  /* ③b 点错要报失败：用**合格**判据（当前进驻 ✓ 点前没有 ✓），但"点后"这一帧其实是**点前那张** ✓
+         → 判据不满足 → ★必须报失败✗★（而屏幕在这两帧之间其实也会"变" ✓ —— 这正是"变了≠点对了" ✓） */
+  const r3 = await OC.run('click_checked', '编辑队列|制造站1|当前进驻|dry=1|img=' + BEFORE + '|after=' + BEFORE);
   console.log(r3.split('\n').map((l) => '  ' + l).join('\n'));
   ok(/893,605/.test(r3), '③ ★归属正确指出"制造站1 的按钮在 (893,605)"★（＝她点错的那一格 ✓）');
   ok(/判定失败/.test(r3), '③ ★判据不满足 → 如实报失败 ✓★（没有拿"屏幕变了"当成功 ✓）');
-  ok(/变了不等于点对了|不要在这附近反复试/.test(r3), '③ 明确写出"变了不等于点对了 / 不要反复试" ✓');
+  ok(/不要在附近反复试|不要在这附近反复试/.test(r3), '③ 明确写出"不要在这附近反复试" ✓');
 
-  /* ④ 归属不确定时必须拒绝点击（拿一个不存在的容器名 ✓） */
-  const r4 = await OC.run('click_checked', '编辑队列|不存在的房间|会客室|dry=1|img=' + BEFORE + '|after=' + AFTER);
+  /* ④ 归属不确定时必须拒绝点击（容器名不存在 ✓；判据用**合格**的「当前进驻」✓ 好让归属那一关真的被执行到 ✓） */
+  const r4 = await OC.run('click_checked', '编辑队列|不存在的房间|当前进驻|dry=1|img=' + BEFORE + '|after=' + AFTER);
   ok(/点前检查没过/.test(r4) && /一个都没点/.test(r4), '④ ★归属不确定时一个都不点 ✓（宁可不动手也不点错 ✓）★');
   console.log('  ' + r4.split('\n').slice(0, 3).join('\n  '));
 

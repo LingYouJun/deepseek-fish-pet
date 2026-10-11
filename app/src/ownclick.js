@@ -220,6 +220,28 @@ function verifyCriteria(ocrText, required) {
   return { ok: req.length > 0 && missing.length === 0, missing, required: req, empty: req.length === 0 };
 }
 
+/* ★★★ 判据自检（直接针对今晚"判据选错"这个失败模式 ✓ 2026-10-11 新增）★★★
+ * 【为什么要它 ✗→✓】今晚实测：她拿「会客室」当判据 ✓ —— 可★"会客室"在点前就有✗★
+ *   （房间列表里 ✓ 真实计数 before=3 / after=1 ✓）→ ★点错了也会"判成功"✗★；
+ *   而她又拿"screen_diff 说没变化"当失败 ✗ —— 两个方向都错 ✓。
+ *   → 判据必须★只在成功后出现★（实测「当前进驻」before=0 / after=1 ✓ 才是合格判据 ✓）。
+ * 做法：拿**点前那一帧的 OCR**查每个判据词 ✓：★点前就有的 → 不合格✗★（给出实测依据 ✓），
+ *       并给出**建议判据**（目标面板的指纹词里、点前没有的那些 ✓）。 */
+function validateCriteria(beforeOcr, criteria, suggest) {
+  const hay = norm((beforeOcr && beforeOcr.text) || '') + '|'
+    + (((beforeOcr && beforeOcr.lines) || []).map((L) => norm(L.text)).join('|'));
+  const req = (criteria || []).map(norm).filter(Boolean);
+  const already = req.filter((r) => hay.indexOf(r) >= 0);
+  const fresh = req.filter((r) => hay.indexOf(r) < 0);
+  return {
+    ok: req.length > 0 && already.length === 0,
+    required: req,
+    alreadyPresent: already,     // ★点前就有 → 不能当判据 ✗★
+    fresh,                       // 点前没有 ✓（还要点后真的出现才算成功 ✓）
+    suggestion: (suggest || []).map(norm).filter((w) => w && hay.indexOf(w) < 0).slice(0, 5),
+  };
+}
+
 /* 像素差（纯数组 ✓）：平均绝对差 + 变化像素比例 ✓ —— 只当**参考信息**报 ✓ 不当成功证据 ✗ */
 function diffStats(a, b) {
   const n = Math.min(a.length, b.length);
@@ -336,12 +358,40 @@ async function clickChecked(arg) {
   const dry = kv.dry === '1';
   const before = await frame(kv, kv.img ? null : deps.capture);
   const ocrB = await deps.ocrJson(before.path);
+  const out = [];
+  out.push('🎯 click_checked：点「' + buttonText + '」+ 归属「' + containerText + '」+ 判据 [' + criteria.join(' 且 ') + ']' + (dry ? '（★dry：只算不点✗★）' : ''));
+
+  /* ★闸门 0：面板状态（"我现在在哪个面板"✓）—— 直接针对"卡在不存在确认按钮上乱找"✗★ */
+  let panel = null;
+  try {
+    const P = require('./panel');
+    panel = P.detect(ocrB, {});
+    out.push('  ⓪ 面板判定：' + (panel.verdict === 'ok' ? '★' + panel.label + '★（' + panel.note + '）' : '⚠️ ' + panel.verdict + ' —— ' + panel.note));
+    if (kv.expect) {
+      if (panel.verdict !== 'ok') { out.push('  ❌ ★点前检查没过：我叫你确认「' + kv.expect + '」面板，但我判不出当前面板 ✗★ → ★一个都不点✗★'); return out.join('\n'); }
+      if (panel.panel !== kv.expect) { out.push('  ❌ ★点前检查没过：现在不在「' + kv.expect + '」面板（实测在「' + panel.label + '」✓）✗ → ★一个都不点✗★ —— 请先切到那个面板再叫我 ✓'); return out.join('\n'); }
+      out.push('  ✓ 预期面板「' + kv.expect + '」与实测一致 ✓');
+    }
+  } catch (e) { out.push('  （面板判定不可用：' + (e && e.message || e) + '）'); }
+
+  /* ★闸门 1：判据自检 —— ★点前就有的词不能当判据✗★（今晚「会客室」就是这种 ✓）★ */
+  let suggest = [];
+  try { suggest = require('./panel').criteriaFor(kv.expect || (panel && panel.panel) || 'queue'); } catch (e) {}
+  const cv = validateCriteria(ocrB, criteria, suggest);
+  if (!cv.ok && kv.force !== '1') {
+    out.push('  ❌ ★判据不合格✗★：' + JSON.stringify(cv.alreadyPresent) + ' 在**点之前**就已经出现在画面里了 ✓'
+      + ' → ★用它当成功判据 = "点错了也会判成功"✗★（今晚实测：「会客室」点前就有 ✓ before=3 / after=1 ✓）。');
+    out.push('     建议判据（目标面板的指纹词里、点前**没有**的 ✓）：' + (cv.suggestion.length ? JSON.stringify(cv.suggestion) : '（没有可用的 ✓ 请换个目标面板）'));
+    out.push('     ★我一个都没点✗★ —— 请你换一个"只在成功后出现"的词当判据再叫我 ✓（实在要用就加 force=1，但我会如实说这次判据不硬 ✓）。');
+    return out.join('\n');
+  }
+  if (!cv.ok && kv.force === '1') out.push('  ⚠️ 判据不合格（' + JSON.stringify(cv.alreadyPresent) + ' 点前就有 ✓）但 force=1 → 继续 ✓，★这次结论不算硬✗★');
+  else out.push('  ✓ 判据自检通过：' + JSON.stringify(cv.fresh) + ' 点前都没出现 ✓（合格判据 ✓）');
+
   const buttons = phrasesFromOcr(ocrB, buttonText);
   const titles = phrasesFromOcr(ocrB, containerText);
   const res = pairOwners(buttons, titles, {});
   const owned = ownedBy(res, containerText);
-  const out = [];
-  out.push('🎯 click_checked：点「' + buttonText + '」+ 归属「' + containerText + '」+ 判据 [' + criteria.join(' 且 ') + ']' + (dry ? '（★dry：只算不点✗★）' : ''));
   out.push('  ① 候选 ' + buttons.length + ' 个，容器 ' + titles.length + ' 个；配对 ' + res.pairs.length + ' 对，排除 ' + res.excluded.length + ' 个 ✓');
   for (const e of res.excluded) out.push('    ✗ 排除：「' + buttonText + '」(' + e.button.cx + ',' + e.button.cy + ') → ' + e.why);
   if (owned.length !== 1) {
@@ -370,23 +420,51 @@ async function clickChecked(arg) {
   out.push('  ④ 点后核对：抓帧 ' + String(after.path).split(/[\\/]/).pop() + '，OCR 里 ' + (vr.ok ? '★全部判据都出现了 ✓★' : '缺 ' + JSON.stringify(vr.missing) + ' ✗'));
   if (diff) out.push('     before/after 像素差：平均 ' + diff.mean.toFixed(2) + '/255，变化像素 ' + (diff.changedRatio * 100).toFixed(1) + '%'
     + '（★这只是参考信息 ✗——"屏幕有变化"永远不能单独当成功证据 ✓★）');
+  const changedALot = diff && diff.changedRatio >= 0.1;
   out.push(vr.ok
     ? '  ✅ ★判定成功★：判据 [' + criteria.join(' 且 ') + '] 满足了 ✓（而且 before/after 的差是"变化"的旁证 ✓，判据才是结论 ✓）'
     : '  ❌ ★判定失败✗★：点完之后画面里**没有**出现 [' + vr.missing.join('、') + '] ✓ —— ★如实报失败✗，不要在这附近反复试✓★'
-      + (diff ? '（注意：屏幕确实"变了" ' + (diff.changedRatio * 100).toFixed(1) + '% ✓ —— ★但变了不等于点对了✗★，这正是今晚那个坑 ✓）' : ''));
+      + (diff
+        ? (changedALot
+          ? '（注意：屏幕确实"变了" ' + (diff.changedRatio * 100).toFixed(1) + '% ✓ —— ★但变了不等于点对了✗★，这正是今晚那个坑 ✓）'
+          : '（这两帧几乎没变：变化像素 ' + (diff.changedRatio * 100).toFixed(1) + '% ✓ —— 但★"没变化"也不能单独说明成败✗★，结论只看判据 ✓）')
+        : ''));
+  return out.join('\n');
+}
+
+/* ★③ 面板状态查询（"我现在在哪个面板"✓）—— 直接对应"卡在不存在确认按钮上乱找"那个失败模式 ✓
+ * 用法：panel_state|img=<图，可省>|expect=<面板名，可省>
+ * 面板名：base（基地视图）/ select（选人面板）/ queue（进驻队列面板）/ dsh（桌宠自己的窗口 ✗ 不是游戏 ✓）
+ * ★指纹词都是"只在该面板出现"的词 ✓（真机实测出来的 ✓）★ */
+async function panelState(arg) {
+  const { kv } = parseArg(arg);
+  const fr = await frame(kv, null);
+  const ocr = await deps.ocrJson(fr.path);
+  const P = require('./panel');
+  const d = P.detect(ocr, {});
+  const out = [];
+  out.push('🧭 面板状态：' + (d.verdict === 'ok' ? '★' + d.label + '★' : '⚠️ ' + d.verdict));
+  out.push('  ' + d.note);
+  out.push('  所有面板的命中数：' + d.all.map((x) => x.name + '=' + x.score + (x.hits.length ? JSON.stringify(x.hits) : '')).join('　'));
+  if (kv.expect) {
+    if (d.verdict === 'ok' && d.panel === kv.expect) out.push('  ✅ 与你要的「' + kv.expect + '」一致 ✓ 可以在这个面板里找按钮 ✓');
+    else out.push('  ❌ ★和你要的「' + kv.expect + '」不一致✗★ —— ★先切到那个面板再来✗，别在这个画面上找那个按钮（今晚她就是这么卡的 ✓）★');
+  }
+  out.push('  ⚠️ 只有指纹词足够（≥2 ✓）才下结论 ✓；证据不足就报 unknown ✓（★不瞎猜✗★）。');
   return out.join('\n');
 }
 
 async function run(tool, arg) {
   if (tool === 'find_owned') return await findOwned(arg);
   if (tool === 'click_checked') return await clickChecked(arg);
+  if (tool === 'panel_state') return await panelState(arg);
   throw new Error('ownclick 不认识这个工具：' + tool);
 }
 
 module.exports = Object.assign(module.exports, {
   /* 纯函数（可单测 ✓ 不依赖屏幕 ✓） */
-  norm, phrasesFromOcr, pairOwners, ownedBy, verifyCriteria, diffStats, median,
+  norm, phrasesFromOcr, pairOwners, ownedBy, verifyCriteria, validateCriteria, diffStats, median,
   /* 工具层 */
-  install, run, findOwned, clickChecked, parseArg, toSpace, lumaOfImage,
+  install, run, findOwned, clickChecked, panelState, parseArg, toSpace, lumaOfImage,
 });
 
