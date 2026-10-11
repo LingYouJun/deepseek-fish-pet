@@ -111,9 +111,39 @@ function modeBlob(luma, w, h, opt) {
   const pct = o.pct == null ? 0.88 : Number(o.pct);
   const sorted = vals.slice().sort((a, b) => a - b);
   const thr = sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * pct))] : 0;
-  /* ② 二值化 → 连通域（8 邻接 ✓ 用显式栈 ✓ 无递归 ✓） */
+  /* ② 二值化 → ★形态学闭运算（膨胀→腐蚀）★ → 连通域（8 邻接 ✓ 显式栈 ✓ 无递归 ✓）
+     ★为什么要闭运算✗→✓（2026-10-11 实测的"碎片化"根因 ✓）★：
+     真机 72x72 的图标被切成 **11 块**✗（最近的碎片只有 19x10 ✓）→ 配对时挑到碎片 → 单格误差 22.8px ✗。
+     闭运算把相邻碎片**先并后收**✓（不改变整体尺寸 ✓ 只补缝隙 ✓ 半径可调 ✓ 确定性 ✓）。
+     ⚠️ 半径不能大到把**相邻图标**并起来 ✓：实测图标 72px、相邻间距 ~100px（缝 28px ✓）→ 半径 2~3px 安全 ✓。
+     ★★ 实测结论（2026-10-11）：**默认关（0）✓** ★★ —— 打开它（close=2）时：
+       · 最大中心误差从 **22.8px 降到 5.4px** ✓（碎片化那个最坏用例真的被治了 ✓）
+       · 但 icon 通过率 **93.3% → 90.0%** ✗、small+edge **50.0% → 33.3%** ✗、总分 **80.4% → 76.5%** ✗
+       → ★"更差的路线不许接进默认"✗✓★：所以它**只作为可选实验**（`close=2` ✓），默认 0 = 保持原行为 ✓。 */
   const bin = new Uint8Array(w * h);
   for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) bin[y * w + x] = energy[y * w + x] > thr ? 1 : 0;
+  const closeR = o.close == null ? 0 : Number(o.close);
+  if (closeR > 0) {
+    const dil = new Uint8Array(w * h);
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+      if (!bin[y * w + x]) continue;
+      for (let dy = -closeR; dy <= closeR; dy++) for (let dx = -closeR; dx <= closeR; dx++) {
+        const nx = x + dx, ny = y + dy;
+        if (nx < x0 || ny < y0 || nx > x1 || ny > y1) continue;
+        dil[ny * w + nx] = 1;
+      }
+    }
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+      if (!dil[y * w + x]) { bin[y * w + x] = 0; continue; }
+      let keep = 1;
+      for (let dy = -closeR; dy <= closeR && keep; dy++) for (let dx = -closeR; dx <= closeR; dx++) {
+        const nx = x + dx, ny = y + dy;
+        if (nx < x0 || ny < y0 || nx > x1 || ny > y1) continue;
+        if (!dil[ny * w + nx]) { keep = 0; break; }
+      }
+      bin[y * w + x] = keep ? 1 : 0;
+    }
+  }
   const seen = new Uint8Array(w * h);
   const blobs = [];
   const stack = new Int32Array(rw * rh);
