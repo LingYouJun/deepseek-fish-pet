@@ -188,6 +188,35 @@ const RELAX = { requireOffer: false, why: '单测：复点闸门（本测试不�
     }
   }
 
+  /* §12 ★流程重放：录下来的坐标按 source:'replay' **登记成 offer**（不是豁免）★
+     —— 主人的决定：重放坐标来自"一次真实成功动作"，本身就是有效证据 ✓；
+        登记之后它自然通过来源闸门 ✓，而且能审计"这个点是谁给的" ✓。 */
+  const FLOW = require('../src/flow');
+  PROV2.instance.clear();
+  const byBefore = PROV2.instance.bypasses().length;      // §10 用过一次逃生门，这里只看**增量** ✓
+  const clicked = [];
+  const flowDeps = {
+    log: () => {},
+    capture: async () => ({ dataUrl: 'x' }),
+    click: async (x, y) => { clicked.push([x, y]); return true; },
+    rclick: async () => true, move: async () => true, scroll: async () => true,
+    key: async () => true, type: async () => true,
+    findTemplate: async () => ({ ok: false }), findText: async () => ({ ok: false }),
+  };
+  const rep2 = await FLOW.runFlow(flowDeps, {
+    name: '单测流程', savedAt: 1791000000000,
+    steps: [{ id: 'a1', action: 'click', target: { xy: [700, 400] } }],
+  }, {});
+  const offR = PROV2.instance.offers().slice(-1)[0] || {};
+  ok(rep2.ok === true && clicked.length === 1, '§12 流程重放本身跑通了', JSON.stringify({ ok: rep2.ok, clicks: clicked.length }));
+  ok(offR.source === 'replay' && offR.x === 700 && offR.y === 400 && offR.stepId === 'a1' && offR.recordedAt === 1791000000000,
+    '§12 ★重放坐标登记成 offer（source=replay / stepId / recordedAt）★', JSON.stringify(offR));
+  const gReplay = PROV2.instance.gate('click', 700, 400, { requireOffer: true });
+  ok(gReplay.ok === true, '§12 ★登记之后它自然通过"必须有定位来源"的闸门★（不需要任何豁免 ✓）',
+    'ok=' + gReplay.ok + ' from=' + (gReplay.offer && gReplay.offer.from));
+  ok(PROV2.instance.bypasses().length === byBefore, '§12 ★重放没走逃生门（bypass 增量为 0）★',
+    'before=' + byBefore + ' after=' + PROV2.instance.bypasses().length);
+
   console.log('');
   console.log('通过 ' + pass + ' / ' + (pass + fail));
   process.exit(fail ? 1 : 0);

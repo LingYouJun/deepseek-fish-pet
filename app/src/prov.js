@@ -44,11 +44,15 @@ function create(opt) {
     return t;
   }
 
-  /* 确定性工具报坐标时调用 ✓（labelled ✓ 便于回执里说清"坐标是谁给的"✓） */
-  function offer(x, y, from, label) {
+  /* 确定性工具报坐标时调用 ✓（labelled ✓ 便于回执里说清"坐标是谁给的"✓）
+   * extra（2026-10-11 加）：额外审计字段（例如流程重放的 source:'replay' / recordedAt / stepId / how ✓）。
+   * ★canonical 字段不可被 extra 覆盖★（x/y/at/from/label 最后写 ✓） */
+  function offer(x, y, from, label, extra) {
     const t = prune();
     if (!Number.isFinite(Number(x)) || !Number.isFinite(Number(y))) return null;
-    const rec = { x: Number(x), y: Number(y), from: String(from || '?'), label: String(label || ''), at: t };
+    const rec = Object.assign({}, extra || {});
+    rec.x = Number(x); rec.y = Number(y); rec.at = t;
+    rec.from = String(from || '?'); rec.label = String(label || '');
     offers.push(rec);
     if (offers.length > 200) offers = offers.slice(-200);
     return rec;
