@@ -2258,6 +2258,10 @@ try { require('./src/intercom').install({ chatWin: () => chatWin, createChat, db
       memory.judgeStatsNow().then((r) => { if (r) dbg('[stats] catch-up judged: ' + r.reason); }).catch(() => {});
     }, 9000);
     createPet();
+    /* ★ 预热常驻感知服务（2026-10-31 性能优化）★
+       OCR 从「每次 spawn PowerShell ~0.76s」改成「常驻 PaddleOCR 进程 ~0.3s」；
+       后台起服务（模型加载 ~3s），失败/没装都不影响启动，调用时还会自动兜底回旧路径。 */
+    setTimeout(() => { try { require('./src/perceptSvc').ensure().catch(() => {}); } catch (e) {} }, 2500);
     // 预热屏幕流：首帧更快。不想让系统一直显示"正在捕获"就把 memory.screenWarm 设 false
     if ((config.load().memory || {}).screenWarm !== false) screenstream.warm().catch(() => {});
     // 启动几秒后，默默把攒够权重的经验归档进技能文件夹（AI 自己整理）

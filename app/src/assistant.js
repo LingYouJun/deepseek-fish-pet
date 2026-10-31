@@ -114,7 +114,24 @@ async function captureScreenFallback() {
    而且"宽度不变只加高度"地原地反复试 —— 提示词提醒不够，必须程序拦 ✓ */
 const ZOOM_GUARD = { streak: 0, last: null };
 let lastOcrError = '';
+/* ★ 性能（2026-10-31）：OCR 优先走常驻感知服务（PaddleOCR 常驻，单次 ~0.3s
+    vs 旧实现每次 spawn PowerShell 的 ~0.76s，实测 2.5x）★
+   服务没起来 / 超时 / 返回失败 → 回退旧的 ocrJsonFallback，语义完全不变。
+   关闭开关：环境变量 PA_PERCEPT_DISABLE=1。 */
 function ocrJson(pngPath) {
+  let svc = null;
+  try { svc = require('./perceptSvc'); } catch (e) { svc = null; }
+  if (!svc || svc.isDisabled()) return ocrJsonFallback(pngPath);
+  return svc.ocr(pngPath).then((r) => {
+    if (r && r.ok === true && Array.isArray(r.lines)) { lastOcrError = ''; return r; }
+    lastOcrError = '感知服务 OCR 失败：' + String((r && r.error) || '未知');
+    return ocrJsonFallback(pngPath);
+  }).catch((e) => {
+    lastOcrError = '感知服务异常：' + (e && e.message);
+    return ocrJsonFallback(pngPath);
+  });
+}
+function ocrJsonFallback(pngPath) {
   return new Promise((resolve) => {
     const script = path.join(__dirname, '..', 'scripts', 'ocr.ps1');
     let child, done = false, out = '', err = '';
