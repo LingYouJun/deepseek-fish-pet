@@ -1033,7 +1033,7 @@ if (tool === 'som_look') {
     /* ★★★ 轮询等条件 —— 治"固定睡 N 秒"这个顽疾 ★★★
        起因（实测）：她点"基建"之后**立刻** screen_look，而游戏切界面要 1~2 秒，
        她看到旧画面就以为没点进去，换坐标再点、再点，连点三次 ✗。
-       原来的权宜之计是动作后统一固定等 actionSettleMs（默认 1500ms）——
+       原来的权宜之计是动作后统一固定等 actionSettleMs（2026-10-31 默认从 1500ms 降到 900ms；winserve 让环境检查/前台核对从秒级降到毫秒级，固定等待成了大头）——
        等太短会看到旧画面，等太长就是白等 ✗。
        ★ 正确做法：把"猜时间"换成"等条件"★ —— 条件成立立刻走，超时就说清最后检查到什么。
        格式：wait_for|<类型>|<目标…>|<超时秒>   （★最后一段永远是超时秒数★）
@@ -1488,7 +1488,7 @@ if (tool === 'som_look') {
        点/按键/输入/拖拽这类**会改变界面**的动作，返回前统一等一小会儿，
        这样下一步截图看到的才是动作之后的状态。move 不改界面，不用等。 */
     if (tool !== 'move') {
-      const settle = Number((config.load().memory || {}).actionSettleMs) || 1500;
+      const settle = Number((config.load().memory || {}).actionSettleMs) || 900;
       await new Promise((r) => setTimeout(r, settle));
       return `✅ 已${label}：(${x}, ${y})（已等 ${(settle / 1000).toFixed(1)}s 让界面反应）` + cursorNote;
     }
@@ -1500,7 +1500,7 @@ if (tool === 'som_look') {
     const [x, y] = [Math.round(ZoomState.x + zx / ZoomState.k), Math.round(ZoomState.y + zy / ZoomState.k)];
     const real = tool.replace(/z$/, '');
     input[real](x, y);
-    const settle = Number((config.load().memory || {}).actionSettleMs) || 1500;
+    const settle = Number((config.load().memory || {}).actionSettleMs) || 900;
     await new Promise((r) => setTimeout(r, settle));
     return '✅ 已点击（放大图坐标换算）：放大图(' + zx + ',' + zy + ') → 整屏(' + x + ',' + y + ')（已等 ' + (settle / 1000).toFixed(1) + 's）';
   }
@@ -2044,7 +2044,7 @@ if (tool === 'som_look') {
       if (!done) { input.type(text); done = text.length; }
     }
     /* 同上：输入会改变界面，等它反应完再让她看屏幕 */
-    const settle = Number((config.load().memory || {}).actionSettleMs) || 1500;
+    const settle = Number((config.load().memory || {}).actionSettleMs) || 900;
     await new Promise((r) => setTimeout(r, settle));
     if (done < text.length) {
       return `⚠️ 只输入了 ${done}/${text.length} 个字符：**主人开始操作了，我停下来了**。`
@@ -2061,7 +2061,7 @@ if (tool === 'som_look') {
     if (!gateK.ok) return gateK.message;
     input.key(arg);
     /* 按键（回车/ESC/方向键）常常触发界面跳转（比如登录、确认对话框），同样要等 */
-    const settle = Number((config.load().memory || {}).actionSettleMs) || 1500;
+    const settle = Number((config.load().memory || {}).actionSettleMs) || 900;
     await new Promise((r) => setTimeout(r, settle));
     return `✅ 已按键：${arg}（已等 ${(settle / 1000).toFixed(1)}s，发给了前台「${gateK.foreground}」）`
       + (gateK.warn ? '\n' + gateK.warn : '');
