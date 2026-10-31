@@ -800,13 +800,35 @@ if (tool === 'som_look') {
 —— 实测这么干会点错地方（在选人面板上点屏幕正中央 = 点到某张干员卡 = 把它选上/取消），
 把已经做好的选择毁掉。
 说不出名字、或只是想知道"那是什么"，就**只描述、不要给 ACTION**。`;
+      /* ★ P2（2026-10-31）：同一帧 + 同一问题的 screen_look 直接复用上次描述 ★
+         实测视觉调用 avg 2.1s，她一轮里经常对"没变过的画面"连看好几次。
+         开关：环境变量 PA_LOOK_CACHE=0 关闭。 */
+      let _lookKey = null;
+      let _lookHit = null;
+      try {
+        const LK = require('./lookcache');
+        if (!LK.disabled()) {
+          _lookKey = LK.key(Buffer.from(String(capDataUrl || '').split(',')[1] || '', 'base64'), q);
+          _lookHit = LK.get(_lookKey);
+        }
+      } catch (e) { _lookHit = null; }
       /* tV 必须声明在 try **外面**：catch 里也要用它算耗时，
          写在 try 内的话失败路径会 ReferenceError（实测被 §6 那条测试抓住）。 */
       let tV = tick();
-      try {
+      if (_lookHit) {
+        text = _lookHit.text;
+        usedVision = true;
+        timing.visionMs = 0;
+        timing.lookCacheHit = _lookHit.hits;
+        try { dbg('[look] 缓存命中（同画面已连看 ' + _lookHit.hits + ' 次，省一次视觉调用）'); } catch (e) {}
+        text += '\n\n（缓存命中：画面和问题与上次相同，这次没有重复调用视觉模型；'
+          + '要新的观察请换个问题，或先操作让画面变化 —— 同一画面已连看 ' + _lookHit.hits + ' 次）';
+      } else try {
         text = await vision.describe(cfg, capDataUrl, q, cfg.visionDetail || 'high');
         timing.visionMs = tick() - tV;
         usedVision = true;
+        if (_lookKey) { try { require('./lookcache').put(_lookKey, text); } catch (e) {} }
+
         const m = text.match(/ACTION\s*[:：]\s*([a-z_]+)\s*\|\s*(.+)/i);
         if (m && m[1].trim().toLowerCase() === 'move_norm') {
           /* ★★★ 2026-10-11：move_norm 的**执行体已删除✗**（主人的第 3 条缺陷：活雷 ✓）★★★
