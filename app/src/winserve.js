@@ -94,4 +94,12 @@ async function list() { return request('list'); }
 async function cursor() { return request('cursor'); }
 async function ping() { return request('ping', 2000); }
 
-module.exports = { list, cursor, ping, disabled, exePath };
+/* UIA 查询：uia <hwnd>|<b64 title>|<b64 needle>
+   hwnd != 0 按句柄；否则按标题找顶层元素。needle 非空 = find 模式。 */
+function b64(s) { return Buffer.from(String(s == null ? '' : s), 'utf8').toString('base64'); }
+async function uia(hwnd, title, needle) {
+  const line = 'uia ' + (Number(hwnd) || 0) + '|' + b64(title || '') + '|' + b64(needle || '');
+  return request(line, 8000);
+}
+
+module.exports = { list, cursor, ping, uia, disabled, exePath };

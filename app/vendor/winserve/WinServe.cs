@@ -1,15 +1,17 @@
-// WinServe.cs -- persistent native helper for window / cursor queries (serve mode)
-// Build: C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /out:winserve.exe WinServe.cs
+// WinServe.cs -- persistent native helper: windows / cursor / UIA (serve mode)
+// Build: app\scripts\build-winserve.ps1  (csc, .NET Framework 4 + UIAutomation references)
 // Protocol: stdin lines -> stdout one JSON line per command.
-//   list  -> {ok,dpi,dpiOk,windows:[{title,x,y,w,h,hwnd,pid,iconic,visible,topmost,cloaked,z}],fg:{title,hwnd}}
-//   cursor-> {ok,x,y}
-//   ping  -> {ok}
-//   quit  -> {ok} then exit
+//   list                              -> {ok,dpi,dpiOk,windows:[...],fg:{title,hwnd}}
+//   cursor                            -> {ok,x,y}
+//   uia <hwnd>|<b64 title>|<b64 needle> -> {ok,window:{x,y,w,h,title},count,elements:[...]} | {ok:false,notFound:true}
+//   ping                              -> {ok}
+//   quit                              -> {ok} then exit
 // NOTE: keep this file ASCII-only.
 using System;
 using System.Collections.Generic;
 using System.Text;
 using System.Runtime.InteropServices;
+using System.Windows.Automation;
 
 class WinServe
 {
@@ -62,6 +64,10 @@ class WinServe
         }
         return sb.ToString();
     }
+    static string B64Dec(string s)
+    {
+        try { return Encoding.UTF8.GetString(Convert.FromBase64String(s)); } catch { return ""; }
+    }
 
     static List<string> rows;
     static int z;
@@ -106,6 +112,97 @@ class WinServe
         return "{\"ok\":true,\"x\":" + p.X + ",\"y\":" + p.Y + "}";
     }
 
+    /* uia <hwnd>|<b64 title>|<b64 needle>
+       hwnd != 0 -> AutomationElement.FromHandle (exact window)
+       hwnd == 0 -> find top-level element whose Name contains title
+       needle != "" -> find mode (only matching elements, count = matched)
+       needle == "" -> list mode (up to 80 elements, count = total processed) */
+    static string CmdUia(string rest)
+    {
+        string[] parts = rest.Split('|');
+        long hwndVal = 0;
+        if (parts.Length > 0) long.TryParse(parts[0], out hwndVal);
+        string title = parts.Length > 1 ? B64Dec(parts[1]) : "";
+        string needle = parts.Length > 2 ? B64Dec(parts[2]) : "";
+
+        AutomationElement found = null;
+        try
+        {
+            if (hwndVal != 0) found = AutomationElement.FromHandle(new IntPtr(hwndVal));
+            else if (title.Length > 0)
+            {
+                var all = AutomationElement.RootElement.FindAll(TreeScope.Children, Condition.TrueCondition);
+                foreach (AutomationElement w in all)
+                {
+                    string n = "";
+                    try { n = w.Current.Name ?? ""; } catch { }
+                    if (n.Length > 0 && n.IndexOf(title, StringComparison.OrdinalIgnoreCase) >= 0) { found = w; break; }
+                }
+            }
+        }
+        catch (Exception e) { return "{\"ok\":false,\"error\":\"" + Esc(e.Message) + "\"}"; }
+        if (found == null) return "{\"ok\":false,\"notFound\":true}";
+
+        string winJson = "{\"x\":0,\"y\":0,\"w\":0,\"h\":0,\"title\":\"\"}";
+        try
+        {
+            var r = found.Current.BoundingRectangle;
+            int rx = 0, ry = 0, rw = 0, rh = 0;
+            if (!double.IsNaN(r.X) && !double.IsInfinity(r.X)) rx = (int)Math.Round(r.X);
+            if (!double.IsNaN(r.Y) && !double.IsInfinity(r.Y)) ry = (int)Math.Round(r.Y);
+            if (!double.IsNaN(r.Width) && !double.IsInfinity(r.Width)) rw = (int)Math.Round(r.Width);
+            if (!double.IsNaN(r.Height) && !double.IsInfinity(r.Height)) rh = (int)Math.Round(r.Height);
+            winJson = "{\"x\":" + rx + ",\"y\":" + ry + ",\"w\":" + rw + ",\"h\":" + rh + ",\"title\":\"" + Esc(found.Current.Name ?? "") + "\"}";
+        }
+        catch { }
+
+        var els = new List<string>();
+        int count = 0;
+        bool findMode = needle.Length > 0;
+        AutomationElementCollection coll = null;
+        try { coll = found.FindAll(TreeScope.Descendants, Condition.TrueCondition); } catch { }
+        if (coll != null)
+        {
+            foreach (AutomationElement e in coll)
+            {
+                try
+                {
+                    var c = e.Current;
+                    var br = c.BoundingRectangle;
+                    if (br.Width <= 1 || br.Height <= 1) continue;
+                    if (double.IsNaN(br.X) || double.IsNaN(br.Y) || double.IsNaN(br.Width) || double.IsNaN(br.Height)) continue;
+                    if (double.IsInfinity(br.X) || double.IsInfinity(br.Y) || double.IsInfinity(br.Width) || double.IsInfinity(br.Height)) continue;
+                    if (br.Width > 20000 || br.Height > 20000) continue;
+                    if (br.X < -30000 || br.Y < -30000) continue;
+                    string nm = c.Name ?? "";
+                    string id = c.AutomationId ?? "";
+                    string ct = "";
+                    try { ct = c.ControlType.ProgrammaticName.Replace("ControlType.", ""); } catch { }
+                    int bx = (int)Math.Round(br.X), by = (int)Math.Round(br.Y);
+                    int bw = (int)Math.Round(br.Width), bh = (int)Math.Round(br.Height);
+                    bool match = false;
+                    if (findMode)
+                    {
+                        match = (nm.Length > 0 && nm.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0)
+                             || (id.Length > 0 && id.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0);
+                    }
+                    if (findMode)
+                    {
+                        if (!match) continue;
+                    }
+                    else if (els.Count >= 80) { count++; continue; }
+                    els.Add("{\"controlType\":\"" + Esc(ct) + "\",\"automationId\":\"" + Esc(id) + "\",\"name\":\"" + Esc(nm)
+                        + "\",\"x\":" + bx + ",\"y\":" + by + ",\"w\":" + bw + ",\"h\":" + bh
+                        + ",\"cx\":" + (bx + bw / 2) + ",\"cy\":" + (by + bh / 2) + "}");
+                    count++;
+                }
+                catch { }
+            }
+        }
+        return "{\"ok\":true,\"window\":" + winJson + ",\"count\":" + count + ",\"elements\":[" + string.Join(",", els.ToArray()) + "]}";
+    }
+
+    [STAThread]
     static void Main(string[] args)
     {
         Console.OutputEncoding = new UTF8Encoding(false);
@@ -121,6 +218,7 @@ class WinServe
                 if (cmd == "list") resp = CmdList();
                 else if (cmd == "cursor") resp = CmdCursor();
                 else if (cmd == "ping") resp = "{\"ok\":true}";
+                else if (cmd.StartsWith("uia ")) resp = CmdUia(cmd.Substring(4));
                 else if (cmd == "quit") { resp = "{\"ok\":true}"; Console.Out.WriteLine(resp); Console.Out.Flush(); return; }
                 else resp = "{\"ok\":false,\"error\":\"unknown cmd\"}";
             }
