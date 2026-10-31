@@ -99,6 +99,24 @@ async function captureScreenFallback() {
   return { path: p, width: _s2.w, height: _s2.h, dataUrl: 'data:image/png;base64,' + png.toString('base64') };
 }
 
+/* ★ P3：同帧抓帧复用 —— 先用便宜帧（屏幕流 JPEG，~50ms）当指纹；
+   命中就复用上次的 PNG 文件，跳过 ~650ms 的无损抓图。开关：PA_FRAME_CACHE=0 ★ */
+async function grabFrameCached() {
+  let FC = null;
+  try { FC = require('./framecache'); } catch (e) { FC = null; }
+  if (!FC || FC.disabled()) return captureScreenFallback();
+  let cheap = null;
+  try { cheap = await captureScreen(false, true); } catch (e) { cheap = null; }
+  const k = cheap && cheap.dataUrl ? FC.keyOfDataUrl(cheap.dataUrl) : null;
+  if (k) {
+    const hit = FC.get(k);
+    if (hit) { try { dbg('[cache] 同帧复用（省一次 PNG 抓图）hits=' + hit.hits); } catch (e) {} return { path: hit.path, dataUrl: hit.dataUrl, width: 0, height: 0 }; }
+  }
+  const full = await captureScreenFallback();
+  if (k) { try { FC.put(k, full.path, full.dataUrl); } catch (e) {} }
+  return full;
+}
+
 /* OCR 的 JSON 模式：除了文字，还要每个词的包围盒 —— 这是 find_text 定位的依据。
  * Windows OCR 的 $result.Text 有个坑：CJK 会被它当"词"，于是在每个汉字之间插空格，
  * 而且**完全丢掉了位置**。所以定位必须走 ocr.ps1 -Json（Lines/ Words/ BoundingRect）。
@@ -118,18 +136,29 @@ let lastOcrError = '';
     vs 旧实现每次 spawn PowerShell 的 ~0.76s，实测 2.5x）★
    服务没起来 / 超时 / 返回失败 → 回退旧的 ocrJsonFallback，语义完全不变。
    关闭开关：环境变量 PA_PERCEPT_DISABLE=1。 */
+function _ocrCachePut(k, p) {
+  if (!k || !p || typeof p.then !== 'function') return p;
+  return p.then((r) => { try { require('./ocrcache').put(k, r); } catch (e) {} return r; });
+}
 function ocrJson(pngPath) {
+  /* ★ P3：同图 OCR 结果缓存（图内容相同 → OCR 结果相同），命中直接 0ms ★ */
+  let _oc = null, _ocKey = null;
+  try { _oc = require('./ocrcache'); if (!_oc.disabled()) _ocKey = _oc.keyOfFile(pngPath); } catch (e) { _oc = null; }
+  if (_ocKey) {
+    const _hit = _oc.get(_ocKey);
+    if (_hit) { try { dbg('[cache] OCR 命中（省一次识别）hits=' + _hit.__cacheHits); } catch (e) {} return Promise.resolve(_hit); }
+  }
   let svc = null;
   try { svc = require('./perceptSvc'); } catch (e) { svc = null; }
-  if (!svc || svc.isDisabled()) return ocrJsonFallback(pngPath);
-  return svc.ocr(pngPath).then((r) => {
+  if (!svc || svc.isDisabled()) return _ocrCachePut(_ocKey, ocrJsonFallback(pngPath));
+  return _ocrCachePut(_ocKey, svc.ocr(pngPath).then((r) => {
     if (r && r.ok === true && Array.isArray(r.lines)) { lastOcrError = ''; return r; }
     lastOcrError = '感知服务 OCR 失败：' + String((r && r.error) || '未知');
     return ocrJsonFallback(pngPath);
   }).catch((e) => {
     lastOcrError = '感知服务异常：' + (e && e.message);
     return ocrJsonFallback(pngPath);
-  });
+  }));
 }
 function ocrJsonFallback(pngPath) {
   return new Promise((resolve) => {
@@ -683,7 +712,7 @@ if (tool === 'som_look') {
          想换回快路径：config 里 screenLosslessScreen=false ✓ */
     const _cfgCap = config.load();
     const _lossless = _cfgCap.screenLosslessScreen !== false;
-    const cap = (zoomPre || _lossless) ? await captureScreenFallback() : await captureScreen(false);
+    const cap = (zoomPre || _lossless) ? await grabFrameCached() : await captureScreen(false);
     if (!zoomPre) ZoomState = null;   // 普通看屏幕：清掉上一次的放大参数
     timing.captureMs = tick() - tCap;
     /* 【局部放大】用户点出的真问题："这不是游戏问题，而是你给她分辨率太低了"。
@@ -1688,7 +1717,7 @@ if (tool === 'som_look') {
     const sp0 = String(arg || '').split('|').map((s) => s.trim());
     const needle = sp0[0] || '';
     if (!needle) return '⚠️ 用法：find_text|要找的文字';
-    const cap4 = await captureScreenFallback();     // OCR 用无损 PNG（比 JPEG 帧更利于小字识别）
+    const cap4 = await grabFrameCached();           // P3：同帧复用（便宜帧命中就跳过 PNG 抓图）
     const j = await ocrJson(cap4.path);
     if (!j) return '⚠️ OCR 没有返回结果（可能没有中文识别包，或这一步超时了）。可以改用 find_template 找图标，或 screen_look 自己看。';
     let hit = findTextInOcr(j, needle);
@@ -1827,7 +1856,7 @@ if (tool === 'som_look') {
       findTemplate: (name, dataUrl, roi) => require('./matcher').findTemplateScaled(app, nativeImage, name, dataUrl, roi),
       /* 文字定位复用 find_text 那条路（它会自己抓一张无损 PNG 给 OCR —— 所以这里忽略传进来的帧） */
       findText: async (text) => {
-        const capF = await captureScreenFallback();
+        const capF = await grabFrameCached();
         const j = await ocrJson(capF.path);
         if (!j) return { ok: false };
         const hit = findTextInOcr(j, text);
