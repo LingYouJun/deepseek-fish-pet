@@ -1,4 +1,4 @@
-# inject-key.ps1 -- inject one REAL system-wide keystroke (used as "the hand that presses"
+﻿# inject-key.ps1 -- inject one REAL system-wide keystroke (used as "the hand that presses"
 # for app/scripts/probe-hotkey.js).
 #
 # Why a separate .ps1 file (not a string built in JS):
