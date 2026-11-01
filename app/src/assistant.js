@@ -117,6 +117,42 @@ async function grabFrameCached() {
   return full;
 }
 
+/* ★ 2026-10-31 自适应等待 ★
+   动作后固定等 actionSettleMs 是"猜界面反应时间"；其实可以直接看画面变没变：
+   先用便宜帧（~60-80ms）拍一张当基线，动作后每 ~120ms 拍一张比 hash，
+   变了就提前返回（典型 200~300ms），没变才等满预算（慢界面不牺牲安全）。
+   开关：config.json 里 memory.adaptiveSettle=false 可关。 */
+async function cheapFrameHash() {
+  try {
+    const cap = await captureScreen(false, true);
+    if (!cap || !cap.dataUrl) return null;
+    return require('./framecache').keyOfDataUrl(cap.dataUrl);
+  } catch (e) { return null; }
+}
+async function settleAdaptive(budgetMs, baseline, opts) {
+  const o = opts || {};
+  const budget = Math.max(150, Number(budgetMs) || 900);
+  const hashFn = typeof o.hashFn === 'function' ? o.hashFn : cheapFrameHash;
+  let enabled = o.force === true;
+  if (!enabled) {
+    try { enabled = (config.load().memory || {}).adaptiveSettle !== false; } catch (e) { enabled = true; }
+  }
+  if (!baseline || !enabled) {
+    await new Promise((r) => setTimeout(r, budget));
+    return { waitedMs: budget, changed: null, early: false };
+  }
+  const t0 = Date.now();
+  const interval = 120;
+  while (true) {
+    const left = budget - (Date.now() - t0);
+    if (left <= 0) break;
+    await new Promise((r) => setTimeout(r, Math.min(interval, left)));
+    const h = await hashFn();
+    if (h && h !== baseline) return { waitedMs: Date.now() - t0, changed: true, early: true };
+  }
+  return { waitedMs: Date.now() - t0, changed: false, early: false };
+}
+
 /* OCR 的 JSON 模式：除了文字，还要每个词的包围盒 —— 这是 find_text 定位的依据。
  * Windows OCR 的 $result.Text 有个坑：CJK 会被它当"词"，于是在每个汉字之间插空格，
  * 而且**完全丢掉了位置**。所以定位必须走 ocr.ps1 -Json（Lines/ Words/ BoundingRect）。
@@ -1465,6 +1501,7 @@ if (tool === 'som_look') {
        现在：move 若回读不一致就直接判失败并说清楚；click 也把回读值写进回执（供核对）。
        ⚠️ 另外：如果她之前 focus_window 过，键盘/鼠标的目标窗口应当是它 —— 这里顺带回读前台。*/
     let cursorNote = '';
+    const preHash = (tool === 'move') ? null : await cheapFrameHash();
     if (tool === 'move' || tool === 'click') {
       const SDx = require('./safedrive');
       const rx = (tool === 'move') ? await SDx.moveSafe(x, y, {}) : await SDx.clickSafe(x, y, {});
@@ -1489,8 +1526,9 @@ if (tool === 'som_look') {
        这样下一步截图看到的才是动作之后的状态。move 不改界面，不用等。 */
     if (tool !== 'move') {
       const settle = Number((config.load().memory || {}).actionSettleMs) || 900;
-      await new Promise((r) => setTimeout(r, settle));
-      return `✅ 已${label}：(${x}, ${y})（已等 ${(settle / 1000).toFixed(1)}s 让界面反应）` + cursorNote;
+      const sw = await settleAdaptive(settle, preHash);
+      return `✅ 已${label}：(${x}, ${y})（界面反应等待 ${(sw.waitedMs / 1000).toFixed(1)}s`
+        + (sw.early ? '，已看到画面变化' : '') + '）' + cursorNote;
     }
     return `✅ 已${label}：(${x}, ${y})` + cursorNote;
   }
@@ -1499,10 +1537,12 @@ if (tool === 'som_look') {
     const [zx, zy] = parseXY(arg);
     const [x, y] = [Math.round(ZoomState.x + zx / ZoomState.k), Math.round(ZoomState.y + zy / ZoomState.k)];
     const real = tool.replace(/z$/, '');
+    const preHashZ = await cheapFrameHash();
     input[real](x, y);
     const settle = Number((config.load().memory || {}).actionSettleMs) || 900;
-    await new Promise((r) => setTimeout(r, settle));
-    return '✅ 已点击（放大图坐标换算）：放大图(' + zx + ',' + zy + ') → 整屏(' + x + ',' + y + ')（已等 ' + (settle / 1000).toFixed(1) + 's）';
+    const swZ = await settleAdaptive(settle, preHashZ);
+    return '✅ 已点击（放大图坐标换算）：放大图(' + zx + ',' + zy + ') → 整屏(' + x + ',' + y + ')'
+      + '（界面反应等待 ' + (swZ.waitedMs / 1000).toFixed(1) + 's' + (swZ.early ? '，已看到画面变化' : '') + '）';
   }
   if (tool === 'drag') {
     /* 两种写法都收：
@@ -2029,6 +2069,7 @@ if (tool === 'som_look') {
     const gate = await require('./safedrive').assertForegroundOrReport(lastFocus);
     if (!gate.ok) return gate.message;
     const text = String(arg);
+    const preHashT = await cheapFrameHash();
     const CHUNK = 16;
     let done = 0;
     try {
@@ -2043,15 +2084,16 @@ if (tool === 'som_look') {
     } catch (e) {
       if (!done) { input.type(text); done = text.length; }
     }
-    /* 同上：输入会改变界面，等它反应完再让她看屏幕 */
+    /* 同上：输入会改变界面，等它反应完再让她看屏幕（自适应：画面变了就提前返回） */
     const settle = Number((config.load().memory || {}).actionSettleMs) || 900;
-    await new Promise((r) => setTimeout(r, settle));
+    const swT = await settleAdaptive(settle, preHashT);
     if (done < text.length) {
       return `⚠️ 只输入了 ${done}/${text.length} 个字符：**主人开始操作了，我停下来了**。`
         + `已经打进去的是：「${text.slice(0, done)}」；还没打的是：「${text.slice(done, done + 30)}${text.length - done > 30 ? '…' : ''}」。`
         + `主人松手后可以让我接着输入剩下的部分。`;
     }
-    return `✅ 已输入文字：${text.slice(0, 50)}（已等 ${(settle / 1000).toFixed(1)}s）`;
+    return `✅ 已输入文字：${text.slice(0, 50)}（界面反应等待 ${(swT.waitedMs / 1000).toFixed(1)}s`
+      + (swT.early ? '，已看到画面变化' : '') + '）';
   }
   if (tool === 'key') {
     /* ★ 前台断言（2026-10-02 加）★：按键只会进【前台窗口】。
@@ -2059,11 +2101,13 @@ if (tool === 'som_look') {
        现在若最近一次 focus_window 的目标已经不是前台，就拒绝执行并报明实情。 */
     const gateK = await require('./safedrive').assertForegroundOrReport(lastFocus);
     if (!gateK.ok) return gateK.message;
+    const preHashK = await cheapFrameHash();
     input.key(arg);
-    /* 按键（回车/ESC/方向键）常常触发界面跳转（比如登录、确认对话框），同样要等 */
+    /* 按键（回车/ESC/方向键）常常触发界面跳转（比如登录、确认对话框），同样要等（自适应） */
     const settle = Number((config.load().memory || {}).actionSettleMs) || 900;
-    await new Promise((r) => setTimeout(r, settle));
-    return `✅ 已按键：${arg}（已等 ${(settle / 1000).toFixed(1)}s，发给了前台「${gateK.foreground}」）`
+    const swK = await settleAdaptive(settle, preHashK);
+    return `✅ 已按键：${arg}（界面反应等待 ${(swK.waitedMs / 1000).toFixed(1)}s`
+      + (swK.early ? '，已看到画面变化' : '') + `，发给了前台「${gateK.foreground}」）`
       + (gateK.warn ? '\n' + gateK.warn : '');
   }
 }
@@ -2109,6 +2153,8 @@ module.exports = {
   run, allowed, TOOL_TIER, RANK,
   __captureForTest: (grid, noCursor) => captureScreen(grid, noCursor),
   __captureFallbackForTest: () => captureScreenFallback(),
+  __cheapFrameHashForTest: () => cheapFrameHash(),
+  __settleAdaptiveForTest: (b, base, o) => settleAdaptive(b, base, o),
   __findTextInOcr: (j, needle) => findTextInOcr(j, needle),
   __noProgressWarning: (t, a) => noProgressWarning(t, a),
   __noteAction: (t, a, r) => noteAction(t, a, r),
