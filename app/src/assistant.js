@@ -99,6 +99,60 @@ async function captureScreenFallback() {
   return { path: p, width: _s2.w, height: _s2.h, dataUrl: 'data:image/png;base64,' + png.toString('base64') };
 }
 
+/* ★ P3：同帧抓帧复用 —— 先用便宜帧（屏幕流 JPEG，~50ms）当指纹；
+   命中就复用上次的 PNG 文件，跳过 ~650ms 的无损抓图。开关：PA_FRAME_CACHE=0 ★ */
+async function grabFrameCached() {
+  let FC = null;
+  try { FC = require('./framecache'); } catch (e) { FC = null; }
+  if (!FC || FC.disabled()) return captureScreenFallback();
+  let cheap = null;
+  try { cheap = await captureScreen(false, true); } catch (e) { cheap = null; }
+  const k = cheap && cheap.dataUrl ? FC.keyOfDataUrl(cheap.dataUrl) : null;
+  if (k) {
+    const hit = FC.get(k);
+    if (hit) { try { dbg('[cache] 同帧复用（省一次 PNG 抓图）hits=' + hit.hits); } catch (e) {} return { path: hit.path, dataUrl: hit.dataUrl, width: 0, height: 0 }; }
+  }
+  const full = await captureScreenFallback();
+  if (k) { try { FC.put(k, full.path, full.dataUrl); } catch (e) {} }
+  return full;
+}
+
+/* ★ 2026-10-31 自适应等待 ★
+   动作后固定等 actionSettleMs 是"猜界面反应时间"；其实可以直接看画面变没变：
+   先用便宜帧（~60-80ms）拍一张当基线，动作后每 ~120ms 拍一张比 hash，
+   变了就提前返回（典型 200~300ms），没变才等满预算（慢界面不牺牲安全）。
+   开关：config.json 里 memory.adaptiveSettle=false 可关。 */
+async function cheapFrameHash() {
+  try {
+    const cap = await captureScreen(false, true);
+    if (!cap || !cap.dataUrl) return null;
+    return require('./framecache').keyOfDataUrl(cap.dataUrl);
+  } catch (e) { return null; }
+}
+async function settleAdaptive(budgetMs, baseline, opts) {
+  const o = opts || {};
+  const budget = Math.max(150, Number(budgetMs) || 900);
+  const hashFn = typeof o.hashFn === 'function' ? o.hashFn : cheapFrameHash;
+  let enabled = o.force === true;
+  if (!enabled) {
+    try { enabled = (config.load().memory || {}).adaptiveSettle !== false; } catch (e) { enabled = true; }
+  }
+  if (!baseline || !enabled) {
+    await new Promise((r) => setTimeout(r, budget));
+    return { waitedMs: budget, changed: null, early: false };
+  }
+  const t0 = Date.now();
+  const interval = 120;
+  while (true) {
+    const left = budget - (Date.now() - t0);
+    if (left <= 0) break;
+    await new Promise((r) => setTimeout(r, Math.min(interval, left)));
+    const h = await hashFn();
+    if (h && h !== baseline) return { waitedMs: Date.now() - t0, changed: true, early: true };
+  }
+  return { waitedMs: Date.now() - t0, changed: false, early: false };
+}
+
 /* OCR 的 JSON 模式：除了文字，还要每个词的包围盒 —— 这是 find_text 定位的依据。
  * Windows OCR 的 $result.Text 有个坑：CJK 会被它当"词"，于是在每个汉字之间插空格，
  * 而且**完全丢掉了位置**。所以定位必须走 ocr.ps1 -Json（Lines/ Words/ BoundingRect）。
@@ -114,7 +168,35 @@ async function captureScreenFallback() {
    而且"宽度不变只加高度"地原地反复试 —— 提示词提醒不够，必须程序拦 ✓ */
 const ZOOM_GUARD = { streak: 0, last: null };
 let lastOcrError = '';
+/* ★ 性能（2026-10-31）：OCR 优先走常驻感知服务（PaddleOCR 常驻，单次 ~0.3s
+    vs 旧实现每次 spawn PowerShell 的 ~0.76s，实测 2.5x）★
+   服务没起来 / 超时 / 返回失败 → 回退旧的 ocrJsonFallback，语义完全不变。
+   关闭开关：环境变量 PA_PERCEPT_DISABLE=1。 */
+function _ocrCachePut(k, p) {
+  if (!k || !p || typeof p.then !== 'function') return p;
+  return p.then((r) => { try { require('./ocrcache').put(k, r); } catch (e) {} return r; });
+}
 function ocrJson(pngPath) {
+  /* ★ P3：同图 OCR 结果缓存（图内容相同 → OCR 结果相同），命中直接 0ms ★ */
+  let _oc = null, _ocKey = null;
+  try { _oc = require('./ocrcache'); if (!_oc.disabled()) _ocKey = _oc.keyOfFile(pngPath); } catch (e) { _oc = null; }
+  if (_ocKey) {
+    const _hit = _oc.get(_ocKey);
+    if (_hit) { try { dbg('[cache] OCR 命中（省一次识别）hits=' + _hit.__cacheHits); } catch (e) {} return Promise.resolve(_hit); }
+  }
+  let svc = null;
+  try { svc = require('./perceptSvc'); } catch (e) { svc = null; }
+  if (!svc || svc.isDisabled()) return _ocrCachePut(_ocKey, ocrJsonFallback(pngPath));
+  return _ocrCachePut(_ocKey, svc.ocr(pngPath).then((r) => {
+    if (r && r.ok === true && Array.isArray(r.lines)) { lastOcrError = ''; return r; }
+    lastOcrError = '感知服务 OCR 失败：' + String((r && r.error) || '未知');
+    return ocrJsonFallback(pngPath);
+  }).catch((e) => {
+    lastOcrError = '感知服务异常：' + (e && e.message);
+    return ocrJsonFallback(pngPath);
+  }));
+}
+function ocrJsonFallback(pngPath) {
   return new Promise((resolve) => {
     const script = path.join(__dirname, '..', 'scripts', 'ocr.ps1');
     let child, done = false, out = '', err = '';
@@ -666,7 +748,7 @@ if (tool === 'som_look') {
          想换回快路径：config 里 screenLosslessScreen=false ✓ */
     const _cfgCap = config.load();
     const _lossless = _cfgCap.screenLosslessScreen !== false;
-    const cap = (zoomPre || _lossless) ? await captureScreenFallback() : await captureScreen(false);
+    const cap = (zoomPre || _lossless) ? await grabFrameCached() : await captureScreen(false);
     if (!zoomPre) ZoomState = null;   // 普通看屏幕：清掉上一次的放大参数
     timing.captureMs = tick() - tCap;
     /* 【局部放大】用户点出的真问题："这不是游戏问题，而是你给她分辨率太低了"。
@@ -783,13 +865,35 @@ if (tool === 'som_look') {
 —— 实测这么干会点错地方（在选人面板上点屏幕正中央 = 点到某张干员卡 = 把它选上/取消），
 把已经做好的选择毁掉。
 说不出名字、或只是想知道"那是什么"，就**只描述、不要给 ACTION**。`;
+      /* ★ P2（2026-10-31）：同一帧 + 同一问题的 screen_look 直接复用上次描述 ★
+         实测视觉调用 avg 2.1s，她一轮里经常对"没变过的画面"连看好几次。
+         开关：环境变量 PA_LOOK_CACHE=0 关闭。 */
+      let _lookKey = null;
+      let _lookHit = null;
+      try {
+        const LK = require('./lookcache');
+        if (!LK.disabled()) {
+          _lookKey = LK.key(Buffer.from(String(capDataUrl || '').split(',')[1] || '', 'base64'), q);
+          _lookHit = LK.get(_lookKey);
+        }
+      } catch (e) { _lookHit = null; }
       /* tV 必须声明在 try **外面**：catch 里也要用它算耗时，
          写在 try 内的话失败路径会 ReferenceError（实测被 §6 那条测试抓住）。 */
       let tV = tick();
-      try {
+      if (_lookHit) {
+        text = _lookHit.text;
+        usedVision = true;
+        timing.visionMs = 0;
+        timing.lookCacheHit = _lookHit.hits;
+        try { dbg('[look] 缓存命中（同画面已连看 ' + _lookHit.hits + ' 次，省一次视觉调用）'); } catch (e) {}
+        text += '\n\n（缓存命中：画面和问题与上次相同，这次没有重复调用视觉模型；'
+          + '要新的观察请换个问题，或先操作让画面变化 —— 同一画面已连看 ' + _lookHit.hits + ' 次）';
+      } else try {
         text = await vision.describe(cfg, capDataUrl, q, cfg.visionDetail || 'high');
         timing.visionMs = tick() - tV;
         usedVision = true;
+        if (_lookKey) { try { require('./lookcache').put(_lookKey, text); } catch (e) {} }
+
         const m = text.match(/ACTION\s*[:：]\s*([a-z_]+)\s*\|\s*(.+)/i);
         if (m && m[1].trim().toLowerCase() === 'move_norm') {
           /* ★★★ 2026-10-11：move_norm 的**执行体已删除✗**（主人的第 3 条缺陷：活雷 ✓）★★★
@@ -965,7 +1069,7 @@ if (tool === 'som_look') {
     /* ★★★ 轮询等条件 —— 治"固定睡 N 秒"这个顽疾 ★★★
        起因（实测）：她点"基建"之后**立刻** screen_look，而游戏切界面要 1~2 秒，
        她看到旧画面就以为没点进去，换坐标再点、再点，连点三次 ✗。
-       原来的权宜之计是动作后统一固定等 actionSettleMs（默认 1500ms）——
+       原来的权宜之计是动作后统一固定等 actionSettleMs（2026-10-31 默认从 1500ms 降到 900ms；winserve 让环境检查/前台核对从秒级降到毫秒级，固定等待成了大头）——
        等太短会看到旧画面，等太长就是白等 ✗。
        ★ 正确做法：把"猜时间"换成"等条件"★ —— 条件成立立刻走，超时就说清最后检查到什么。
        格式：wait_for|<类型>|<目标…>|<超时秒>   （★最后一段永远是超时秒数★）
@@ -1397,6 +1501,7 @@ if (tool === 'som_look') {
        现在：move 若回读不一致就直接判失败并说清楚；click 也把回读值写进回执（供核对）。
        ⚠️ 另外：如果她之前 focus_window 过，键盘/鼠标的目标窗口应当是它 —— 这里顺带回读前台。*/
     let cursorNote = '';
+    const preHash = (tool === 'move') ? null : await cheapFrameHash();
     if (tool === 'move' || tool === 'click') {
       const SDx = require('./safedrive');
       const rx = (tool === 'move') ? await SDx.moveSafe(x, y, {}) : await SDx.clickSafe(x, y, {});
@@ -1420,9 +1525,10 @@ if (tool === 'som_look') {
        点/按键/输入/拖拽这类**会改变界面**的动作，返回前统一等一小会儿，
        这样下一步截图看到的才是动作之后的状态。move 不改界面，不用等。 */
     if (tool !== 'move') {
-      const settle = Number((config.load().memory || {}).actionSettleMs) || 1500;
-      await new Promise((r) => setTimeout(r, settle));
-      return `✅ 已${label}：(${x}, ${y})（已等 ${(settle / 1000).toFixed(1)}s 让界面反应）` + cursorNote;
+      const settle = Number((config.load().memory || {}).actionSettleMs) || 900;
+      const sw = await settleAdaptive(settle, preHash);
+      return `✅ 已${label}：(${x}, ${y})（界面反应等待 ${(sw.waitedMs / 1000).toFixed(1)}s`
+        + (sw.early ? '，已看到画面变化' : '') + '）' + cursorNote;
     }
     return `✅ 已${label}：(${x}, ${y})` + cursorNote;
   }
@@ -1431,10 +1537,12 @@ if (tool === 'som_look') {
     const [zx, zy] = parseXY(arg);
     const [x, y] = [Math.round(ZoomState.x + zx / ZoomState.k), Math.round(ZoomState.y + zy / ZoomState.k)];
     const real = tool.replace(/z$/, '');
+    const preHashZ = await cheapFrameHash();
     input[real](x, y);
-    const settle = Number((config.load().memory || {}).actionSettleMs) || 1500;
-    await new Promise((r) => setTimeout(r, settle));
-    return '✅ 已点击（放大图坐标换算）：放大图(' + zx + ',' + zy + ') → 整屏(' + x + ',' + y + ')（已等 ' + (settle / 1000).toFixed(1) + 's）';
+    const settle = Number((config.load().memory || {}).actionSettleMs) || 900;
+    const swZ = await settleAdaptive(settle, preHashZ);
+    return '✅ 已点击（放大图坐标换算）：放大图(' + zx + ',' + zy + ') → 整屏(' + x + ',' + y + ')'
+      + '（界面反应等待 ' + (swZ.waitedMs / 1000).toFixed(1) + 's' + (swZ.early ? '，已看到画面变化' : '') + '）';
   }
   if (tool === 'drag') {
     /* 两种写法都收：
@@ -1649,7 +1757,7 @@ if (tool === 'som_look') {
     const sp0 = String(arg || '').split('|').map((s) => s.trim());
     const needle = sp0[0] || '';
     if (!needle) return '⚠️ 用法：find_text|要找的文字';
-    const cap4 = await captureScreenFallback();     // OCR 用无损 PNG（比 JPEG 帧更利于小字识别）
+    const cap4 = await grabFrameCached();           // P3：同帧复用（便宜帧命中就跳过 PNG 抓图）
     const j = await ocrJson(cap4.path);
     if (!j) return '⚠️ OCR 没有返回结果（可能没有中文识别包，或这一步超时了）。可以改用 find_template 找图标，或 screen_look 自己看。';
     let hit = findTextInOcr(j, needle);
@@ -1788,7 +1896,7 @@ if (tool === 'som_look') {
       findTemplate: (name, dataUrl, roi) => require('./matcher').findTemplateScaled(app, nativeImage, name, dataUrl, roi),
       /* 文字定位复用 find_text 那条路（它会自己抓一张无损 PNG 给 OCR —— 所以这里忽略传进来的帧） */
       findText: async (text) => {
-        const capF = await captureScreenFallback();
+        const capF = await grabFrameCached();
         const j = await ocrJson(capF.path);
         if (!j) return { ok: false };
         const hit = findTextInOcr(j, text);
@@ -1961,6 +2069,7 @@ if (tool === 'som_look') {
     const gate = await require('./safedrive').assertForegroundOrReport(lastFocus);
     if (!gate.ok) return gate.message;
     const text = String(arg);
+    const preHashT = await cheapFrameHash();
     const CHUNK = 16;
     let done = 0;
     try {
@@ -1975,15 +2084,16 @@ if (tool === 'som_look') {
     } catch (e) {
       if (!done) { input.type(text); done = text.length; }
     }
-    /* 同上：输入会改变界面，等它反应完再让她看屏幕 */
-    const settle = Number((config.load().memory || {}).actionSettleMs) || 1500;
-    await new Promise((r) => setTimeout(r, settle));
+    /* 同上：输入会改变界面，等它反应完再让她看屏幕（自适应：画面变了就提前返回） */
+    const settle = Number((config.load().memory || {}).actionSettleMs) || 900;
+    const swT = await settleAdaptive(settle, preHashT);
     if (done < text.length) {
       return `⚠️ 只输入了 ${done}/${text.length} 个字符：**主人开始操作了，我停下来了**。`
         + `已经打进去的是：「${text.slice(0, done)}」；还没打的是：「${text.slice(done, done + 30)}${text.length - done > 30 ? '…' : ''}」。`
         + `主人松手后可以让我接着输入剩下的部分。`;
     }
-    return `✅ 已输入文字：${text.slice(0, 50)}（已等 ${(settle / 1000).toFixed(1)}s）`;
+    return `✅ 已输入文字：${text.slice(0, 50)}（界面反应等待 ${(swT.waitedMs / 1000).toFixed(1)}s`
+      + (swT.early ? '，已看到画面变化' : '') + '）';
   }
   if (tool === 'key') {
     /* ★ 前台断言（2026-10-02 加）★：按键只会进【前台窗口】。
@@ -1991,11 +2101,13 @@ if (tool === 'som_look') {
        现在若最近一次 focus_window 的目标已经不是前台，就拒绝执行并报明实情。 */
     const gateK = await require('./safedrive').assertForegroundOrReport(lastFocus);
     if (!gateK.ok) return gateK.message;
+    const preHashK = await cheapFrameHash();
     input.key(arg);
-    /* 按键（回车/ESC/方向键）常常触发界面跳转（比如登录、确认对话框），同样要等 */
-    const settle = Number((config.load().memory || {}).actionSettleMs) || 1500;
-    await new Promise((r) => setTimeout(r, settle));
-    return `✅ 已按键：${arg}（已等 ${(settle / 1000).toFixed(1)}s，发给了前台「${gateK.foreground}」）`
+    /* 按键（回车/ESC/方向键）常常触发界面跳转（比如登录、确认对话框），同样要等（自适应） */
+    const settle = Number((config.load().memory || {}).actionSettleMs) || 900;
+    const swK = await settleAdaptive(settle, preHashK);
+    return `✅ 已按键：${arg}（界面反应等待 ${(swK.waitedMs / 1000).toFixed(1)}s`
+      + (swK.early ? '，已看到画面变化' : '') + `，发给了前台「${gateK.foreground}」）`
       + (gateK.warn ? '\n' + gateK.warn : '');
   }
 }
@@ -2041,6 +2153,8 @@ module.exports = {
   run, allowed, TOOL_TIER, RANK,
   __captureForTest: (grid, noCursor) => captureScreen(grid, noCursor),
   __captureFallbackForTest: () => captureScreenFallback(),
+  __cheapFrameHashForTest: () => cheapFrameHash(),
+  __settleAdaptiveForTest: (b, base, o) => settleAdaptive(b, base, o),
   __findTextInOcr: (j, needle) => findTextInOcr(j, needle),
   __noProgressWarning: (t, a) => noProgressWarning(t, a),
   __noteAction: (t, a, r) => noteAction(t, a, r),
